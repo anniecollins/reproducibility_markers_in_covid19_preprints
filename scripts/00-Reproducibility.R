@@ -25,8 +25,8 @@ med_daily_sum <- med_results %>% group_by(date) %>% summarise(date = date, total
 med_plot <- med_daily_sum %>% ggplot() + geom_line(aes(x=date, y=total)) + geom_smooth(aes(x=date, y=total))
 
 # Set up folders for download and txt conversion
-med_pdf_folder = paste(getwd(), "/medRxiv PDFs", sep = "")
-med_txt_folder = paste(getwd(), "/medRxiv Text", sep = "")
+med_pdf_folder = paste(getwd(), "inputs/data/pdfs-medRxiv", sep = "")
+med_txt_folder = paste(getwd(), "outputs/data/text-medRxiv", sep = "")
 
 # Download first 500 papers and latest 500 and save to computer
 head(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
