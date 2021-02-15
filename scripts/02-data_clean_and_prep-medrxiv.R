@@ -34,11 +34,28 @@ med_text_sentences <-
 med_open_data_results <- 
   oddpub::open_data_search(med_text_sentences)
 
+
 # TODO: Maybe want to see if we can re-write this to run faster?
 # Example starts here
 
 # Example ends here
 
+# Join med_sample to med_open_data_results and save as med_open_data_results
+med_open_data_results$join_id <- str_sub(med_open_data_results$article, -23, -5)
+med_sample$join_id <- str_sub(med_sample$doi, start = -19)
+med_open_data_results <- merge(med_sample, med_open_data_results, by = "join_id")
+
+# Reassign published values to 0 or 1 based on presence of publication
+med_open_data_results$published[!is.na(med_open_data_results$published)] <- 1
+med_open_data_results$published[is.na(med_open_data_results$published)] <- 0
+
+# Convert TRUE/FALSE in ODDPub output to 1/0
+med_open_data_results$is_open_code <- as.integer(med_open_data_results$is_open_code)
+med_open_data_results$is_open_data <- as.integer(med_open_data_results$is_open_data)
+
+# TODO: Add variable for type of paper - "machine learning", "model"/"modeling", "simulation", "simulate"?
+
+# Add variable 
 
 # Save it 
 class(med_open_data_results)
