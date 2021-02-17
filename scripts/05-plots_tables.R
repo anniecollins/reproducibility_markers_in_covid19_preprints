@@ -1,3 +1,4 @@
+library(kableExtra)
 library(tidyverse)
 library(lubridate)
 
@@ -13,35 +14,55 @@ med_open_data_results %>%
   save_kable("outputs/figures/initial_sum_table.pdf")
 
 # Summary Tables
-med_month_sum <- med_results %>% group_by(month = floor_date(date, "month")) %>% summarise(count=n())
-med_month_sum_cov <- med_open_data_results %>% 
+med_month_sum <- 
+  med_results %>% 
   group_by(month = floor_date(date, "month")) %>% 
-  summarise(count=n(), prop_open_code = sum(is_open_code)/n(), prop_open_data = sum(is_open_data)/n())
-num_days <- c(31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31)
-med_month_sum$daily_rate <- med_month_sum$count/num_days
+  summarise(count=n())
+
+med_month_sum_cov <- 
+  med_open_data_results %>% 
+  group_by(month = floor_date(date, "month")) %>% 
+  summarise(count=n(), prop_open_code = sum(is_open_code)/n(), prop_open_data = sum(is_open_data)/n()) %>% 
+  mutate(num_days = days_in_month(month),
+         daily_rate = count/num_days)
+# num_days <- c(31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31)
+# med_month_sum$daily_rate <- med_month_sum$count/num_days
 
 # Publication status with open data/code counts
-pub_data_count <- med_open_data_results %>% 
-  group_by(published) %>% count(is_open_data) %>% 
+pub_data_count <- 
+  med_open_data_results %>% 
+  group_by(published) %>% 
+  count(is_open_data) %>% 
   pivot_wider(names_from = is_open_data, values_from = n) %>%
   rename("Open Data Markers" = `0`, "No Data Code Markers" = `1`)
 pub_data_count
 
-pub_code_count <- med_open_data_results %>% 
-  group_by(published) %>% count(is_open_code) %>% 
+pub_code_count <- 
+  med_open_data_results %>% 
+  group_by(published) %>% 
+  count(is_open_code) %>% 
   pivot_wider(names_from = is_open_code, values_from = n) %>%
   rename("No Open Code Markers" = `0`, "Open Code Markers" = `1`)
 pub_code_count
 
 
-
 # Histogram of number of papers from sample in each month with total number of COVID papers published for each month
 # All COVID papers
-med_month_plot <- med_month_sum %>% ggplot(aes(month, count)) + geom_line(stat="identity") + ggtitle("COVID-19 Papers Posted (Total)")
+med_month_plot <- 
+  med_month_sum %>% 
+  ggplot(aes(month, count)) + 
+  # geom_line(stat="identity") +
+  geom_col() + 
+  ggtitle("COVID-19 Papers Posted (Total)")
 med_month_plot
 ggsave("outputs/figures/papers_posted_total.pdf")
+
 # Sampled COVID papers
-med_month_cov_plot <- med_month_sum_cov %>% ggplot(aes(month, count)) + geom_bar(stat="identity") + ggtitle("COVID-19 Papers Posted (Sample)")
+med_month_cov_plot <- 
+  med_month_sum_cov %>% 
+  ggplot(aes(month, count)) + 
+  geom_bar(stat="identity") + 
+  ggtitle("COVID-19 Papers Posted (Sample)")
 med_month_cov_plot
 ggsave("outputs/figures/papers_posted_sample.pdf")
 
@@ -50,26 +71,36 @@ colors <- c("Data" = "red", "Code" = "blue")
 open_rate_plot <- med_month_sum_cov %>% ggplot() +
             geom_line(data = med_month_sum_cov, aes(month, prop_open_data, color = "Data")) +
             geom_line(data = med_month_sum_cov, aes(month, prop_open_code, color = "Code")) +
-            ggtitle("Proporation of Papers with Open Data or Code Markers by Month")
+            ggtitle("Proportion of Papers with Open Data or Code Markers by Month")
 open_rate_plot
 ggsave("outputs/figures/prop_open_per_month.pdf")
 
 # Papers with open code/data per month from sample
 # Create data frame
-open_status <- med_open_data_results %>% select(title, date, is_open_code, is_open_data) %>% mutate(condition = is_open_data + is_open_code)
+open_status <- 
+  med_open_data_results %>% 
+  select(title, date, is_open_code, is_open_data) %>% 
+  mutate(condition = is_open_data + is_open_code)
 open_status$condition[open_status$condition == 2] <- "Both"
 open_status$condition[open_status$condition == 0] <- "Neither"
 open_status$condition[open_status$condition == 1 & open_status$is_open_code == 1] <- "Open Code"
 open_status$condition[open_status$condition == 1 & open_status$is_open_data == 1] <- "Open Data"
 
-stack_conditions_plot <- open_status %>% ggplot() + 
-  geom_bar(aes(x = factor(floor_date(date, "month")), fill=factor(condition, levels = c("Neither", "Open Code", "Open Data", "Both")), position = "stack"))
+stack_conditions_plot <- 
+  open_status %>% 
+  ggplot() + 
+  geom_bar(aes(x = factor(floor_date(date, "month")), 
+               fill=factor(condition, levels = c("Neither", "Open Code", "Open Data", "Both")), 
+               position = "stack")
+           )
 stack_conditions_plot
 ggsave("outputs/figures/stack_conditions_plot.pdf")
 
 
 # Type of Paper - subset data according to keywords for machine learning, simulation, and modeling
-paper_type_keywords<- med_open_data_results %>% select(title, abstract, date, is_open_code, is_open_data) %>% mutate(condition = is_open_data + is_open_code)
+paper_type_keywords <- 
+  med_open_data_results %>% select(title, abstract, date, is_open_code, is_open_data) %>% 
+  mutate(condition = is_open_data + is_open_code)
 paper_type_keywords$condition[paper_type_keywords$condition == 2] <- "Both"
 paper_type_keywords$condition[paper_type_keywords$condition == 0] <- "Neither"
 paper_type_keywords$condition[paper_type_keywords$condition == 1 & open_status$is_open_code == 1] <- "Open Code"
