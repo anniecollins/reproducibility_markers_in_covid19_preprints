@@ -1,0 +1,1215 @@
+arXiv:2012.14332v1 [cs.DC] 23 Dec 2020
+
+Hardware-accelerated Simulation-based Inference of Stochastic
+Epidemiology Models for COVID-19
+Sourabh Kulkarni
+
+Mario Michael Krell
+
+skulkarni@umass.edu
+University of Massachusetts Amherst
+Amherst, Massachusetts, USA
+
+Graphcore
+Palo Alto, CA, USA
+
+Seth Nabarro
+
+Csaba Andras Moritz
+
+Graphcore Research
+Bristol, UK
+
+University of Massachusetts Amherst
+Amherst, Massachusetts, USA
+
+ABSTRACT
+Epidemiology models are central in understanding and controlling large scale pandemics. Several epidemiology models require
+simulation-based inference such as Approximate Bayesian Computation (ABC) to fit their parameters to observations. ABC inference
+is highly amenable to efficient hardware acceleration. In this work,
+we develop parallel ABC inference of a stochastic epidemiology
+model for COVID-19. The statistical inference framework is implemented and compared on Intel Xeon CPU, NVIDIA Tesla V100
+GPU and the Graphcore Mk1 IPU, and the results are discussed in
+the context of their computational architectures. Results show that
+GPUs are 4x and IPUs are 30x faster than Xeon CPUs. Extensive
+performance analysis indicates that the difference between IPU
+and GPU can be attributed to higher communication bandwidth,
+closeness of memory to compute, and higher compute power in the
+IPU. The proposed framework scales across 16 IPUs, with scaling
+overhead not exceeding 8% for the experiments performed. We
+present an example of our framework in practice, performing inference on the epidemiology model across three countries, and giving
+a brief overview of the results.
+
+CCS CONCEPTS
+• Applied computing → Bioinformatics; • Computing methodologies → Parallel algorithms; Massively parallel and highperformance simulations; Uncertainty quantification; • Computer systems organization → Multicore architectures.
+
+KEYWORDS
+simulation-based inference, likelihood-free inference, COVID-19,
+epidemiology, hardware acceleration, performance analysis
+ACM Reference Format:
+Sourabh Kulkarni, Mario Michael Krell, Seth Nabarro, and Csaba Andras
+Moritz. 2020. Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19. In Proceedings of ACM Conference
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than ACM
+must be honored. Abstracting with credit is permitted. To copy otherwise, or republish,
+to post on servers or to redistribute to lists, requires prior specific permission and/or a
+fee. Request permissions from permissions@acm.org.
+Conference’17, July 2017, Washington, DC, USA
+© 2020 Association for Computing Machinery.
+ACM ISBN 978-x-xxxx-xxxx-x/YY/MM. . . $15.00
+https://doi.org/10.1145/1122445.1122456
+
+(Conference’17). ACM, New York, NY, USA, 17 pages. https://doi.org/10.1145/
+1122445.1122456
+
+Conference’17, July 2017, Washington, DC, USA
+
+1
+
+Kulkarni, et al.
+
+INTRODUCTION
+
+The key objective of epidemiology modelling is to capture the underlying mechanism of the spread of a disease in the population. These
+models help explain the current and past behaviour of the disease, as well as providing projections into the future. There exists a wide
+variety of models developed with different levels of complexity and incorporating a variety of data sources. In all cases, it is crucial to “fit”
+the model to the current disease outbreak. This involves inferring the key parameters such as infection rate, mortality rate, recovery rate,
+reproduction rate etc, from available observations.
+Bayesian inference has desirable properties in this context, namely the incorporation of prior belief and the ability to infer a distribution
+over parameters rather than predicting a point value. Exact Bayesian inference is tractable only for a small set of parametric distributions.
+Traditionally, epidemiological modelling has circumvented this with approximate Bayesian inference methods belonging to the Markov
+Chain Monte Carlo (MCMC) family [10]. While these inference methods are effective for many models, their compatibility for a given model
+depends of the tractability of the likelihood function - the ability to compute probability of observed data for a given set of parameters. This
+requirement is not satisfied for several epidemiological models, due of presence of unobserved or “latent" sub-populations, for example
+the unconfirmed infections. Due to this incompatibility, either the development of epidemiology models has to be restricted to a sub-class
+where all sub-populations are observed, or a new statistical inference method is to be developed which does not require the computation of
+the likelihood function for parameter inference. Over the last decade several such algorithms have been developed [3, 5, 13, 17, 19, 24, 31],
+which are together grouped into the class of “likelihood-free inference”, also known as simulation-based inference. At their core, these
+algorithms exploit the ability to simulate the model to perform inference over it. Such approaches have been successfully applied to a variety
+of domains including evolution and ecology [3, 19], cosmology [31], econometrics [5], cognitive science [13], systems biology [17], and
+biochemistry [24].
+In this work, we consider one such simulation-based inference method – Approximate Bayesian Computation (ABC) [22]. We develop a
+parallelized version of ABC which allows us to perform highly efficient inference by leveraging recent machine-learning optimized hardware,
+and software libraries [1]. This version of ABC is used for accelerated inference of the stochastic epidemiological model presented in [29],
+which is applied to help understanding and predicting the spread of COVID-19 using real-world data. We note the original implementation [28]
+was run on CPUs in HPC clusters, and so did not make use of specialist hardware acceleration. There has been some work in hardware
+acceleration and distributed computing for ABC [8, 16], however there is, to our knowledge, no prior work which i) systematically analyzes
+and attempts to understand the performance of different hardware accelerators for the proposed parallel version of ABC and ii) demonstrates
+hardware acceleration of ABC for epidemiology modelling. We were thus motivated to investigate how effective the NVIDIA Tesla V100
+GPU and Graphcore Mk1 IPU are in accelerating the inference algorithm in question.
+We observe that the parallelized ABC inference over the model performs ≈ 4× and ≈ 30× faster on the Tesla V100 GPU and Mk1 IPU vs.
+the Xeon Gold CPU. To better understand the performance benefits with the hardware acceleration platforms, we do an in-depth analysis
+with different algorithmic configurations. This analysis includes batch-size sweeps, communications overhead and host processing, memory
+utilization, and processing load distribution. Our analysis indicates three key insights on how the IPU architecture performs ≈ 7× better
+than the GPU architecture for this workload: i) The much larger on-chip cache (300MB on IPU vs. 6MB L1 + 10MB L2 on V100 GPU), making
+the IPUs scale better in performance with increasing batch sizes; ii) The overhead in GPU of fetching execution code from the main memory
+to the compute units vs. no such overhead in IPUs as code is already ‘at’ the compute unit; and iii) The much faster memory bandwidth of
+IPU (45TB/s) vs. V100 GPU (800GB/s) and much higher compute power (62 TFLOPS vs. 14 in GPU) which leads to much faster overall
+computation.
+To further investigate the scalability of the proposed parallel ABC inference approach, we demonstrate how the runtime of the inference
+varies with varying compute resource, running on between 2 to 16 IPU devices. We observe a near linear reduction in runtime with number
+of devices, seeing a minimal scaling overhead of up to 8% depending on the configuration, and how much sample post-processing is done
+on-device.
+We demonstrate our model in practice by performing a comparative analysis of the epidemiology model across three countries (Italy,
+USA and New Zealand). We plot predictions of the model with parameters inferred from real-world data, and analyze the parameters to
+gain insights over the responses of these countries to the epidemic. The analysis for each country took ≈ 1.9 hours on a 16-IPU system,
+while we estimate ≈ 57 hours on 16 Xeon CPUs and ≈ 15 hours runtime on 8 Tesla V100s for the same analysis. These results demonstrate
+that massively parallel simulation-based inference can be efficiently enabled with hardware acceleration, paving the way for epidemiology
+modelling with faster results and better sample estimates.
+The paper is organized as follows: Section 2 provides background information about the epidemiology models and simulation-based
+inference algorithms. Section 3 walks though the design methodology for a high-performance implementation of the simulation-based
+inference for stochastic epidemiology models. Section 4 provides detailed performance analysis of two hardware acceleration platforms
+over which this proposed algorithm is executed. Section 5 discusses results of running the model on real-world COVID-19 data. Section 6
+concludes the paper.
+
+2
+
+BACKGROUND
+
+In this section, we provide a brief introduction and mathematical description of the Stochastic Epidemiology Model being considered. We
+also provide details on the ABC inference algorithm. Finally, we discuss the hardware acceleration platforms used in this work.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+Conference’17, July 2017, Washington, DC, USA
+
+First, we shall establish the terminology used across the rest of the paper. A model is represented as a joint probability distribution
+𝑝 (𝜃, 𝑥) where 𝜃 is the set of model parameters, on which we wish to perform inference, and 𝑥 denotes the observed variables of the model,
+which can then be compared to real-world data. The parameters are typically believed to lie in a certain distribution, often based on domain
+expertise. This information is encoded in the prior over those parameters, denoted by 𝜋 = 𝑝 (𝜃 ). The model with 𝜃 specified can be used to
+generate observations over 𝑥; this process is called model simulation and the simulated data is referred to as 𝐷𝑠 . For a stochastic simulator,
+the expression 𝐷𝑠 ∼ 𝑝 (𝑥 |𝜃 ) concisely represents this simulation process. The prior belief over parameters distributions 𝑝 (𝜃 ) can be updated
+by conditioning on observed real-world data 𝐷. This updated parameter distribution is known as the posterior, and is denoted by 𝑝 (𝜃 |𝑥 = 𝐷),
+or simply 𝑝 (𝜃 |𝐷). The likelihood function, which represents the probability of observing the real-world data 𝐷 given our parameter setting
+𝜃 , is denoted by 𝑝 (𝑥 = 𝐷 |𝜃 ), or 𝑝 (𝐷 |𝜃 ).
+
+2.1
+
+Stochastic Epidemiology Model
+
+Figure 1: Overview of the epidemiology model flow. The population is divided into 6 sub-populations. On a per-day basis, the
+number of transitions from one sub-population to the other are simulated with a Poisson process, where the rates are governed
+by the current sub-populations and the transition parameters. The transition from susceptible to infected is a function of the
+observed sub-populations which captures the response of a population to an increasing number of cases.
+The epidemiology model considered in this work belongs to the class known as compartmental models. In this class of models, the
+population is divided into sub-populations, and the spread of infectious disease is modelled as the flow from one sub-population to other.
+The models in this class vary in number of sub-populations, and how the flow among them is described. The most basic version of this
+model class is the SIR model (Susceptible, Infected, Recovered) [14], which attempts to capture the dynamics of a contagion in those three
+sub-populations. There have been several models of this class that build on this basic framework by adding more sub-populations and new
+methods of modelling flow among these sub-populations [25, 30]. In recent years models have also added stochastic dynamics to capture the
+inherent probabilistic nature of spread of disease in a population [2, 4, 30]. Some also classify sub-populations as either being observed or
+latent, to capture the notion of having sub-populations of untested individuals [27, 29].
+The model considered in this work [29] attempts to capture the spread of COVID-19 using six sub-populations, three of which are observed
+and three unobserved. We include a brief overview of the model, but refer the reader to the Supplementary Material of [29] for further detail.
+The transmission across these sub-populations is modeled with a Poisson process approximated in discrete timebins using the tau-leaping
+method [9]. Fig. 1 provides an overview of the model. The model consists of 8 parameters:
+𝜃 = [𝛼 0, 𝛼, 𝑛, 𝛽, 𝛾, 𝛿, 𝜂, 𝜅]
+
+(1)
+
+𝜋 = 𝑝 (𝜃 ) = 𝑈 (0, [1, 100, 2, 1, 1, 1, 1, 2])
+
+(2)
+
+with a uniform prior distribution:
+
+These prior values were taken as-is from the original model description [29]. They signify the reasonable ranges in which the parameters
+of interest could lie. Simulating the model with a sample from parameter distributions provides the following state vector:
+𝑋 = [𝑆, 𝐼, 𝐴, 𝑅, 𝐷, 𝑅𝑢 ],
+
+(3)
+
+which consists of the sub-populations of Susceptible people, undocumented Infected, Active confirmed cases, confirmed Recoveries,
+confirmed fatalities Dying, and unconfirmed R𝑢 emoved. The Removed sub-population, 𝑅𝑢 , comprises those who have recovered or died, but
+
+Conference’17, July 2017, Washington, DC, USA
+
+Kulkarni, et al.
+
+have not been tested. This simulation is typically performed over several days or months and the generated data can be compared with the
+real-world values of the observable sub-populations.
+One of the key challenges of this model is that 𝑋 is partially observed; i.e. only the 𝐴, 𝑅, 𝐷 values are available from observed data.
+This makes the likelihood function 𝑝 (𝐷 |𝜃 ) intractable for this model, as the unobserved sub-populations of the model are required to be
+‘integrated-out’. Instead, simulation-based inference such as ABC is used to perform inference over this model.
+Parameter 𝛼 0 refers to the base infection rate, while 𝛼 is the coefficient of the function that captures the changes in infection rate based
+on the observed sub-populations (A,R,D). 𝑛 is the exponent to the function. Based on these parameters the total infection rate is assumed to
+follow:
+𝛼
+(4)
+1 + (𝐴 + 𝑅 + 𝐷)𝑛
+This function can be modified to capture additional changes to infection rate based on 𝐴, 𝑅, 𝐷 values or even using external data.
+The parameters 𝛾, 𝛽, and 𝛿 are the positive test rate, recovery rate and fatality rate respectively. The parameter 𝜂 captures the effectiveness
+of testing protocols, as the rate for unconfirmed infected to be recovered without ever being confirmed is given by 𝜂𝛽. The initial value
+parameter, 𝜅, encodes the number of unobserved infected cases, as a fraction of 𝐴, at the start of the simulation.
+The underlying COVID-19 time-series data, provided by Johns Hopkins University [6], contains daily numbers for [𝐴, 𝑅, 𝐷].
+In its first step, the model initializes the remaining variables with 𝑅𝑢 = 0, 𝐼 0 = 𝜅 ∗ 𝐴0 , and 𝑆 = 𝑃 − (𝐴0 + 𝑅0 + 𝐷 0 + 𝐼 0 ) with 𝑃 being the
+total population count at the first time point.
+The second step is to calculate the hazard function ℎ which provides the average update in the model parameters within one day
+𝑔 (𝐴,𝑅,𝐷) = 𝛼 0 +
+
+
+
+𝐼
+ℎ(𝑆, 𝐼, 𝐴, 𝑅, 𝐷, 𝑅𝑢 ) = 𝑔𝑆 , 𝛾𝐼, 𝛽𝐴, 𝛿𝐴, 𝛽𝜂𝐼 .
+𝑃
+
+(5)
+
+with 𝑔 described in equation 4.
+The third step is to randomly sample the transmission amounts according to these average numbers.
+Instead of a Poisson sampling with ℎ
+√
+as parameter, we chose an approximation with normal distributions with mean ℎ and variance ℎ and use the floor of the numbers.
+The fourth step is to apply the sampled transmission amounts to obtain updated numbers for the next day (𝑆 → 𝐼 , 𝐼 → 𝐴, 𝐴 → 𝑅, 𝐴 → 𝐷,
+𝐼 → 𝑅𝑢 , ordering according to ℎ function).
+The second to fourth step are repeated in a loop for each day. Eventually, the numbers for 𝐴, 𝑅, and 𝐷 can be compared to the real
+measurements.
+
+2.2
+
+Approximate Bayesian Computation
+
+The standard Bayesian statistical inference approach of obtaining the posterior over parameters 𝜃 for a model 𝑝 (𝜃, 𝑥) and given observations
+𝐷, is given by Bayes’ rule,
+𝑝 (𝜃 |𝐷) =
+
+𝑝 (𝐷 |𝜃 )𝑝 (𝜃 )
+𝑝 (𝐷)
+
+(6)
+
+which describes how to update the belief about our parameters 𝜃 given observations 𝐷. As discussed earlier, the likelihood function is
+intractable, since 𝑆𝑡 , 𝐼𝑡 , and 𝑅𝑡𝑢 are unobserved. This precludes some approximate Bayesian inference methods such as MCMC. In the ABC
+approach, the ability to simulate from the model is utilized to perform inference on it. First, we sample the parameters 𝜃 from their prior
+𝜃 ∗ ∼ 𝜋. Next, we simulate a forward pass of the simulator (as described in Section 2.1 for example) to generate observations 𝐷𝑠 ∼ 𝑝 (𝑥 |𝜃 ∗ )
+over the number of days we have data for. The simulated observations are then compared to the real-world evidence using a distance function
+𝑑𝑖𝑠𝑡 (𝐷𝑠 , 𝐷). For this model we used the Euclidean distance [29]. Finally, the sampled parameters 𝜃 ∗ are accepted if the distance function is
+less than a certain tolerance value 𝜖, 𝑑𝑖𝑠𝑡 (𝐷𝑠 , 𝐷) ≤ 𝜖. This is repeated until we accept the target number of posterior samples. In essence
+this ABC process is sampling parameters from the approximate posterior of the model given the data while effectively circumventing the
+likelihood function. It can be shown that as tolerance 𝜖 approaches 0, the approximate posterior converges to the true posterior [23].
+To summarize, in ABC we aim to obtain samples from an approximation to the posterior:
+𝑝 (𝜃 |𝐷) ≈ 𝑝 (𝜃 |dist(𝐷, 𝐷𝑠 ) ≤ 𝜖) ∝ 𝑝 (dist(𝐷, 𝐷𝑠 ) ≤ 𝜖 |𝜃 )𝑝 (𝜃 )
+
+(7)
+
+where 𝐷 is the ground truth data, 𝐷𝑠 is simulated data depending on 𝜃 , and 𝑝 (𝜃 ) is the prior [29]. The dist function is the Euclidean
+distance [29]. An example for the distribution 𝑝 (dist(𝐷, 𝐷𝑠 ) ≤ 𝜖 |𝜃 ) is provided in Figure 9. In our experiments, a uniform distribution is
+used for 𝑝 (𝜃 ).
+Instead of choosing a fixed threshold, sequential Monte Carlo can be used to transform an initial set of samples to a high quality set with
+a decreasing sequence of thresholds 𝜖 and using ABC. This algorithm is called SMC-ABC [7, 29].
+It is important to note that these statistical ‘inference’ algorithms are solving a ‘learning’ problem, and the expression ‘parameter inference’
+in the statistics literature corresponds to ‘parameter learning’ in ML literature. This should not be confused with ‘inference’ as used in the
+ML literature, which often means the process of estimating an output with a model, given the input.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+2.3
+
+Conference’17, July 2017, Washington, DC, USA
+
+Hardware Acceleration Platforms
+
+Recent advances in deep learning have driven the development of novel machine-learning hardware acceleration platforms. Improvements
+in computational capabilities of these platforms are an important factor in enabling bigger, more complex deep networks to be developed
+and deployed. While primarily focused on acceleration of deep-learning type workloads, these platforms could be potentially utilized for
+accelerating certain other machine-learning tasks.
+The hardware-accelerated simulation-based inference framework developed in this work is targeted towards two such platforms - the
+Nvidia Tesla V100 GPU and the Graphcore Mk1 IPU. In addition, we compare both to a Xeon Gold 6248 CPU baseline.
+2.3.1 Tesla V100 GPU. The current widely used hardware acceleration platform for several AI applications is the Tesla V100. It consists of
+640 Tensor cores and 5120 CUDA cores. While each CUDA core can perform a single-precision (FP32) multiply-accumulate operation per
+clock-cycle, each Tensor core can perform a 4 × 4 multiply-accumulate operation per clock-cycle. The solution has a reported 112 TFLOPS
+of tensor performance, 14 TFLOPS single precision, and 900 GB/s memory bandwidth, with a Thermal Design Power (TDP, peak power)
+of 300W.1 The memory of the GPU is arranged in a hierarchy. It includes 80 streaming multiprocessors (SMs), each with an L1 cache of
+128KB and therefore a total L1 cache size of 10MB. The L2 cache is 6MB and the main memory is 16GB, though we find that only 14.38GB is
+accessible in practice. The GPU has a base clock of 1230Mhz and a boost clock of 1380Mhz.2
+The Tesla V100 has shown good performance in several benchmarks such as MLPerf in training as well as inference [18]. Given its
+widespread use, this was chosen as one of the targets for exploring hardware-accelerated simulation-based inference. Our GPU implementation
+is written in TensorFlow 2.1 [1].
+2.3.2 Intelligence Processing Unit (IPU). The IPU is a MIMD (multiple instruction, multiple data) processor. It is well suited for problems that
+require fine-grain parallelism and high-speed memory access. In addition, the MIMD thread-level parallelism also benefits in models that use
+auto-regressive or sequential elements, employ random memory access patterns, or consist of non-vectorizable parallel paths.
+A Mk1 IPU processor contains 1216 cores or “tiles", each with its own local memory. A tile can run six parallel threads, thus a Mk1 IPU
+can run up to 1216 × 6 = 7, 296 independent parallel threads. The bandwidth between the compute and the memory on the chip is 45 TB/s.
+While the memory is very high bandwidth, the total memory size is much smaller than a GPU, with 300MB on each IPU processor. IPU-Links
+are used to connect multiple IPUs together for model-parallel and data-parallel execution. Each Mk1 IPU offers an “arithmetic throughput
+[of] up to 31.1 TFlops/s in single precision and 124.5 TFlops/s in mixed precision per chip” [11]. A C2 PCIe accelerator card, comprising two
+Mk1 IPUs has a TDP of 300W3 , the same as a single Tesla V100 GPU. The IPUs in the C2 card have a clock-speed of 1300Mhz which is also
+comparable to the Tesla V100. Hence, for most evaluations, we compare the performance of two IPUs against a single GPU.
+There are three motivations to analyze IPU performance on ABC. First, currently large amounts of CPUs are often used for processing
+ABC workloads [28]. Taking advantage of the independent parallel processes on the IPU could drastically reduce energy consumption
+and increase performance. Note that this advantage can be easily leveraged with a framework like TensorFlow. Second, the simulation
+and ABC algorithm can fit in the SRAM memory of the Mk1 IPU for reasonable batch sizes, which drastically reduces the communication
+overhead and enables efficient in-processor computation. Last, like the epidemiology model considered in this work, and unlike traditional
+neural-network models, there are several new applications with rather complicated computational graphs comprising a large number of
+heterogeneous operations, rather than large scale matrix multiplications. The IPU has been utilized in several such applications. Examples
+are natural language processing [26], image processing with modularized architectures [12], bundle adjustment [20], as well as some
+microbenchmarks [11].
+For the IPU evaluation, we have used a machine with 16 Mk1 IPU processors (8 C2 cards). However, we run most experiments on only
+one of the eight cards. For implementation, we used the 1.2 version of its SDK with its IPU interface to TensorFlow 2.1 [1].
+We believe that the higher FLOPS and local memory paradigm of the IPU presents and interesting contrast to the lesser FLOPS and large
+memory paradigm of the GPU. We seek to understand how each performs in the context of parallel ABC inference.
+
+3 DESIGN METHODOLOGY
+3.1 Parallelized ABC Inference
+In the ABC inference process described in Sections 2.1 and 2.2, the computational flow of sampling the parameters, simulating data and
+computing the distance function can be performed independently for any number of parameter samples. This is because the specific
+considerations usually involved in sequential Bayesian statistical inference algorithms like MCMC, such as burn-in, auto-correlation and
+detailed balance, are not applicable for simulation-based inference methods like ABC. This provides us the opportunity to massively parallelize
+ABC inference by following an embarrassingly parallel compute flow to form a batched version of ABC (see Fig. 2), while still maintaining
+asymptotic convergence guarantees on the tolerance. Hence, we explicitly vectorize across parameter samples, while maintaining confidence
+that the true posterior will be approximated with accuracy equal to that of regular ABC. This vectorized simulation flow is well-supported
+by the TensorFlow framework [1], allowing us to utilize the IPU’s MIMD architecture, and the single-instruction-multiple-data (SIMD)
+architecture of GPUs.
+1 https://www.nvidia.com/en-us/data-center/v100/
+2 https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf
+3 https://www.graphcore.ai/hubfs/assets/pdf/C2%20Card%20Product%20Brief.pdf?hsLang=en
+
+Conference’17, July 2017, Washington, DC, USA
+
+Kulkarni, et al.
+
+For the epidemiology model (see Section 2.1), the original ABC algorithm would involve generating a single joint sample of parameters
+𝜃 of the size [8], and generating data 𝐷 of size [3, 𝑛𝑢𝑚_𝑑𝑎𝑦𝑠] (i.e. 𝐴, 𝑅, 𝐷 values for each of each of the days being simulated) and then
+compare with real data. In the new parallelized ABC algorithm, we sample multiple (batch size of 100k or more) parameters 𝜃 by explicit
+vectorization, of size [100000, 8], simulate the resulting data 𝐷𝑠 which is also vectorized with size [100000, 3, 𝑛𝑢𝑚_𝑑𝑎𝑦𝑠], and compare the
+resulting simulated dataset with the ground truth dataset 𝐷 to a given tolerance level 𝜖. At the end we calculate the number of accepted
+posterior samples and iterate until a given required total number of accepted posterior samples is obtained.
+
+(a) Vanilla ABC
+
+(b) Parallel ABC
+
+Figure 2: A conceptual representation of parallelizing ABC inference. The sampling from prior, model simulation and distance
+computation are all embarrassingly parallelized, enabling support for hardware acceleration.
+
+3.2
+
+Parallel Accept-Reject and Processing Accepted Samples
+
+One of the key considerations in the parallel ABC inference algorithm is the parallel accept-reject step of simulated samples. Further, we
+must consider the endpoint of the accepted samples. In some applications of ABC, the samples generated may be used directly on the
+accelerator. This might be true in Monte Carlo integration over the posterior, for example. However, in many cases we need to communicate
+the samples to the host for saving or further analysis. We are thus motivated to examine how efficient the process of parallel accept-reject
+and the communication of accepted posterior samples to host is on the different hardware platforms.
+For efficient computation, the XLA backend had to be used. We observed a roughly 5x speedup with it on the GPU. On the IPU, it is
+required by design. A caveat of the XLA approach is that the main algorithm needs to return a fixed size of data. For the given algorithm, we
+need to get the sampled parameters as well as their tolerance values. Collecting all data is not feasible. For low tolerance values, we observed
+that the data would not fit into the working memory that comes with the GPU or IPU instance. For higher tolerance values, we observed
+that the postprocessing can take even longer than the actual main processing. Hence, different filtering strategies need to be applied to
+handle the sample communication to host.
+There are important distinctions between IPU and GPU in how accelerator-to-host transfer works. First, the IPU software includes
+outfeeds into which data on the IPU can be enqueued and transferred to the host, all within an XLA-compiled graph. While the shapes of the
+tensors enqueued must be fixed for (XLA-)compilation, tensors do not need to be added to the outfeed at every run, i.e. for every batch of
+simulations. This means communication can be saved if no accepted samples were generated during the run. Further, we observe that for
+reasonable tolerances a very small fraction of samples are accepted, and therefore need to be transferred to the host. We thus reduce the
+overall communication volume, by breaking the batch of samples into chunks, and only transferring the chunk to the host if it contains at
+least one successful sample. For the experiments which follow, we use an chunk size of 10, 000 samples per IPU unless stated otherwise.
+Conversely, data transferred from the GPU to host must be an output from the XLA graph on the GPU, either reducing the number of
+runs within each compiled graph, or requiring more samples to be stored on the accelerator before transfer. We use the first approach, where
+we count the number of accepted samples each run. Independently, we store a fixed amount of samples per run with the lowest distances
+for that run (Top 𝑘). We then apply post-processing at the end of all the runs to accept the posterior samples with distances less than the
+tolerance. The post-processing step is executed on the host. This method introduces an additional design parameter 𝑘, which is the number
+of samples to return in runs that have non-zero acceptances. Based on the expected number of posterior samples per run, this parameter was
+set to 5 for tolerance of 2𝐸5. For lower tolerances such as 5𝐸4, the parameter was set to 1. We did not use Top 𝑘 on the IPU because its
+outfeed feature allowed for a communication of all relevant samples, whereas the Top 𝑘 approach has a remaining low chance of removing
+relevant samples and introduces a hyperparameter that requires fine-tuning.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+Conference’17, July 2017, Washington, DC, USA
+
+Ensuring Optimized Performance Across Platforms: other than how samples are returned, the parallelized ABC inference implementation
+is similar across both devices. In fact, we share exactly the same code for the simulation stages which we believe to be the bottleneck of the
+algorithm. We are therefore confident that our comparison between hardware platforms is fair. To ensure maximum efficiency in hardware,
+the compute-graph is compiled via XLA4 for each device. For GPU, we use the XLA compiler provided in the TensorFlow framework. For
+IPU, we use its dedicated XLA compiler. All experiments are run with float32 precision.
+
+4
+
+PERFORMANCE ANALYSIS
+
+In this section, we perform a detailed comparative analysis between the GPU and IPU implementations of ABC inference for the model
+described in Sections 2.1 and 2.2, and designed as per Section 3. For this section, we used the case data for Italy5 . We performed simulationbased inference over 49 days, where the task is to accept a certain number of approximate posterior samples of the 8 model parameters, with
+a given tolerance value. To obtain these posterior samples, the inference process has to be run for multiple times. As the tolerance is reduced,
+the the number of runs needed to obtain the same number of posterior samples increases. The number of samples simulated in every run of
+the inference process is referred to as the batch size.
+For this performance analysis we compare a C2 card containing 2 IPUs with the Tesla V100 GPU, given that both have the same TDP of
+300W. We quantify key aspects of computation involved and explain how the differences relate to the unique architectures of the hardware
+platforms.
+For investigating performance, we use the TensorFlow Profiler6 to capture profiling data for the GPU. For the IPU, we use the PopVision
+Graph Analyzer Tool7 .
+
+4.1
+
+Runtime Comparison
+
+We first compare the runtimes between CPU (Xeon Gold 6248), GPU (Tesla V100), and IPU (Mk1). We vary the acceptance threshold
+(tolerance) and the number of accepted posterior samples and report the total time as well as the average time per run. The latter is the more
+reliable metric because the total time can vary, largely due to the stochastic nature of how many posterior samples are accepted per run,
+causing stochasticity in how many runs are needed to generate a specified number of accepted samples which adds to the stochasticity in
+the total time.
+Three things can be inferred from the results presented in Table 1. First, the IPU is consistently more efficient than GPU (7.5× speed up)
+and CPU (30× speed up) over all three configurations. Second, processing time scales linearly with the number of accepted samples for the
+values tested. Last, decreasing the tolerance drastically increases the total processing time for all hardware configurations and could render
+GPU and CPU implementation infeasible in this regime, especially when targeting multiple model iterations a day.
+Due to the limited performance of the CPU, we focus the following analysis on GPU and IPU to understand where this speedup comes
+from and how the algorithm behaves on these two hardware platforms.
+
+Device
+
+Batch
+Tole- Accepted
+Total
+Time per
+Rel. Run Perf. vs.
+Size
+rance Samples
+Time (s)
+Run (ms) IPU GPU CPU
+2×IPU
+2×100k 2E+05
+100
+2.27 ± 0.29
+4.71 ± 0.03 1.00 7.47 30.87
+Tesla V100
+500k
+2E+05
+100
+14.87 ± 0.01
+87.99 ± 0.04 0.13
+1.00
+4.13
+2× CPU
+1M
+2E+05
+100
+67.87 ± 7.27 726.93 ± 6.01 0.03
+0.24
+1.00
+2×IPU
+2×100k 2E+05
+1000
+22.27 ± 0.76
+4.72 ± 0.03 1.00 7.24 29.56
+Tesla V100
+500k
+2E+05
+1000
+154.61 ± 0.04
+85.47 ± 0.02 0.14
+1.00
+4.08
+2×CPU
+1M
+2E+05
+1000
+660.48 ± 8.74 697.61 ± 4.87 0.03
+0.25
+1.00
+2×IPU
+2×100k 1E+05
+100
+77.07 ± 6.80 4.540 ± 0.001 1.00 7.51 30.54
+Tesla V100
+500k
+1E+05
+100
+551.57 ± 0.20
+85.29 ± 0.04 0.13
+1.00
+4.32
+2×CPU
+1M
+1E+05
+100
+2383 ± 139 693.31 ± 4.71 0.03
+0.25
+1.00
+Table 1: Performance comparison: The CPU is a Xeon Gold 6248. We provide mean and standard deviation from 10 experiment
+repetitions. The relative run performance provides the speedup related to the time per run.
+
+Table 2 for the V100 GPU and Table 3 for the Mk1 IPU show different performance metrics depending on the chosen batch size for an
+evaluation with tolerance 2𝐸5 that collects 100 samples. For the IPU, the respective processing times are also visualized in Figure 3.
+4 See
+
+https://www.tensorflow.org/xla
+
+5 https://github.com/CSSEGISandData/COVID-19
+6 See
+7 See
+
+https://www.tensorflow.org/tensorboard/tensorboard_profiling_keras
+https://docs.graphcore.ai/projects/graphcore-popvision-user-guide/en/latest/
+
+Conference’17, July 2017, Washington, DC, USA
+
+Kulkarni, et al.
+
+As expected memory usage increases with increased batch size. The GPU is capable of processing larger batch sizes than the IPU due to
+having larger total memory. The optimal performance is not obtained for a maximum batch size but at 500000 for the GPU and 120000 for
+the IPU.
+Batch
+Memory
+Active
+On-Chip
+Total
+Time per
+Size Used (MB/%) Time (%) Resources (%) Time (s) Run (ms)
+1 × 105
+120 (0.82)
+55.5
+90
+15.85
+19.88
+2 × 105
+240 (1.66)
+50.1
+94
+19.94
+36.20
+4 × 105
+470 (3.25)
+52.2
+97
+16.55
+69.53
+5 × 105
+590 (4.10)
+53.9
+98
+14.62
+85.51
+7 × 105
+830 (5.70)
+54.4
+98
+15.59
+118.10
+10 × 105
+1180 (8.10)
+55.3
+99
+15.11
+167.89
+Table 2: The GPU performance profile for varying batch sizes at a tolerance of 2𝐸5 and 100 collected samples.
+
+Batch
+Memory
+Memory
+Always
+Active
+Tile
+Total
+Time per
+Size Used (MB) Used (%) Live (MB) Time (%) Balance (%) Time (s) Run (ms)
+2 × 4 × 104 121 (160)
+40 (52)
+31.5
+83.5
+97
+3.13
+2.67
+2 × 6 × 104 141 (160)
+46 (52)
+28.4
+84.6
+96
+2.62
+3.44
+2 × 8 × 104 184 (187)
+61 (62)
+33.4
+85.4
+96
+2.26
+3.71
+2 × 10 × 104 234 (234)
+77 (77)
+37.3
+87.2
+97
+2.24
+4.67
+2 × 12 × 104 265 (265)
+87 (87)
+38.8
+87.9
+98
+2.10
+5.28
+2 × 13 × 104 283 (284)
+93 (93)
+39.6
+88.4
+98
+2.16
+5.58
+Table 3: The performance profile for 2 Mk1 IPUs for varying batch sizes at a tolerance of 2𝐸5 and with 100 accepted samples.
+The value in the brackets denotes the memory use with “gaps" – memory on the tiles which cannot be used because it is
+reserved for different types of data than those in operation. “Always Live" indicates how much memory must be accessible for
+all stages of algorithm, “Active Time" is the overall percentage of tile cycles spent in execution and “Tile Balance" measures
+how efficiently the operations are spread across tiles.
+
+Figure 3: Analysis of the influence of the batch size on the processing time of the IPU. We generated 100 accepted samples with
+a tolerance of 1𝐸 + 05 on 2 Mk1 IPUs. We normalized the time per run by dividing it by the batch size per IPU and multiplying
+it by 100.000, such that the value at 100.000 is 1.0. The standard error bars for the total time come from the 10 repetitions.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+Conference’17, July 2017, Washington, DC, USA
+
+Device
+Batch Size Tolerance # Accepted Samples Postproc. Time (ms)
+Tesla V100
+500k
+2E+05
+100
+15 (1.5%)
+2×IPU
+2×100k
+2E+05
+100
+70 (3%)
+2×IPU
+2×100k
+2E+05
+1000
+900 (4%)
+2×IPU
+2×100k
+1E+05
+100
+110 (0.1%)
+Table 4: Times spent postprocessing the data on the host, in milliseconds. The values in parentheses denote the percentage of
+total runtime spent on postprocessing.
+
+4.2
+
+Communication Overhead and Host Processing
+
+To quantify the communication overhead due to transferring posterior samples from GPU to host, we ran the model twice – both with
+and without sending samples from accelerator to host. We observed no discernible change in runtime due to our optimizations. Hence,
+data transfer overhead is not a significant factor in GPU acceleration. Consequently, the host-GPU interface bandwidth utilization was not
+investigated further.
+As discussed in Section 3.2, the IPU implementation transfers samples back to host in a fundamentally different manner. A batch of
+samples is enqueued into an output stream to host if any of the batch are accepted. For the IPU, we directly observe these enqueue ops and
+corresponding cycles in the execution traces.
+Due to the execution of the enqueueing depending on at least one accepted sample in the batch, the fraction of cycles spent transferring
+to host depends on the tolerance. For drawing 100 samples with a batch size of 100, 000 and a tolerance of 2𝐸5, we see these ops make up
+around 1.2% of the overall number of cycles on the accelerator. For 1𝐸5 tolerance, this decreases to 0.03%. These observations corroborate
+with the reduction in wall clock time per run of 1.4% when outfeed ops are removed, for a tolerance of 2𝐸5.
+For the best possible utilization of the accelerator platform, it is important to maximize the portion of code running on the accelerator and
+to minimize the portion running on host. For both accelerator setups, the samples generated on the accelerator are filtered on the host. We
+recorded the time spent running these postprocessing ops and present them in Table 4.
+It is clear that these host operations take a small fraction of the overall runtimes presented in Table 1 due to the optimization of the
+data transfer and not sending all data. Further, they take both a shorter wall-clock time and a smaller percentage of the overall runtime in
+the GPU configuration. This is likely to result from the difference in how many samples are sent to the host. In the GPU set up, only 5 of
+most promising samples are sent for each run, whereas in the IPU case, a chunk of 10, 000 samples is sent if there is an accepted sample
+within it. This results in larger volumes of data being transferred to the host in the latter case, and therefore more host work to filter out the
+accepted samples. Comparing 100 samples with 1000 shows that the time required for postprocessing grows (approximately linearly) with
+the number of accepted samples.
+In summary, the processing time on the host as well as the times for data transfer to the host are small on both devices, cannot explain the
+performance difference in Table 1.
+
+4.3
+
+Memory Utilization
+
+Table 2 displays details on memory usage for the GPU for different batch sizes. For a batch size of 500𝐾, the memory utilization of the
+GPU is 0.59GB/14.42GB (4.1%) and results in the best average runtime. While the GPU’s large off-chip memory enables large batch sizes,
+the runtime does not benefit for sizes larger than 500𝐾. This may be due to the GPU’s memory hierarchy. The parameter array, which
+is of size [500000, 8] is around 15MB at single precision, which is close to the total L1+L2 cache of 16MB. Hence any batch size greater
+than 500k would result in a parameter array larger than the combined L1 and L2 caches, needing frequent main memory look-ups and
+some serialisation of the computation, and hence not providing any additional benefit with increasing batch size. Keeping in mind that the
+aggregated data covers 500000 simulations, of 49 days each with 6 population variables, the GPU is not able to hold all the simulation data
+in the L1 and L2 caches and has to obtain at least part of it from the main memory.8
+The memory utilisation of IPUs varies with the batch size as shown in Table 3. There is clearly an increase in memory consumption with
+increasing batch size. However, the two are not proportional, indicating that significant memory is consumed by quantities other than the
+arrays of samples generated, whose size is less dependent on the batch size. Further investigation found that some of this additional memory
+is consumed by code residing on tiles required to describe the local computation. The distribution of memory over tiles (Fig. 5) is close to
+uniform, suggesting efficient memory use in general and effective load balance between tiles on the IPU. We do not observe any variation in
+memory consumption with tolerance. This is reasonable since the tolerance as well as the number of accepted/requested samples does not
+change the computational graph.
+We can explore memory consumption on the IPU further by looking into memory liveness: the memory consumption at different
+algorithmic steps, and the extent to which memory is constantly in use or only allocated temporarily. The memory liveness of the IPU
+implementation of one single simulation run is illustrated in Fig. 4 (batch size 100, 000, tolerance 2𝐸05). The plot indicates that there is a
+significant amount of memory always allocated (pink area, “always live”), but the peak memory liveness is around six times greater than the
+8 The
+
+data array consists of 500.000 ∗ 49 ∗ 6 = 147.000.000 parameters which in the 32 bit setup requires around 560 MB of memory and exceeds the L1+L2 cache size.
+
+Conference’17, July 2017, Washington, DC, USA
+
+Kulkarni, et al.
+
+always live amount. The most prominent peaks were found to be caused by calculating the Euclidean distance between each of the 100, 000
+samples and the real data. In unpublished results, we experimented with breaking down the distance calculation by incrementally adding
+differences up for each day. This decreased performance.
+
+Figure 4: The memory liveness for a MK1 IPU at a batch size of 100, 000, tolerance 2E05. The horizontal axis is the program
+step, vertical is live memory. The pink area represents always live memory, whereas the blue indicates transient memory use.
+
+Figure 5: The (maximum) memory consumption (vertical axis) across the 1216 tiles (horizontal axis) of a MK1 IPU for a batch
+size of 100, 000. The horizontal line denotes the maximum available tile memory. The pink area represents always live memory,
+whereas the blue indicates maximum transient memory use on a tile level.
+
+We observe that the IPU is making much better use of its memory with 77% usage. It is able to keep instructions and processed data in
+memory. In contrast, the GPU is not able to hold code and data in cache for the computations which leads to a large overhead in loading
+those from main memory. Also, the large memory of the GPU does not pay off in this application and only 4% is used in the best-performing
+configuration.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+4.4
+
+Conference’17, July 2017, Washington, DC, USA
+
+Processing Load Distribution
+
+Table 3 shows that for a batch size of 100000, 97% of the on-chip resources are used. Interestingly, the GPU shows a similar coverage of 98%
+in Table 2. Note however, that at least for single precision, the two IPUs come with 62 TFLOPS, in contrast to the 14 TFLOPS of the GPU.
+Also, the table comparison shows that the GPU active time is 53.9% for the best batch size in contrast to 87% for the IPU. The idle time is
+likely due to time spent waiting for loading code for kernel launch. For the IPU, we observed in detailed profiles that most operations were
+divided over most of the tiles and run in parallel. However a very small subset of operations were processed on a fraction of the tiles while
+the others waited. The remaining 13% of the cycles were used for the synchronization. Any other processing like the actual data exchange
+were marginal. The large waiting time from the GPU might come from it having to load the code and data from the main memory and not
+the cache.
+The 87% of active time by the IPU can be further broken down on a compute set level as shown in Table 5. It is striking that even on the
+tile level, there is a significant number of operations that rearrange the data (PreArrange, OnTileCopy, slice, update, PostArrange, Transpose,
+OnTileCopyPre). Altogether they constitute 50% of the cycles. So here, the IPU can also benefit from the high memory bandwidth within a
+single tile.
+For the GPU, the breakdown can be seen in Table 6. Due to XLA optimization, single operations cannot be inferred anymore but it seems
+that most are fused into one single operation that uses 72.3% of the processing time.
+We may interpret the difference in runtime scaling with batch size in a number of ways (comparing Tables 2 and 3). First, the fact that the
+GPU runtime does not benefit from larger batch sizes may be due to being bottlenecked by memory bandwidth in the cache hierarchy where
+the IPU has high bandwidth, local memory. Second, we observe that the two IPUs provide around 4× the number of FLOPS of the GPU. Thus
+the GPU processing capacity maybe exhausted at the smallest batch size tested, resulting in a near linear increase in time per run with
+increasing batch size. We believe a combination of these factors contribute to the difference in scaling and the speedup of IPU over GPU.
+
+Compute Set Suffix Cycles (%)
+Power
+24.3
+PreArrange
+22.5
+Add
+10.8
+OnTileCopy
+10.1
+slice
+9.5
+Multiply
+4.1
+update
+4.0
+Clamp
+2.3
+Sqrt
+1.9
+PostArrange
+1.8
+Transpose
+1.5
+Reduce
+1.4
+normal
+1.4
+Convolve
+1.2
+Floor
+1.0
+OnTileCopyPre
+0.7
+Divide
+0.7
+Others
+0.9
+Table 5: The distribution of non-idle IPU cycles for 100 accepted samples and 2𝐸5 tolerance.
+
+4.5
+
+Scalability of Model to Multiple IPU Devices
+
+For each dataset, a different tolerance is appropriate, because it depends on noise in the data, predictability of the progress from the
+epidemiological model, and the number of days. For the Italian dataset, high quality samples can be obtained using a tolerance of 5𝐸 + 04.
+For this tolerance however, obtaining the good parameters estimates takes too much time for experimentation. This can be seen in Figure 6.
+On two Mk1 IPUs, the processing takes more than 5 hours (18000s). Note that a representative sample of 1000 samples would consequently
+take more than two days. Despite our acceleration, this is considered prohibitive during development.
+To overcome this limitation of processing time, we test how computation can be accelerated by distributing it across multiple devices. Note
+that sample generation could run embarrassingly parallel and scale perfectly. In the following experiment however, we want to determine
+how much the communication between devices slows down the processing and how fast we can get results. One relevant parameter here is
+the chunk size parameter. Before data is sent from IPU to host, it is divided in respectively sized data chunks and only relevant chunks are
+sent to host.
+
+Conference’17, July 2017, Washington, DC, USA
+
+Kulkarni, et al.
+
+XLA Kernel
+Runtime (%)
+fusion_5
+72.3
+fusion_9
+8.9
+volta_sgemm
+6.1
+fusion_8
+4.8
+fusion_5_1
+2.6
+fusion_10
+1.6
+fusion_11
+1.4
+fusion_64
+1.2
+fusion_60
+0.6
+broadcast_682
+0.4
+Table 6: The distribution of non-idle XLA kernels for 100 accepted samples and 2𝐸5 tolerance for GPU.
+
+Figure 6: Computation time dependent on tolerance for aggregating 100 samples on two Mk1 IPUs. Note the exponential
+scaling on the horizontal axis and the super-exponential increase of processing time with decreasing tolerance.
+Table 7: Scalability Analysis: For the speed up calculation the time per run is used, corrected by the ratio of the batch sizes.
+Device
+
+Batch
+Size
+
+Tolerance
+
+Accepted
+Samples
+
+Chunk
+Size
+
+Total
+Time (s)
+
+Time per
+Run (ms)
+
+Speed up
+rel. to 2xIPUs
+
+2xIPUs
+4xIPUs
+8xIPUs
+16xIPUs
+8xIPUs
+16xIPUs
+
+2x100k
+4x100k
+8x100k
+16x100k
+8x100k
+16x100k
+
+5E+04
+5E+04
+5E+04
+5E+04
+5E+04
+5E+04
+
+100
+100
+100
+100
+100
+100
+
+2x10k
+4x10k
+8x10k
+16x10k
+8x100k
+16x100k
+
+20354
+9056
+4536
+2355
+4091
+2189
+
+4.53
+4.6
+4.7
+4.91
+4.49
+4.52
+
+1.97
+3.85
+7.38
+4.04
+8
+
+The results are provided in Table 7. There are three key findings. First, with 16 IPUs, we got the result in less than 40 minutes. This is
+fast enough for having multiple iterations and experimenting with the model. Second, the performance scales linearly with the number
+of IPUs. Third, performance scales better when we are not chunking the data, i.e., chunk size equals to batch size. Chunking comes with
+additional synchronization between the IPUs but reduces the time for the postprocessing. If there is no chunking, the final dataset that
+gets filtered on the host occupied more than 10% of the host memory, whereas the chunked data occupied significantly less data. The
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+Conference’17, July 2017, Washington, DC, USA
+
+respective memory acquisition takes between 0.5 − 1 second for 100 samples. With high tolerances, we have short processing times such
+that performance benefits from the chunking. However with small tolerances, the chunking requires more processing and it is more efficient
+to do the processing on the host.
+
+5
+
+EPIDEMIOLOGICAL MODEL ANALYSIS
+Italy
+
+New Zealand
+
+USA
+
+Figure 7: Projected 120-day trajectories of Active, Recovered, and Death cases for Italy, New Zealand, USA. Generated by simulating the model with 100 accepted samples. These samples were obtained by training the model with data for 49 days. The
+color-shaded area covers the uncertainty from the different projected trajectories between 5𝑡ℎ and 95𝑡ℎ percentile. The x-axes
+show the number of days.
+In this section, we present an example of our approach working in practice, take a look at the actual results and show how they can be
+used to compare different countries. For our analysis we perform parallel ABC inference to fit the epidemiology model to data for 49 days
+(after the first day with 100 detected cases), across three countries (Italy, New Zealand, USA). These countries were chosen to capture a
+diverse set of the pandemic outcomes and population sizes. The data was obtained from the Johns Hopkins dataset9 . To fit the model to
+data, the algorithm was run until we accepted 100 samples from the approximate posterior. Then, we use the obtained posterior samples to
+perform 100 simulations, generating predictions for 120 days (after the onset). Note that it is not appropriate to choose the same tolerance
+for each country. Naïvely scaling the tolerance by the population is also not advised. Each country has a different level of noise in the data,
+so the simulation model might better fit to policies in some countries, in addition the virus has different characteristics in each country. Thus
+the tolerance had to be adjusted on an individual basis. We used 16 Mk1 IPUs with no chunking, and a batch size of 100𝑘 per IPU. The
+predictions, with tuned tolerances, are plotted along with the true data in Figure 7.
+We can see that the model fits the data well and generates reasonably accurate forecasts. The error margins for New Zealand probably
+appear large relative to the small case numbers. Reducing the tolerance from original 2000 to 1250 did not significantly change this. We
+note also that our Gaussian approximation to the Poisson sampling may be not satisfactory for such low case numbers.
+The respective performance results for obtaining the parameters are summarized in Table 8, as well as the means of the approximate
+posterior parameter samples.
+It is striking that the average recovery rate in New Zealand is twice as high as the recovery rate in Italy which, in turn, is twice as high as
+in the USA. The average fatality rate of Italy is almost twice as high as in the USA and almost ten times higher than in New Zealand. The
+exponent 𝑛 for the infection rate in New Zealand is more than twice that in the other countries. These three signs indicate that the pandemic
+was well controlled and the cases well treated in New Zealand, relative to US or Italy.
+Figure 8 and Figure 9 show the histograms of 100 and 1000 posterior samples respectively. They show that at least some of the posterior
+parameter distributions are not Gaussian and that the aforementioned differences in the parameter averages are actually significant. Also,
+we can see that the histograms for 1000 accepted samples are much less noisy than the ones for 100 accepted samples. For example for the
+model parameters 𝛽 and 𝛿 in case of Italy, with 100 samples it is unclear weather the posterior is uni-modal or bi-modal, as the approximate
+posterior is consistent with both. With 1000 samples, it becomes clear that they are indeed uni-modal. Considering the parameter 𝛼 for Italy
+and New Zealand, with 100 accepted samples, the posteriors seem identical, but with 1000 accepted samples, the differences among them are
+quite clear.
+
+9 https://github.com/CSSEGISandData/COVID-19
+
+Conference’17, July 2017, Washington, DC, USA
+
+Italy
+
+Kulkarni, et al.
+
+New Zealand
+
+USA
+
+Figure 8: Histograms for 100 accepted samples of the 8 model parameters for Italy, New Zealand, and USA.
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+Italy
+
+New Zealand
+
+Conference’17, July 2017, Washington, DC, USA
+
+USA
+
+Figure 9: Histograms for 1000 accepted samples of the 8 model parameters for Italy, New Zealand, and USA.
+
+Conference’17, July 2017, Washington, DC, USA
+
+Country
+Italy
+New Zealand
+USA
+Italy
+New Zealand
+USA
+
+Tolerance
+5e4
+1250
+2e5
+5e4
+1250
+2e5
+
+Kulkarni, et al.
+
+Run
+time (s)
+2107
+1330
+4420
+22954
+13846
+46339
+
+Accepted
+samples
+100
+100
+100
+1000
+1000
+1000
+
+𝛼0
+0.384
+0.474
+0.329
+0.309
+0.480
+0.342
+
+𝛼
+36.054
+46.603
+10.667
+15.012
+50.932
+11.051
+
+𝑛
+0.595
+1.223
+0.322
+0.406
+1.238
+0.319
+
+Average
+𝛽
+𝛾
+0.013 0.385
+0.030 0.499
+0.007 0.435
+0.013 0.407
+0.030 0.504
+0.007 0.468
+
+𝛿
+0.009
+0.001
+0.005
+0.009
+0.001
+0.005
+
+𝜂
+0.477
+0.520
+0.490
+0.507
+0.527
+0.501
+
+𝜅
+0.830
+1.198
+0.716
+0.603
+1.172
+0.706
+
+𝛼
+Table 8: Parameter averages for different countries with total infection rate 𝑔 (𝐴,𝑅,𝐷) = 𝛼 0 + 1+(𝐴+𝑅+𝐷)
+𝑛 , recovery rate 𝛽, positive
+test rate 𝛾, fatality rate 𝛿, testing protocol effectiveness 𝜂, and initial unobserved cases rate 𝜅.
+
+6
+
+DISCUSSION AND CONCLUSION
+
+This work demonstrates the potential of hardware-accelerated simulation-based inference algorithms for stochastic epidemiology models.
+We implement parallelized ABC inference on a Xeon CPU, Tesla V100 GPU, and MK1 IPU. Compared to CPU, the proposed parallel ABC
+version is ≈ 4× faster on GPU, and ≈ 30× faster on 2xIPUs. We performed extensive analysis to quantify the performance difference across
+GPU and IPU implementations. Our analysis indicates a three-fold advantage of IPU over the GPU:
+i) The GPU runtimes do not benefit from batch sizes above 500k, despite this being only ≈ 8% utilization of the main memory. Our
+calculations suggest the on-chip caches of the GPU (6MB L2 + 10MB L1) are too small to hold the data needed for simulation, and therefore
+constant interaction with main memory is a probable bottleneck. Conversely, the IPU has large on-chip memory (300MB) and we see that
+increasing batch size consistently provides better performance, up to 90% memory utilization.
+ii) The GPU is fetching the instructions and the data from memory to the accelerator chip and back. The overhead of deploying code to
+GPU was ≈ 43%. In contrast, data and instructions reside in the IPU memory and no transfer of instruction code is required (0% overhead).
+iii) The IPU has a much higher within-device memory bandwidth vs. the GPU (45 TB/s vs. 900 GB/s). The IPU also has much greater
+compute throughput (62 TFLOPS for 2xIPU vs. 14 TFLOPS for GPU). These benefits lead to much faster computations in IPU vs. GPU.
+Hence, we believe the higher bandwidth, closeness of memory to compute, and better compute power allow 2xIPU to be ≈ 7× faster than
+Tesla V100 GPU.
+To assess the scalability of the proposed approach to multiple devices, we demonstrate parallel ABC inference over the epidemiology
+model from 2x through 16x IPUs. We observe that the scaling overhead is between 0% (no on-device sample post-processing) to 8% (with
+on-device sample post-processing) depending on the configuration. The increase in post-processing on-device saves time in host processing,
+so this provides with a trade-off between efficient scaling vs. reducing host processing times.
+We also perform analysis on the epidemiology model across three countries (Italy, USA and New Zealand). We obtain accurate predictions
+for each which are plotted. We also observe the inferred parameters for the three countries. In general, the model tracks actual data well. To
+perform this analysis, the total runtime using a 16-IPU system was ≈ 1.9 Hours. We estimate that doing a similar analysis over 16 Xeon
+CPUs would have taken ≈ 57 Hours, while 8 V100 GPUs would have taken ≈ 15 hours.
+We believe that the parallelized ABC inference proposed in this work would generalize well across a wide variety of epidemiology models.
+Differences in model definitions fall under changes in the number of sub-populations, how transitions are computed, and time-step sizes
+considered. The performance gains obtained in GPU and IPU implementations are likely to transfer to all such variations of compartmental
+epidemiology models. More generally, this approach could provide potential benefits in several applications in life sciences, in which the
+challenge is to infer small set of parameters from a large-scale model which generates high-dimensional observations [15, 21].
+In future, it would be also interesting to test the algorithm on the next generation acceleration chips: the A100 from NVIDIA and the Mk2
+from Graphcore.
+
+REFERENCES
+[1] Abadi, M., Agarwal, A., Barham, P., Brevdo, E., Chen, Z., Citro, C., Corrado, G. S., Davis, A., Dean, J., Devin, M., Ghemawat, S., Goodfellow, I., Harp, A., Irving, G.,
+Isard, M., Jia, Y., Jozefowicz, R., Kaiser, L., Kudlur, M., Levenberg, J., Mané, D., Monga, R., Moore, S., Murray, D., Olah, C., Schuster, M., Shlens, J., Steiner, B.,
+Sutskever, I., Talwar, K., Tucker, P., Vanhoucke, V., Vasudevan, V., Viégas, F., Vinyals, O., Warden, P., Wattenberg, M., Wicke, M., Yu, Y., and Zheng, X. TensorFlow:
+Large-scale machine learning on heterogeneous systems, 2015. Software available from tensorflow.org.
+[2] Abrams, S., Wambua, J., Santermans, E., Willem, L., Kuylen, E., Coletti, P., Libin, P., Faes, C., Petrof, O., Herzog, S. A., Beutels, P., and Hens, N. Modeling the early
+phase of the belgian covid-19 epidemic using a stochastic compartmental model and studying its implied future trajectories. medRxiv (2020).
+[3] Beaumont, M. A. Approximate bayesian computation in evolution and ecology. Annual review of ecology, evolution, and systematics 41 (2010), 379–406.
+[4] Brown, G. D., Oleson, J. J., and Porter, A. T. An empirically adjusted approach to reproductive number estimation for stochastic compartmental models: A case study of two
+ebola outbreaks. Biometrics 72, 2 (2016), 335–343.
+[5] Calvet, L. E., and Czellar, V. Accurate methods for approximate bayesian computation filtering. Journal of Financial Econometrics 13, 4 (2015), 798–838.
+[6] Dong, E., Du, H., and Gardner, L. An interactive web-based dashboard to track COVID-19 in real time, vol. 20. Lancet Publishing Group, may 2020.
+[7] Drovandi, C. C., and Pettitt, A. N. Estimation of Parameters for Macroparasite Population Evolution Using Approximate Bayesian Computation. Biometrics 67, 1 (mar 2011),
+225–233.
+[8] Dutta, R., Schoengens, M., Pacchiardi, L., Ummadisingu, A., Widmer, N., Onnela, J.-P., and Mira, A. Abcpy: A high-performance computing perspective to approximate
+
+Hardware-accelerated Simulation-based Inference of Stochastic Epidemiology Models for COVID-19
+
+[9]
+[10]
+[11]
+[12]
+[13]
+[14]
+[15]
+[16]
+[17]
+[18]
+
+[19]
+[20]
+[21]
+[22]
+[23]
+[24]
+[25]
+
+[26]
+[27]
+[28]
+[29]
+[30]
+[31]
+
+Conference’17, July 2017, Washington, DC, USA
+
+bayesian computation. arXiv preprint arXiv:1711.04694 (2017).
+Gillespie, D. T. Approximate accelerated stochastic simulation of chemically reacting systems. The Journal of chemical physics 115, 4 (2001), 1716–1733.
+Hamra, G., MacLehose, R., and Richardson, D. Markov chain monte carlo: an introduction for epidemiologists. International journal of epidemiology 42, 2 (2013), 627–634.
+Jia, Z., Tillman, B., Maggioni, M., and Scarpazza, D. P. Dissecting the Graphcore IPU architecture via microbenchmarking. ArXiv abs/1912.03413 (2019).
+Kacher, I., Portaz, M., Randrianarivo, H., and Peyronnet, S. Graphcore C2 Card performance for image-based deep learning application: A Report. ArXiv (feb 2020).
+Kangasrääsiö, A., Jokinen, J. P., Oulasvirta, A., Howes, A., and Kaski, S. Parameter inference for computational cognitive models with approximate bayesian computation.
+Cognitive Science 43, 6 (2019), e12738.
+Kermack, W. O., and McKendrick, A. G. A Contribution to the Mathematical Theory of Epidemics. Proceedings of the Royal Society of London Series A 115, 772 (Aug. 1927),
+700–721.
+Liang, F., and Wong, W. H. Evolutionary monte carlo for protein folding simulations. The Journal of Chemical Physics 115, 7 (2001), 3374–3380.
+Liepe, J., Barnes, C., Cule, E., Erguler, K., Kirk, P., Toni, T., and Stumpf, M. P. Abc-sysbio—approximate bayesian computation in python with gpu support. Bioinformatics
+26, 14 (2010), 1797–1799.
+Liepe, J., Kirk, P., Filippi, S., Toni, T., Barnes, C. P., and Stumpf, M. P. A framework for parameter estimation and model selection from experimental data in systems biology
+using approximate bayesian computation. Nature protocols 9, 2 (2014), 439–456.
+Mattson, P., Cheng, C., Coleman, C., Diamos, G., Micikevicius, P., Patterson, D., Tang, H., Wei, G.-Y., Bailis, P., Bittorf, V., Brooks, D., Chen, D., Dutta, D., Gupta, U.,
+Hazelwood, K., Hock, A., Huang, X., Ike, A., Jia, B., Kang, D., Kanter, D., Kumar, N., Liao, J., Ma, G., Narayanan, D., Oguntebi, T., Pekhimenko, G., Pentecost, L., Reddi,
+V. J., Robie, T., John, T. S., Tabaru, T., Wu, C.-J., Xu, L., Yamazaki, M., Young, C., and Zaharia, M. Mlperf training benchmark, 2019.
+Mondal, M., Bertranpetit, J., and Lao, O. Approximate bayesian computation with deep learning supports a third archaic introgression in asia and oceania. Nature
+communications 10, 1 (2019), 1–9.
+Ortiz, J., Pupilli, M., Leutenegger, S., and Davison, A. J. Bundle adjustment on a graph processor. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR) (June 2020).
+Peng, B., and Amos, C. I. Forward-time simulation of realistic samples for genome-wide association studies. BMC bioinformatics 11, 1 (2010), 1–12.
+Rubin, D. B. Bayesianly justifiable and relevant frequency calculations for the applies statistician. The Annals of Statistics (1984), 1151–1172.
+Sunnåker, M., Busetto, A. G., Numminen, E., Corander, J., Foll, M., and Dessimoz, C. Approximate bayesian computation. PLOS Computational Biology 9, 1 (01 2013), 1–10.
+Tomczak, J. M., and Węglarz-Tomczak, E. Estimating kinetic constants in the michaelis–menten model from one enzymatic assay using approximate bayesian computation.
+FEBS letters 593, 19 (2019), 2742–2750.
+Viguerie, A., Veneziani, A., Lorenzo, G., Baroli, D., Aretz-Nellesen, N., Patton, A., Yankeelov, T. E., Reali, A., Hughes, T. J., and Auricchio, F. Diffusion–reaction
+compartmental models formulated in a continuum mechanics framework: application to covid-19, mathematical analysis, and numerical study. Computational Mechanics 66, 5
+(2020), 1131–1152.
+Wagner, A., Mitra, T., Iyer, M., Da Costa, G., and Tremblay, M. Position Masking for Language Models. ArXiv (June 2020).
+Wang, Y., Cao, J., Alsaedi, A., and Ahmad, B. Edge-based seir dynamics with or without infectious force in latent period on random networks. Communications in Nonlinear
+Science and Numerical Simulation 45 (2017), 35–54.
+Warne, D. J., and Drovandi, C.
+covid19-auto-reg-model (github repository), 08 2020.
+https://github.com/davidwarne/covid19-auto-reg-model/tree/
+06f25ca5ca567d0795a72ebd411ec2f468cacc6b.
+Warne, D. J., Ebert, A., Drovandi, C., Mira, A., and Mengersen, K. Hindsight is 2020 vision: Characterisation of the global response to the COVID-19 pandemic. medRxiv
+(may 2020), 2020.04.30.20085662.
+Weiner, D., and Purdue, P. A semi-markov approach to stochastic compartmental models. Communications in Statistics-Theory and Methods 6, 12 (1977), 1231–1243.
+Weyant, A., Schafer, C., and Wood-Vasey, W. M. Likelihood-free cosmological inference with type ia supernovae: approximate bayesian computation for a complete
+treatment of uncertainty. The Astrophysical Journal 764, 2 (2013), 116.
+
+

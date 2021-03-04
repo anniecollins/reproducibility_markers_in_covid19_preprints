@@ -1,0 +1,2907 @@
+Interpretable Sequence Learning for
+COVID-19 Forecasting
+
+Sercan Ö. Arık, Chun-Liang Li, Jinsung Yoon, Rajarishi Sinha, Arkady Epshteyn,
+Long T. Le, Vikas Menon, Shashank Singh, Leyou Zhang, Martin Nikoltchev,
+Yash Sonthalia, Hootan Nakhost, Elli Kanal, Tomas Pfister
+Google Cloud AI
+{soarik,chunliang,jinsungyoon,sinharaj,aepshtey,longtle,vikasmenon,
+shashanksi,leyouz,mnikoltchev,yashks,hootan,ekanal,tpfister}@google.com
+
+Abstract
+We propose a novel approach that integrates machine learning into compartmental
+disease modeling (e.g., SEIR) to predict the progression of COVID-19. Our model
+is explainable by design as it explicitly shows how different compartments evolve
+and it uses interpretable encoders to incorporate covariates and improve performance. Explainability is valuable to ensure that the model’s forecasts are credible
+to epidemiologists and to instill confidence in end-users such as policy makers
+and healthcare institutions. Our model can be applied at different geographic
+resolutions, and we demonstrate it for states and counties in the United States. We
+show that our model provides more accurate forecasts compared to the alternatives,
+and that it provides qualitatively meaningful explanatory insights.
+
+1
+
+Introduction
+
+The rapid spread of COVID-19, the disease caused by the SARS-CoV-2 virus, has had a significant
+impact on humanity. Accurately forecasting the progression of COVID-19 can help (i) healthcare
+institutions to ensure sufficient supply of equipment and personnel to minimize fatalities, (ii) policy
+makers to consider potential outcomes of their policy decisions, (iii) manufacturers and retailers to
+plan their business decisions based on predicted attenuation or recurrence of the pandemic and (iv)
+the general populace to have confidence in the choices made by the above actors.
+Data is one of the greatest assets of the modern era, including for healthcare [1]. We aim to exploit
+this abundance of data for COVID-19 forecasting. From available healthcare supply to mobility
+indices, many information sources are expected to have predictive value for forecasting the spread of
+COVID-19. Data-driven time-series forecasting has enjoyed great success, particularly with advances
+in deep learning [2–4]. However, several features of the current pandemic limit the success of standard
+time-series forecasting methods:
+• Because there is no close precedent for the COVID-19 pandemic, it is necessary to integrate existing
+data with priors based on epidemiological knowledge of disease dynamics.
+• The data generating processes are non-stationary because progression of the disease influences
+public policy and individuals’ public behaviors, and vice versa.
+• There are many potential sources of data, but their causal impact on the disease is unclear, and their
+impact on the progression of the disease is unknown.
+• The problem is non-identifiable as most infected can be undocumented.
+• Data sources are noisy due to reporting issues or due to data collection problems.
+• Beyond accuracy, explainability is desired – the users, either from healthcare or policy or business
+angles, should be able to interpret the results in a meaningful way for optimal strategic planning.
+
+Compartmental model
+Susceptible
+
+Hypotheses on potentiallyimportant covariates
+
+Trainable computational graph
+S[t-1]
+
+S[t]
+
+S[t+1]
+
+Infected
+
+I[t-1]
+
+I[t]
+
+I[t+1]
+
+Recovered
+
+R[t-1]
+
+R[t]
+
+R[t+1]
+
+Covariates
+
+Covariates
+
+Figure 1: Our approach is based on distilling the inductive bias from compartmental models (as
+exemplified here for the popular SIR, Susceptible-Infected-Recovered, model) into a computational
+graph, where the transitions depend on the related covariates.
+Compartmental models, such as the SIR and SEIR [5] models, are widely used for disease modeling
+by healthcare and public authorities. Such models represent the number of people in each of
+the compartments (see Fig. 1) and model the transitions between them via differential equations.
+Compartmental models often have several shortcomings: (i) only few learnable parameters resulting
+low model capacity (ii) non-stationary dynamics due to static rates in the differential equations;
+(iii) no covariates to extract information; (iv) assumptions on well-mixed compartments, i.e. each
+individual is statistically identical to others in the same compartment [6]; (v) no information sharing
+across time or geography, and (vi) non-identifiability – identical results may arise from different
+parametrizations [7].
+While preserving interpretability for domain experts, we aim for accurate forecasts that go beyond
+the capabilities of standard compartmental models by utilizing rich datasets with high temporal
+and spatial granularity. Our approach is based on integrating covariate encoding into compartment
+transitions to extract relevant information via end-to-end learning (Fig. 1). In this way, we provide
+an inherently interpretable model that reflects the inductive biases of epidemiology. To get high
+accuracy, we introduce several innovative contributions:
+1. We extend the standard SEIR model to also include compartments for undocumented cases and
+hospital resource usage. Our end-to-end modeling framework can infer meaningful estimates for
+undocumented cases even if there is no direct supervision for them.
+2. The disease dynamics vary over time, e.g., as mobility reduces, the spreading would decay. To
+accurately reflect such dynamics, we propose time-varying encoding of the covariates.
+3. We propose learning mechanisms to improve generalization while learning from limited training
+data, using (i) masked supervision from partial observations, (ii) partial teacher-forcing to minimize
+error propagation, (iii) regularization and (iv) cross-location information-sharing.
+We demonstrate our approach for COVID-19 forecasting for the United States (US), the country
+that has suffered from the highest number of confirmed cases and deaths as of October 2020. For
+both at State- and County-level granularities, we show that our model outperforms commonly-used
+alternatives. Beyond accurate forecasts, we show how our model can be used for insights towards
+better understanding of COVID-19 pandemic.
+
+2
+
+Related work
+
+Compartmental models: Using compartmental models [8] for infectious diseases can be dated back
+to [5], which has three compartments including susceptible, infected and recovered. Several infectious
+diseases, including COVID-19, manifest an incubation period during which an individual is infected,
+but are not yet spreaders. To this end, the Exposed (E) compartment is employed, yielding the SEIR
+model [9]. Beyond these basic types of compartment models, several other types of compartment
+models have been used, such as granular infections [10] and undocumented compartments [11]. A
+mixture of state-space model [12] in machine learning is presented in [13].
+Integrating covariates into compartmental models: Policy changes such as travel bans or public
+restrictions have a marked, if local, effect on the disease progression. [14] designs a model that predict
+the effect of travel restrictions on the disease spread in China. [15] uses a modified SEIR model
+with mobility covariates to show the impact of interventions in the US. [16] presents a Bayesian
+hierarchical model for the effect of non-pharmaceutical interventions on COVID-19 in Europe. Such
+studies have typically been limited to the impact of one or two covariates, while our method models
+numerous static and time-varying ones in conjunction.
+Disease modeling using machine learning: Apart from compartmental models, a wide variety of
+methods exist for modeling infectious disease. These include diffusion models [17], agent-based
+models [18], and cellular automata [19]. With the motivation of data-driven learning, some also
+integrate covariates into disease modeling, e.g. using LSTM-based models [20–22].
+2
+
+Ventilator rate (v)
+Recovery rate (⍴(V))
+
+Remove when data
+not available
+
+Ventilator [V]
+ICU [C]
+
+⍴(U)
+
+Hospitalized [H]
+
+Re-infection rate
+(ŋ)
+
+Average contacts
+(β(d), β(u))
+
+Partially-available
+for supervision
+
+ICU rate (c)
+
+Inverse latency
+period (𝜶)
+
+Rate variable
+
+Covariates
+
+𝛃
+
+Mobility, Interventions, Density,
+Past Counts
+
+𝜼
+
+Census, Healthcare supply
+
+𝜸
+
+Census, Test count / pos. ratio,
+Past Counts
+Census, Econometrics,
+Healthcare supply
+
+h, c, v, 𝝆, 𝜿
+
+ŋ
+
+Figure 2: The modeled compartments and the corresponding covariates, with the legend on the right.
+Learning from data and equations: Strong inductive biases can improve machine learning. One
+type of such bias is the set of equations between input and output, particularly common in physics or
+chemistry. To incorporate the inductive bias of equations, several recent works [23–26] have studied
+parametric approaches, as in our paper, where trainable models are incorporated to model only certain
+terms in the equations, while the equations still govern the end-to-end relationships.
+Other COVID-19 forecasting works: Different works have adopted compartmental models for
+COVID-19 forecasting via modeling different comparments, such as YYG [27]. However, they do not
+leverage additional covariates. IHME [28] is based on fitting a curve to model the non-linear mixing
+effects, which does not explicitly model the transitions between the compartments. LANL [29] is
+based on statistical-dynamical growth modeling for the susceptible and infected cases.
+
+3
+
+Proposed compartmental model for COVID-19
+
+We adapt the standard SEIR model with some major changes, as shown in Fig. 2:
+• Undocumented infected and recovered compartments: Recent studies suggest that majority
+of the infected people are not detected and they dominate disease spreading1 [30, 31] (as the
+documented ones are either self-isolated or hospitalized) An undocumented infected individual is
+able to spread the disease, until being documented or recovered without being undocumented.
+• Hospitalized, ICU and ventilator compartments: We introduce compartments for the people
+who are hospitalized, in the ICU, or on a ventilator, as there is a demand to model these [32] and
+there is partially-available observed data to be used for supervision.
+• Partial immunity: To date, there is no scientific consensus on what fraction of recovered cases
+demonstrate immunity to future infection. Due to reports of reinfection [33] we model the rate of
+reinfection from recovered compartments (though our model infers low reinfection rates).
+• Other Assumptions: We assume the published COVID-19 death counts are coming from documented cases, not undocumented. Also, we assume that the entire population is invariant, i.e.
+births and non-Covid deaths are negligible in comparison to the entire population. Last, by data
+publishing frequency, we assume a fixed sampling interval of 1 day.
+Table 1: Modeled compartments.
+Compartment
+
+Description
+
+Compartment
+
+Description
+
+S
+E
+I (d)
+I (u)
+R(d)
+
+Susceptible
+Exposed
+Infected documented
+Infected undocumented
+Recovered documented
+
+R(u)
+H
+C
+V
+D
+
+Recovered undocumented
+Hospitalized
+In intensive care unit (ICU)
+On ventilator
+Death
+
+The modeled compartments are shown in Table 1. For a compartment X, Xi [t] denotes the number
+of individuals in that compartment at location i and time t. N [t] denotes the total population. Fig. 2
+describes transition rate variables used to relate the compartments, via the equations (we omit the
+index i for concision):
+1
+
+[11] estimates that > 80% of cases in China were undocumented during the early phase of the pandemic.
+
+3
+
+S[t] − S[t−1]
+E[t] − E[t−1]
+I (u) [t] − I (u) [t−1]
+I (d) [t] − I (d) [t−1]
+R(u) [t] − R(u) [t−1]
+R(d) [t] − R(d) [t−1]
+H[t] − H[t−1]
+C[t] − C[t−1]
+V [t] − V [t−1]
+D[t] − D[t−1]
+
+S[t−1]
+(d)
+= −(β (d) I (d) [t−1] + β (u) I (u) [t−1]) N
+[t−1]+R(u) [t−1]),
+[t−1] +η(R
+S[t−1]
+= (β (d) I (d) [t−1] + β (u) I (u) [t−1]) N
+[t−1] − αE[t−1],
+= αE[t−1] − (ρ(I,u) + γ)I (u) [t−1],
+= γI (u) [t−1] − (ρ(I,d) + κ(I,d) + h)I (d) [t−1],
+= ρ(I,u) I (u) [t−1] − ηR(u) [t−1],
+= ρ(I,d) I (d) [t−1] + ρ(H) (H[t−1] − C[t−1]) − ηR(d) [t−1],
+= hI (d) [t−1] − (κ(H) + ρ(H) )(H[t−1] − C[t−1]) − κ(C) (C[t−1] − V [t−1]) − κ(V ) V [t−1],
+= c(H[t−1] − C[t−1]) − (κ(C) + ρ(C) + v)(C[t−1] − V [t−1]) − κ(V ) V [t−1],
+= v(C[t−1] − V [t−1]) − (κ(V ) + ρ(V ) )V [t−1],
+= κ(V ) V [t−1] + κ(C) (C[t−1] − V [t−1]) + κ(H)(H[t−1] − C[t−1]) + κ(I,d) I (d) [t−1],
+
+Corollary: Basic reproduction number An analysis of our compartmental model using the NextGeneration Matrix method [34] yields the effective reproductive number (spectral radius) as:
+Re =
+
+β (d) γ + β (u) (ρ(I,d) + κ(I,d) + h)
+.
+(γ + ρ(I,u) ) · (ρ(I,d) + κ(I,d) + h)
+
+(1)
+
+Please see Appendix for derivations. Note that when γ = 0, our compartmental model reduces to the
+standard SEIR model with the undocumented infected and recovered. In this case, R0 = β (u) /ρ(I,u) .
+
+4
+
+Encoding covariates
+
+Time-varying modeling of variables: Instead of using static rate variables across time to model
+compartment transitions as in standard compartmental models, there should be time-varying functions
+that map them from known observations. For example, if human mobility decreases over time, the
+S → E transition should reflect that. Consequently, we propose replacing all static rate variables
+with learnable functions that output their value from the related static and time-varying covariates
+at each location and timestep. We list all the covariates used for each rate variable in the Appendix.
+We note that learnable encoding of variables still preserves the inductive bias of the compartmental
+modeling framework while increasing the model capacity via learnable encoders.
+Interpretable encoder architecture: In addition to making accurate forecasts, it is valuable to
+understand how each covariate affects the model. Such explanations greatly help users from healthcare
+and public sector to understand the disease dynamics better, and also help model developers to ensure
+the model is learning appropriate dynamics via sanity checks with known scientific studies or common
+knowledge. To this end we adopt a generalized additive model [35] for each variable vi from Table
+2 based on additional covariates cov(vi , t) at different time t. The covariates we consider include
+(i) the set of static covariates S, such as population density, and (ii) {f [t − j]}f ∈Fi ,j=1,...,k the set
+of time-varying covariates (features) Fi with the observation from t−1 to t − k, such as mobility.
+Omitting individual feature interactions and applying additive aggregation, we obtain
+
+vi [t] = vi,L + (vi,U − vi,L ) · σ c + bi + w> cov(vi , t) ,
+(2)
+where vi,L and vi,U are the lower and upper bounds of vi for all t, c is the global bias, bi is the
+location-dependent bias. w is the trainable parameter, and σ() is the sigmoid function to limit the
+range to [vi,L , vi,U ]2 , which is important to stabilize training and avoid overfitting. We note that
+although Eq. (2) denotes a linear decomposition for vi [t] at each timestep, the overall behavior is still
+highly non-linear due to the relationships between compartments.
+Covariate forecasting: The challenge of using Eq. (2) for future forecasting is that some time-varying
+covariates are not available for the entire forecasting horizon. Assume we have the observations
+of covariates and compartments until T , and we want to forecast from T +1 to T +τ . To forecast
+vi [T +τ ], we need the time varying covariates f [T +τ −k : T +τ −1] for f ∈ Fi , but some of them
+are not observed when τ > k. To solve this issue, we propose to forecast f [T +τ −k : T +τ −1] based
+on their own past observations until T , which is a standard one dimensional time series forecasting
+for a given covariate f at a given location. In this paper, we use a standard XGBoost model [36]
+which inputs time-series features.3
+Information-sharing across locations: Some aspects of the disease dynamics are locationdependent while others are not. In addition, data availability varies across locations – there may be
+limited observations to learn the impact of a covariate. A model able to learn both location dependent
+2
+
+We use vi,L =0 for all variables, vi,U = 1 for β, 0.2 for α, 0.001 for η and 0.1 for others.
+We used the lagged features of the past 7 days plus the 2 weeks ago, and mean/max in the windows of sizes
+of 3, 5, 7, 14 and 21 days.
+3
+
+4
+
+and independent dynamics is desirable. Our encoders in Eq. (2) partially capture location-shared dynamics via shared w and the global bias c. To allow the model capture remaining location-dependent
+dynamics, we introduce the local bias bi . A challenge is that the model could ignore the covariates by
+encoding all information into bi during training. This could hurt generalization as there would not
+be any information-sharing on how staticPcovariates affect the outputs across locations. Thus, we
+introduce a regularization term Lls = λls i |bi |2 to encourage the model to leverage covariates and
+c for information-sharing instead of relying on bi . Without Lls , we observe that the model would use
+the local bias more than the encoded covariates, and suffers from poorer generalization.
+
+5
+
+End-to-end training
+
+Algorithm 1 Pseudo-code for training the proposed model
+Inputs: Forecasting horizon τ , compartment observations Qi , Hi , Ci , Vi , Di , Ri from Ts until T ,
+the number of fine tuning iterations F , loss coefficients λRe and λls .
+Initialize trainable parameters θ = {wi , c, bi }, and initial conditions for the compartments Ê[0],
+Iˆ(d) [0], Iˆ(u) [0], R̂(d) [0], R̂(u) [0], Ĥ[0], Ĉ[0], V̂ [0], D̂[0]
+Split τ day validation Yi [T − τ : T ] for all locations i, where Y ∈ {Q, H, C, V, D, R(d) }
+while until convergence do
+(d)
+(u)
+(d)
+(u)
+Sample initial conditions Ei [0], Ii [0], Ii [0], Ri [0], Ri [0], Hi [0], Ci [0], Vi [0], Di [0]
+θ ← θ − RMSProp(∇θ L(Ts , T −τ −1))
+Update the optimal parameters: θopt = θ if Lf it [T − τ : T ] is the current-best
+Final fine-tuning: fine-tune with joint training and validation data:
+θ ← θopt
+for F iterations do
+θ ← θ − RMSProp(∇θ L(Ts , T ))
+Update the optimal parameters: θopt = θ if Lf it [T − τ : T ] is the currently best
+Output: Return θopt
+Learning from partially-available observations: Fitting would have been easy with observations
+for all compartments, however, we only have access to some. For instance, I (d) is not given in the
+ground truth of US data but we instead have, Q, the total number of confirmed cases, that we use
+to supervise I (d) +R(d) +H +D. Note that R(ud) , I (ud) , S, E are not given as well. Formally, we
+assume availability of the observations Y [Ts : T ]4 , for Y ∈ {Q, H, C, V, D, R(d) }, and consider
+forecasting the next τ days, Ŷ [T + 1 : T +τ ].
+Fitting objective: There is no direct supervision for training encoders, while they should be learned
+in an end-to-end way via the aforementioned partially-available observations. We propose the
+following objective for range [Ts , Te ]:
+Lf it [Ts : T ] =
+
+X
+Y ∈{Q,H,C,V,D,R(d) }
+
+λY
+
+T
+−τ
+X
+
+τ
+X
+
+I(Y [t+i])
+·q(t+i−Ts ; z)·L(Y [t+i], Ŷ [t+i]).
+j I(Y [j]) · Y [j]
+
+P
+t=Ts i=1
+
+(3)
+I(·) ∈ {0, 1} indicates the availability of the Y to allow the training to focus only on available
+observations. L(, ) is the loss between the ground truth and the predicted values (e.g., `2 or quantile
+loss), and λY are the importance weights to balance compartments due to its robustness (e.g., D is
+much more robust than others). Lastly, q(t; z) = exp(t · z) is a time-weighting function (when z = 0,
+there is no time weighting) to favor more recent observations with z as a hyperparameter.
+Constraints and regularization: Given the limited dataset size, overfitting is a concern for highcapacity encoders trained on insufficient data. In addition to limiting the model capacity with the
+epidemiological inductive bias, we further apply regularization to improve generalization to unseen
+future data. An effective regularization is constraining the effective reproduction number Re as
+derived in Eq. (1). There are rich literature in epidemiology on Re to give us good priors on the range
+of the number should be. For a reproduction number Re [t] at time t, we consider the regularization
+XT
+LRe [Ts : T ] =
+exp ((Re [t] − R)+ ) ,
+t=Ts
+
+4
+
+We use the notation Si [Ts : T ] to denote all timesteps between Ts (inclusive) and T (inclusive).
+
+5
+
+where R is a prespecified soft upper bound. The regularization favors the model with Re in a
+reasonable range in addition to good absolute forecasting numbers. In the experiment, we set R = 5
+without further tuning. Last, ignoring the perturbation of a small local window, the trend of forecast
+should usually be smooth. One commonly used smoothness constraint, is on the first-order difference.
+We call it as velocity, which is defined as vY [t] = (Y [t] − Y [t − k])/k. The first-order constraint
+encourage vY [t] ≈ vY [t − 1], which causes linear forecasting, and cannot capture the rapid growing
+cases. Instead, we relax the smoothness to be on the second order difference. We called it as
+acceleration, which is defined as aY [t] = vY [t] − vY [t − 1]. The regularization is
+Lacc [Ts : T ] =
+
+X
+
+T
+X
+
+(aY [t] − aY [t − 1])2
+
+Y ∈{Q,D} t=Ts +1
+
+The final objective function is
+L(Ts , T ) = Lf it [Ts : T ]+λls · Lls +λRe · LRe [Ts : T ]+λacc · Lacc [Ts : T ],
+(4)
+P
+where Lls = λls i |bi |2 as discussed in Sec. 4.
+Partial teacher forcing: The compartmental model presented in Sec. 3 produces the future propagated values from the current timestep. During training, we have access to the observed values
+for Y ∈ {Q, H, C, V, D, R(d) } at every timestep, which we could condition the propagated values
+on, commonly-known as teacher forcing [37] to mitigate error propagation. At inference time,
+however, ground truth beyond the current timestep t is unavailable, hence the predictions should
+be conditioned on the future estimates. Using solely ground-truth to condition propagation would
+create a train-test mismatch. In the same vein of past research to mix the ground truth and predicted
+data to condition the projections on [38], we propose partial teacher forcing, simply conditioning
+(1 − νI{Y [t]})Y [t]+νI{Y [t]})Ŷ [t], where I{Y [t]} ∈ {0, 1} indicates whether the ground truth Y [t]
+exists and ν ∈ [0, 1]. In the first stage of training, we use teacher forcing with ν ∈ [0, 1], which is a
+hyperparameter. For fine-tuning (please see below), we use ν = 1 to unroll the last τ steps to mimic
+the real forecasting scenario.
+Model fitting and selection: The training pseudo code is presented in Algorithm 1. We split the
+observed data into training and validation with the last τ timesteps to mimic the testing scenario. We
+use the training data for optimization of the trainable degrees of freedom, collectively represented
+as θ, while the validation data is used for early stopping and model selection. Once the model is
+selected, we fix the hyperparameters and run fine-tuning on joint training and validation data, to
+not waste valuable recent information by using it only for model selection. For optimization, we
+use RMSProp as it is empirically observed to yield lower losses compared to other algorithms and
+providing the best generalization performance.
+
+6
+
+Experiments
+
+Ground truth data: We conduct all experiments on US COVID-19 data. The primary ground truth
+data for the progression of the disease, for Q and D, are from [39] as used by several others, e.g.
+[28]. They obtain the raw data from the state and county health departments. Because of the rapid
+progression of the pandemic, past data has often been restated, or the data collection protocols have
+been changed. Ground truth data for the H, C and V (see Fig. 1) are obtained from [40]. Note
+that there are significant restatements of the past observed counts in the data, so we use the reported
+numbers on the prediction date for training (although later we know the restated past ground truth),
+and the reported numbers τ days after prediction date for evaluation, to be completely consistent with
+other models for fair comparison.
+Covariates: The progression of COVID-19 is influenced by a multitude of factors, including relevant
+properties of the population, health, environmental, hospital resources, demographics and econometrics indicators. Time-varying factors such as population mobility, hospital resource usage and public
+policy decisions can also be important. However, indiscriminately incorporating a data source may
+have deleterious effects. Thus, we curate our data sources to limit them to one source in each category
+of factors that may have predictive power at the corresponding transition. We use datasets from
+public sources (please see Appendix for details). We apply forward- and backward-filling imputation
+(respectively) for time-varying covariates, and median imputation for static covariates. Then, all
+covariates are normalized to be in [0, 1], considering statistics across all locations and time-steps.
+Training: We implement Algorithm 1 in TensorFlow at state- and county-levels, using `2 loss
+for point forecasts. We employ [41] for hyperparameter tuning (including all the loss coefficients,
+6
+
+learning rate, and initial conditions) with the objective of optimizing for the best validation loss,
+with 400 trials and we use F = 300 fine-tuning iterations. We choose the compartment weights
+(d)
+λD = λQ = 0.1, λH = 0.01 and λR = λC = λV = 0.001.5 At county granularity, we do not
+have published data for C and V , so, we remove them along with their connected variables.
+6.1 Results
+Table 2: τ -day average MAE for forecasting the number of deaths at state-level. Since benchmark
+models from covid19-forecast-hub repository release forecasts at different dates and horizons, not all
+models have predictions for all prediction dates/horizons (indicated by “—”). Bold indicates the best.
+Pred. horizon τ (days)
+Pred. date
+Ours
+CU
+LANL
+UT
+YYG
+05/19/2020
+35.8
+71.4
+45.3
+43.7
+46.5
+05/26/2020
+29.4
+58.5
+36.3
+43.8
+37.7
+06/02/2020
+32.8
+86.1
+33.5
+35.1
+26.5
+14
+06/09/2020
+28.8
+71.0
+34.7
+33.5
+22.3
+06/16/2020
+31.4
+79.6
+50.8
+48.9
+32.1
+06/23/2020
+63.8
+134.7
+85.8
+67.7
+64.2
+06/30/2020
+46.5
+152.1
+48.6
+34.1
+35.1
+450
+400
+
+150
+125
+100
+
+250
+
+150
+
+NY (36000)
+death
+Predicted death
+
+-03 -10 -17 -24 -31 -07 -14 -21
+May May May May May Jun Jun Jun
+Prediction Date
+
+2750
+2500
+Population Count
+
+Population Count
+
+300
+
+200
+
+75
+
+31000
+30000
+29000
+28000
+27000
+26000
+25000
+24000
+
+350
+
+Population Count
+
+175
+
+DE (10000)
+death
+Predicted death
+
+OH (39000)
+death
+Predicted death
+
+2250
+2000
+1750
+1500
+
+3250
+3000
+2750
+2500
+2250
+2000
+1750
+1500
+1250
+1300
+1200
+
+Population Count
+
+Population Count
+
+200
+
+AR (05000)
+death
+Predicted death
+Population Count
+
+225
+
+FL (12000)
+death
+Predicted death
+
+WA (53000)
+death
+Predicted death
+
+1100
+1000
+900
+
+1250
+1000
+
+-03 -10 -17 -24 -31 -07 -14 -21
+May May May May May Jun Jun Jun
+Prediction Date
+
+-03 -10 -17 -24 -31 -07 -14 -21
+May May May May May Jun Jun Jun
+Prediction Date
+
+Figure 3: Ground-truth vs. predicted 14-day death forecasts for 6 states: AR, DE, FL, NY, OH, and
+WA on 06/09/2020.
+State-level forecasts: Fig. 3 exemplifies the forecasting performance of our model on 4 states. We
+compare our method to widely-used benchmarks for state-level prediction of the number of deaths
+in each US state. Specifically, we report comparisons with Columbia University (CU) model [42],
+the GrowthRate model from Los Alamos National Laboratory (LANL) [29], UT-Austin (UT) model
+[43] and the YYG model [27]. CU is a metapopulation SEIR model with a selection mechanism
+among the different generated scenarios for interventions. LANL is based on statistical-dynamical
+growth modeling for the underlying numbers of susceptible and infected cases. UT makes predictions
+assuming that social distancing patterns, as measured by anonymized mobile-phone GPS traces,
+using a Bayesian multilevel negative binomial regression model. YYG is an SEIR model with
+learnable parameters and accounts for reopenings. The parameters are fit using hyperparameter
+optimization. Unlike ours, YYG uses fixed (time-invariant) rates as SEIR parameters and is limited
+to modeling standard SEIR compartments. Note that, in contrast to usual benchmarks, these models
+may change significantly between forecast dates. Table 2 shows comparisons for different prediction
+dates and forecasting horizons τ . Our model is consistently accurate across phases of the pandemic
+and outperforms all others except YYG by a large margin. YYG is merely optimized for the number
+of deaths, whereas our model jointly predicts all the compartments while being explainable. Fig. 3
+exemplifies our forecasting on different states, and shows our model can forecast well on different
+scale of reported deaths.
+5
+
+Our results are not highly sensitive to these.
+
+7
+
+Table 3: τ -day average MAE for 14-day forecasting of the number of deaths for county-level forecasts.
+
+14
+
+60
+
+350
+300
+Population Count
+
+Population Count
+
+70
+
+Hillsborough County, FL (12057)
+death
+Predicted death
+
+50
+40
+30
+20
+
+Ours
+1.19
+1.02
+1.80
+1.56
+1.36
+1.37
+
+Palm Beach County, FL (12099)
+death
+Predicted death
+
+3500
+
+Berkeley CLEP
+1.91
+1.79
+3.24
+3.10
+3.20
+3.32
+
+Cook County, IL (17031)
+death
+Predicted death
+
+2000
+
+Nassau County, NY (36059)
+death
+Predicted death
+
+3000
+
+250
+
+Population Count
+
+80
+
+Pred. date
+05/19/2020
+06/09/2020
+05/19/2020
+05/26/2020
+06/09/2020
+06/16/2020
+
+200
+150
+100
+
+Population Count
+
+Pred. horizon τ (days)
+
+2500
+2000
+1500
+1000
+
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+1000
+500
+
+500
+
+10
+
+50
+
+1500
+
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+Figure 4: Ground-truth vs. predicted 14-day death forecasts for 4 counties: Hillsborough Co., FL;
+Palm Beach Co., FL; Cook Co., IL; Nassau Co., NY on 05/19/2020.
+County-level forecasts: Table 3 shows the performance of our model on all (more than 3000) US
+counties. Compared with state-level forecasting, it is more challenging due to sparse observations.
+We compare our method to predictions by Berkeley Yu model [44] for the number of deaths in each
+US county. The model comprises several predictors (including exponential and linear) and ensemble
+their forecasts resulting Combined Linear and Exponential Predictors (CLEP). The setting to compare
+the county is same as state-level comparisons. Table 3 demonstrates that our model yields much lower
+error compared to the Berkeley CLEP model. Fig. 4 exemplifies the prediction for a few counties.
+6.2
+
+Ablation studies
+Table 4: τ -day average MAE for 14-day forecasting of the number of deaths at state-level.
+Models / Prediction date
+Standard SEIR compartments (w/o encoder)
+Standard SEIR compartments (with encoder)
+Our model (w/o encoder)
+Our model w/o fine-tuning
+Our model w/o partial teacher forcing
+Our model
+
+05/25/2020
+87.3
+50.0
+69.2
+94.1
+792.6
+32.9
+
+06/01/2020
+76.1
+37.5
+36.8
+78.7
+1903.8
+23.8
+
+06/08/2020
+71.0
+39.3
+28.7
+65.8
+1289.7
+26.5
+
+Table 4 presents the major results for ablation cases. For these ablation studies, to merely focus on the
+impact of the model changes, we use the most recently-updated data for both training and evaluation.
+We observe the significant benefits of (i) learning rates from covariates with encoders, (ii) modeling
+extra compartments and supervision from H, C and V , (iii) partial teacher forcing and (iv) final-fine
+tuning, adapting to the most recent data after model selection based on validation.
+
+(a) NJ
+
+(b) GA
+
+(c) HI
+
+Figure 5: Fitted compartments for (a) NJ, (b) GA and (c) HI, where vertical lines show the forecasting
+starting timestep. Note that infected values are not cumulative, thus decay over time while the
+confirmed keeps increasing. These can be used to gain insights in disease evolution, e.g. we observe
+the increasing trend of the number of confirmed cases more sharply in NJ, whereas it is saturating in
+HI, due to the sharp decrease in the number of infected people after the peak.
+8
+
+6.3
+
+Extracting explainable insights
+
+(a) 05/31/2020
+
+(b) 06/07/2020
+(u)
+
+Figure 6: Learned weights of covariates for β , for 7-day state-level forecasting models on
+05/31/2020 and 06/07/2020. Mobility index consistently has highly-positive impact on β (u) , while
+gathering bans, school closures and shelter-in-place interventions have highly-negative impact. The
+magnitude of the weights for interventions get larger after a lag of few days.
+The interpretability of our model is two fold. First, we model the compartments explicitly, thus our
+model provides insights into how the disease evolves. Fig 5 shows the fitted curves that can be used
+to infer important insights on where the peaking occurs, or the current decay trends. We observe
+the ratio of undocumented to documented infected at different phases, as well as the amount of
+increase/decrease for each compartment. Second, our model uses interpretable encoders, as discussed
+in Sec. 4. Ignoring co-linearity between covariates, rough insights can be inferred. Fig. 6 shows the
+learned weights of the time-varying covariates for β (u) . The weights of the past days seem similar –
+the model averages them with slight decay in trends. For intervention covariates, the largest weights
+occur after a lag of a few days, suggesting their effectiveness after some lag. The positive weights
+of the mobility index, and negative weights of public interventions are clearly observed. Similar
+analysis can be performed on other variables as well. For γ, we observe the positive correlation of the
+positive ratio of tests. For static covariates, the insights are less apparent, but we observe meaningful
+learned patterns like the positive correlation of the number of households on public assistance or food
+stamps, population density and 60+ year old population ratio, on death rates.
+6.4 Forecasting prediction intervals
+
+(a) CA
+
+(b) FL
+
+(c) TX
+
+Figure 7: Prediction intervals for 14-day forecasting. We use the 10-th and the 90-th quantile
+prediction as the the lower and the upper bound of prediction intervals, respectively.
+Besides point forecasts, prediction intervals could be helpful for healthcare and public policy planners,
+to consider a range of possible scenarios. Our framework allows the capability of modeling prediction
+interval forecasts, for which we replacing the L2 loss with weighted interval loss [45] in Eq. (3) and
+mapping the scalar propagated values to the vector of quantile estimates. For this mapping, we use
+the features Y [t]/Ŷ [t] and I{Y [t]} for T − τ ≤ t ≤ T − 1. We obtain the quantiles applying a linear
+kernel on these features, followed by ReLU and cumulative summation (to guarantee monotonicity
+of quantiles) and lastly normalization (to match the median to the input scalar point forecast from the
+proposed model). Fig. 7 exemplifies well-calibrated prediction interval forecasts – the ranges tend to
+be wider when there are non-smooth behaviors in data.
+
+7
+
+Conclusions
+
+We propose an approach to modelling infectious disease progression by incorporating covariates
+into a domain-specific encoding, understandable by experts. We compare predictions for this novel
+model with state-of-the-art models and show that disaggregating the infected compartment into
+sub-compartments relevant to decision-making can make the model more useful to decision-makers.
+9
+
+8
+
+Acknowledgements
+
+Contributions of Nathanael C. Yoder, Michael W. Dusenberry, Dario Sava, Jasmin Repenning, Andrew
+Moore, Matthew Siegler, Ola Rozenfeld, Isaac Jones, Rand Xie, Brian Kang, Vishal Karande, Shane
+Glass, Afraz Mohammad, David Parish, Ron Bodkin, Hanchao Liu, Yong Li, Karthik Ramasamy,
+Priya Rangaswamy, Andrew Max, Tin-yun Ho, Sandhya Patil, Rif A. Saurous, Matt Hoffman, Peter
+Battaglia, Oriol Vinyals, Jeremy Kubica, Jacqueline Shreibati, Michael Howell, Meg Mitchell, George
+Teoderci, Kevin Murphy, Helen Wang, Tulsee Doshi, Garth Graham, Karen DeSalvo, and David
+Feinberg are gratefully acknowledged.
+
+Broader Impact
+COVID-19 is an epidemic that is affecting almost all countries in the world at the moment. As of
+the first week of June, more than 6.5 million people have been infected, resulting in more than 380k
+fatalities unfortunately. The economical and sociological impacts of COVID-19 are significant, and
+will be felt for many years to come.
+Forecasting of the severity of COVID-19 is crucial, for healthcare providers to deliver the healthcare
+support for those who will be in the most need, for governments to take the most optimal policy
+actions while minimizing the negative impact of the outbreak, and for business owners to make
+crucial decisions on when and how to restart their businesses. With the motivation of helping all
+these actors, we propose a machine learning-based forecasting model that significantly outperforms
+any alternative methods, including the ones used by the healthcare providers and public sector. Not
+only are our forecasts far more accurate, our model is explainable by design. It is aligned with how
+epidemiology experts approach the problem, and the machine learnable components shed light on
+what data features have the most impact on the outcomes. These would be crucial for data-driven
+understanding of COVID-19, that can help domain experts for effective medical and public health
+decision-making.
+Besides COVID-19 forecasting, our approach is in the direction of ingesting data-driven learning while
+using the inductive bias of differential equations, while representing the input-output relationships at
+a system-level. Not only infectious disease modeling, but numerous scientific fields that use such
+equations, such as Physics, Environmental Sciences, Chemistry etc. are expected to benefit from our
+contributions.
+
+References
+[1] Stanford Health. Harnessing the power of data in health, June 2017.
+[2] Bryan Lim, Sercan O. Arik, Nicolas Loeff, and Tomas Pfister. Temporal fusion transformers for
+interpretable multi-horizon time series forecasting. arXiv:1912.09363, 2019.
+[3] David Salinas, Valentin Flunkert, and Jan Gasthaus. Deepar: Probabilistic forecasting with
+autoregressive recurrent networks. arXiv:1704.04110, 2017.
+[4] Boris N. Oreshkin, Dmitri Carpov, Nicolas Chapados, and Yoshua Bengio. N-beats: Neural
+basis expansion analysis for interpretable time series forecasting. arXiv:1905.10437, 2019.
+[5] W. O. Kermack and A. G. McKendrick. Contributions to the mathematical theory of epidemics—i, 1927.
+[6] Ping Yan and Gerardo Chowell. Beyond the Initial Phase: Compartment Models for Disease
+Transmission, chapter 4, pages 1–27. Springer International Publishing, 2019.
+[7] Kimberlyn Roosa and Gerardo Chowell. Assessing parameter identifiability in compartmental
+dynamic models using a computational approach: application to infectious disease transmission
+models. Theoretical Biology and Medical Modelling, 16, 12 2019.
+[8] David Smith and Lang Moore. The sir model for spread of disease, 2004.
+[9] Julie C. Blackwood and Lauren M. Childs. An introduction to compartmental modeling for the
+budding infectious disease modeler. Letters in Biomathematics, 5(1):195–221, 2018.
+10
+
+[10] Grand Rounds.
+Covid-19 forecasting:
+Fit to a curve or model
+the
+disease
+in
+real-time?,
+2020.
+https://grandrounds.com/blog/
+covid-19-forecasting-fit-to-a-curve-or-model-the-disease-in-real-time/,
+Last accessed on 2020-05-29.
+[11] Ruiyun Li, Sen Pei, Bin Chen, Yimeng Song, Tao Zhang, Wan Yang, and Jeffrey Shaman.
+Substantial undocumented infection facilitates the rapid dissemination of novel coronavirus
+(sars-cov-2). Science, 368(6490):489–493, 2020.
+[12] Daphne Koller and Nir Friedman. Probabilistic graphical models: principles and techniques.
+MIT press, 2009.
+[13] Dave Osthus, Kyle S Hickmann, Petruţa C Caragea, Dave Higdon, and Sara Y Del Valle.
+Forecasting seasonal influenza with a state-space SIR model. The annals of applied statistics,
+11(1):202, 2017.
+[14] Matteo Chinazzi, Jessica T. Davis, Marco Ajelli, Corrado Gioannini, Maria Litvinova, Stefano
+Merler, Ana Pastore y Piontti, Kunpeng Mu, Luca Rossi, Kaiyuan Sun, Cécile Viboud, Xinyue
+Xiong, Hongjie Yu, M. Elizabeth Halloran, Ira M. Longini, and Alessandro Vespignani. The
+effect of travel restrictions on the spread of the 2019 novel coronavirus (covid-19) outbreak.
+Science, 368(6489):395–400, 2020.
+[15] Sen Pei, Sasikiran Kandula, and Jeffrey Shaman. Differential effects of intervention timing on
+covid-19 spread in the united states. medRxiv, 2020.
+[16] Seth Flaxman, Swapnil Mishra, Axel Gandy, H. Unwin, Helen Coupland, Thomas Mellan,
+Harrison Zhu, Tresnia Berah, Jeffrey Eaton, Pablo Guzman, Nora Schmit, Lucia Callizo,
+Imperial Team, Charles Whittaker, Peter Winskill, Xiaoyue Xi, Azra Ghani, Christl Donnelly,
+Steven Riley, and Samir Bhatt. Report 13 - estimating the number of infections and the impact
+of non-pharmaceutical interventions on covid-19 in 11 european countries, 04 2020.
+[17] Vincenzo Capasso. Reaction-diffusion models for the spread of a class of infectious diseases.
+In H. Neunzert, editor, Proceedings of the Second European Symposium on Mathematics in
+Industry, volume 3, pages 181–194. Springer, Dordrecht, 1988.
+[18] Elizabeth Hunter, Brian Mac Namee, and John Kelleher. An open-data-driven agent-based
+model to simulate infectious disease outbreaks. PLoS ONE, 13(12), 2018.
+[19] S. Hoya White, A. Martı́n del Rey, and G. Rodrı́guez Sánchez. Modeling epidemics using
+cellular automata. Applied Mathematics and Computation, 186(1):193–202, 2006.
+[20] S. R. Venna, A. Tavanaei, R. N. Gottumukkala, V. V. Raghavan, A. S. Maida, and S. Nichols. A
+novel data-driven model for real-time influenza forecasting. IEEE Access, 7:7691–7701, 2019.
+[21] Zifeng Yang, Zhiqi Zeng, Ke Wang, Sook-San Wong, Wenhua Liang, Mark Zanin, Peng Liu,
+Xudong Cao, Zhongqiang Gao, Zhitong Mai, Jingyi Liang, Xiaoqing Liu, Shiyue Li, Yimin
+Li, Feng Ye, Weijie Guan, Yifan Yang, Fei Li, Shengmei Luo, and Jianxing He. Modified seir
+and ai prediction of the epidemics trend of covid-19 in china under public health interventions.
+Journal of Thoracic Disease, 12:165–174, 03 2020.
+[22] Lijing Wang, Jiangzhuo Chen, and Madhav Marathe. Tdefsi: Theory guided deep learning
+based epidemic forecasting with synthetic information, 2020.
+[23] Sam Greydanus, Misko Dzamba, and Jason Yosinski.
+arXiv:1906.01563, 2019.
+
+Hamiltonian neural networks.
+
+[24] Miles Cranmer, Sam Greydanus, Stephan Hoyer, Peter Battaglia, David Spergel, and Shirley
+Ho. Lagrangian neural networks, 2020.
+[25] Michael Lutter, Christian Ritter, and Jan Peters. Deep lagrangian networks: Using physics as
+model prior for deep learning. arXiv:1907.04490, 2019.
+[26] Iclr 2020 workshop on integration of deep neural models and differential equations. http:
+//iclr2020deepdiffeq.rice.edu/. Accessed: 2020-06-04.
+11
+
+[27] YYG model for COVID-19 forecasting. https://covid19-projections.com. Accessed:
+2020-06-04.
+[28] Christopher JL Murray. Forecasting covid-19 impact on hospital bed-days, icu-days, ventilatordays and deaths by us state in the next 4 months. medRxiv, 2020.
+[29] GrowthRate model from Los Alamos National Laboratory. https://covid-19.bsvgateway.
+org/#link%20to%20forecasting%20site. Accessed: 2020-06-04.
+[30] Xinmiao Fu. Global analysis of daily new covid-19 cases reveals many static-phase countries
+including us and uk potentially with unstoppable epidemics. medRxiv, 2020.
+[31] Yong-Shang Long, Zheng-Meng Zhai, Li-Lei Han, Jie Kang, Yi-Lin Li, Zhao-Hua Lin, Lang
+Zeng, Da-Yu Wu, Chang-Qing Hao, Ming Tang, Zonghua Liu, and Ying-Cheng Lai. Quantitative
+assessment of the role of undocumented infection in the 2019 novel coronavirus (covid-19)
+pandemic. arXiv:2003.12028, 03 2020.
+[32] E. Lee Daugherty Biddison, Howard S. Gwon, Monica Schoch-Spana, Alan C. Regenberg,
+Chrissie Juliano, Ruth R. Faden, and Eric S. Toner. Scarce resource allocation during disasters:
+A mixed-method community engagement study. Chest, 153(1):187–195, Jan 2018.
+[33] Robert D. Kirkcaldy, Brian A. King, and John T. Brooks. Covid-19 and postinfection immunity:
+Limited evidence, many remaining questions. JAMA, May 2020.
+[34] P. van den Driessche and J. Watmough. Further Notes on the Basic Reproduction Number,
+chapter 6, pages 159–178. Lecture Notes in Mathematics, LNM vol 1945. Springer, Berlin,
+Heidelberg, 2008.
+[35] Trevor Hastie and Robert Tibshirani. Generalized additive models. Statist. Sci., 1(3):297–310,
+08 1986.
+[36] Tianqi Chen and Carlos Guestrin. Xgboost: A scalable tree boosting system. In Proceedings of
+the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining,
+page 785–794, New York, NY, USA, 2016. Association for Computing Machinery.
+[37] R. J. Williams and D. Zipser. A learning algorithm for continually running fully recurrent neural
+networks. Neural Computation, 1(2):270–280, 1989.
+[38] Samy Bengio, Oriol Vinyals, Navdeep Jaitly, and Noam Shazeer. Scheduled sampling for
+sequence prediction with recurrent neural networks. arXiv:1506.03099, 2015.
+[39] Hongru Ensheng Dong, Du and Lauren Gardner. An interactive web-based dashboard to track
+covid-19 in real time. The Lancet Infectious Diseases, 20(5):533–534, 2020.
+[40] Covid-Tracking. The covid tracking project, 2020.
+[41] Daniel Golovin, Benjamin Solnik, Subhodeep Moitra, Greg Kochanski, John Karro, and
+D. Sculley. Google vizier: A service for black-box optimization. In Proceedings of the
+23rd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, pages
+1487–1495. ACM, 2017.
+[42] Shaman group.
+https://blogs.cuit.columbia.edu/jls106/publications/
+covid-19-findings-simulations/. Accessed: 2020-06-04.
+[43] The university of texas covid-19 modeling consortium. https://covid-19.tacc.utexas.
+edu/projections/. Accessed: 2020-06-04.
+[44] Nick Altieri, Rebecca Barter, James Duncan, Raaz Dwivedi, Karl Kumbier, Xiao Li, Robert
+Netzorg, Briton Park, Chandan Singh, Yan Shuo Tan, et al. Curating a covid-19 data repository
+and forecasting county-level death counts in the united states. arXiv:2005.07882, 2020.
+[45] Johannes Bracher, Evan L. Ray, Tilmann Gneiting, and Nicholas G. Reich. Evaluating epidemic
+forecasts in an interval format, 2020.
+12
+
+[46] Patrick Bryant and Arne Elofsson. Estimating the impact of mobility patterns on covid-19
+infection rates in 11 european countries. medRxiv, 2020.
+[47] Michael S. Warren and Samuel W. Skillman. Mobility changes in response to covid-19.
+arXiv:2003.14228 [cs.SI], 3 2020.
+[48] Realtime tracking of state-wide npi implementations. https://c19hcc.org/resources/
+npi-dashboard/. Accessed: 2020-06-04.
+[49] Xiao Wu, Rachel C. Nethery, Benjamin M. Sabath, Danielle Braun, and Francesca Dominici.
+Exposure to air pollution and covid-19 mortality in the united states: A nationwide crosssectional study. medRxiv, 2020.
+[50] Bigquery public datasets. https://cloud.google.com/bigquery/public-data. Accessed: 2020-06-04.
+[51] Steven Sanche, Yen Ting Lin, Chonggang Xu, Ethan Romero-Severson, Nick Hengartner,
+and Ruian Ke. High contagiousness and rapid spread of severe acute respiratory syndrome
+coronavirus 2. Emerging Infectious Diseases, 26(7), July 2020.
+[52] Neil Pearce, Jan P. Vandenbroucke, Tyler J. VanderWeele, and Sander Greenland. Accurate
+statistics on covid-19 are essential for policy guidance and decisions. American Journal of
+Public Health, 110(7):949–951, 2020.
+[53] Norman Fenton, Graham A. Hitman, Martin Neil, Magda Osman, and Scott McLachlan. Causal
+explanations, error rates, and human judgment biases missing from the covid-19 narrative and
+statistics. PsyArXiv:10.31234/osf.io/p39a4, 2020.
+[54] Charles Blundell, Julien Cornebise, Koray Kavukcuoglu, and Daan Wierstra. Weight uncertainty
+in neural networks. arXiv:1505.05424, 2015.
+[55] Wesley Maddox, Timur Garipov, Pavel Izmailov, Dmitry P. Vetrov, and Andrew Gordon Wilson.
+A simple baseline for bayesian uncertainty in deep learning. arXiv:1902.02476, 2019.
+
+A
+
+Datasets
+
+As discussed, vast numbers of candidate datasets exist that could be related to the problem of COVID19 forecasting. However, these datasets cannot be used indiscriminately. We select data sources based
+on whether they could have a predictive signal for the disease outcomes. Selecting multiple datasets
+from the same class of causes can obfuscate their predictive power. Therefore, we select datasets, one
+each from the classes of econometrics, demographics, mobility, non-pharmaceutical interventions,
+hospital resource availability, historical air quality. From each of these datasets, we further select
+covariates that could have an impact on the model compartments. We allow covariates to influence
+only those compartments (and hence transition rates) on which we posit that there exists a causal
+relationship (Table 5).
+Ground Truth. We obtain primary ground truth for this work from the Johns Hopkins COVID-19
+dataset [39]. Additional ground truth data that is used in the models for US states are obtained from
+the Covid Tracking Project [40].
+Mobility. We posit that human mobility with a region, for work and personal reasons, has an effect
+on the average contact rates [46]. We use temporal mobility indices provided by Descartes labs
+at both state- and county-level resolutions [47]. These temporal indices are encoded to affect the
+average contact rates (β (d) , β (u) ), at both the state- and county-level of geographic resolution.
+Non-Pharmaceutical Interventions. We posit that public policy decisions restricting certain classes
+of population movement or interaction can have a beneficial effect on restricting the progression of the
+disease [15], at the state-level of geographic resolution. The interventions are presented in 6 binary
+valued time series indicating when an intervention has been activated in one of six categories–school
+closures, restrictions on bars and restaurants, movement restrictions, mass gathering restrictions,
+essential businesses declaration, and emergency declaration [48]. This temporal covariate is encoded
+into the average contact rates (β (d) , β (u) ).
+13
+
+Table 5: Covariates selected for model.
+Covariate
+Per capita income
+Population density
+Households on food stamps
+Population
+Number of households
+Population ratio above age 60
+Hospital rating scale
+Available types of hospitals
+Hospital patient experience rating
+Air quality measures
+
+Mobility indices
+Non-pharmaceutical interventions
+(state model)
+Total tests (state model)
+Confirmed per Total tests
+Confirmed Cases (lagged)
+Deaths (lagged)
+
+Variables that the covariate affect
+β (d) , β (u) , η, γ, ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) ,
+ρ(V ) , h, c, v, κ(I,d) , κH , κC , κV
+β (d) , β (u) , η, γ, ρ(I,d)
+(I,d)
+η, ρ
+, ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) , h, c, v,
+κ(I,d) , κH , κC , κV
+All
+β (d) , β (u) , η, γ, ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) ,
+ρ(V ) , h, c, v, κ(I,d) , κH , κC , κV
+(d)
+β , β (u) , η, γ, ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) ,
+ρ(V ) , h, c, v, κ(I,d) , κH , κC , κV
+η, γ, ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) , h, c,
+v, κ(I,d) , κH , κC , κV
+(I,d)
+η, ρ
+, ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) , h, c, v,
+κ(I,d) , κH , κC , κV
+η, ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) , h, c, v,
+κ(I,d) , κH , κC , κV
+(d)
+(u)
+β , β , η, κ(I,d) ; also for state model:
+h, c, v, κH , κC , κV and for county model:
+γ, ρ(I,d) , ρ(I,u)
+β (d) , β (u)
+β (d) , β (u)
+γ, h
+β (d) , β (u) , γ, h
+β (d) , β (u) , γ, h
+β (d) , β (u) , γ, h
+
+Demographics. We posit that the age of the individual has a significant outcome on the severity
+of the disease and the mortality. The Kaiser Family Foundation (On BigQuery at c19hcc-infoext-data:c19hcc info public.Kaiser Health demographics by Counties States) reports the number
+of individuals over the age of 60 in different US counties. We encode the effect of this static
+covariate into the average contact rate (β (d) , β (u) ), the diagnosis (γ), re-infected (η), recovery (ρ(I,d) ,
+ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) ) and death rates (κ(I,d) , κH , κC , κV ), at both the state- and county-level of
+geographic resolution.
+Historical Air Quality. We posit that the historical ambient air quality in a region can have a
+deleterious effect on COVID-19 morbidity and mortality [49]. We use the BigQuery public dataset
+that comes from the US Environmental Protection Agency (EPA) that documents historical air quality
+indices at the county level (bigquery-public-data:epa historical air quality.pm10 daily summary).
+This static covariate is encoded into the recovery rates (η), recovery (ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) )
+and death rates (κ(I,d) , κH , κC , κV ), at both the state- and county-level of geographic resolution.
+Econometrics. We posit that an individual’s economic status, as well as the proximity to other
+individuals in a region has an effect on the rates of infection, hospitalization and recovery. The
+proximity can be due to high population density in urban areas, or due to economic compulsions. The
+US census–available from census.gov and on BigQuery Public Datasets [50]–reports state- and countylevel static data on population, population density, per capita income, poverty levels, households on
+public assistance (bigquery-public-data:census bureau acs.county 2018 5yr and bigquery-publicdata:census bureau acs.county 2018 1yr). All of these measures affect transitions into the exposed
+and infected compartments (β (d) , β (u) ), as well as the recovery rates (ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) )
+and death rates (κ(I,d) , κH , κC , κV ), at both the state- and county-level of geographic resolution.
+In addition, for the state-level model, it also influences the hospitalization rate h, ICU rate c and
+ventilator rate v.
+14
+
+Hospital Resource Availability. We posit that when an epidemic of like COVID-19 strikes a
+community with such a rapid progression, local hospital resources can quickly become overwhelmed
+[32]. We use the BigQuery public dataset that comes from the Center for Medicare and Medicaid
+Services, a federal agency within the United States Department of Health and Human Services
+(bigquery-public-data:cms medicare.hospital general info). These static covariates are encoded into
+the diagnosis rate (γ), recovery rates (ρ(I,d) , ρ(I,u) , ρ(H) , ρ(C) , ρ(V ) ), re-infected rate (η) and death
+rate (κ(I,d) , κH , κC , κV ), at both the state- and county-level of geographic resolution.
+Confirmed Cases and Deaths. Past confirmed case counts and deaths can have an effect on the
+current values of these quantities. We include these as temporal covariates. These have an effect on
+the average contact rates (β (d) , β (u) ), the diagnosis rate (γ) and the hospitalization rate h.
+
+B
+
+Comparisons to IHME model
+
+In this section, we include the comparison of our model with Institute for Health Metrics and
+Evaluation (IHME) [28] model, which has been used by major US government organizations. IHME
+is based on curve-fitting considering the nonlinear mixing effects with intervention assumptions.
+Since the provided prediction dates are different for IHME model, we run separate comparisons for it
+in 12-day ahead forecasting setting (still using our 14-day forecasts). As Table 6 shows, our model
+significantly outperforms IHME, consistently across all phases of the disease.
+Table 6: τ -day ahead MAE for 12-day forecasting the number of deaths at state-level.
+Pred. horizon τ
+(days)
+
+12
+
+C
+
+Pred. date
+
+Ours
+
+IHME
+
+05/05/2020
+05/19/2020
+06/09/2020
+06/23/2020
+08/25/2020
+09/22/2020
+
+128.6
+56.1
+43.4
+81.4
+36.3
+40.7
+
+146.8
+116.1
+60.5
+99.8
+106.3
+69.6
+
+Comparisons to Berkeley Yu model
+
+In this section we include more comparisons of our model with the Berkeley Yu model [44] on more
+recent dates. As Table 7 shows, our model consistently outperforms Berkeley Yu model.
+Table 7: τ -day average MAE for 7-day forecasting the number of deaths at county-level.
+Pred. date
+2020/06/02
+2020/06/09
+2020/06/16
+2020/07/21
+2020/07/28
+2020/08/11
+2020/08/18
+
+Ours
+0.8
+1.02
+0.9
+1.11
+1.33
+1.36
+1.35
+
+Berkeley-Yu
+1.82
+1.79
+1.75
+2.11
+2.68
+2.33
+2.27
+
+D
+
+Prediction intervals of confirmed cases
+
+E
+
+Impact of data quality
+
+For fair comparison, we used the data available on the prediction date for model development (training
+and model selection), and we use the data from τ days later after the prediction date for evaluation.
+There are numerous data quality issues which are often corrected later. It is not unlikely to see that
+the number of confirmed or death cases for a particular day are significantly increased or decreased
+few weeks (and sometimes few months) later. Unfortunately, such data quality issues often have
+unpredictable patterns (due to human entry errors, reporting changes, or infrastructure issues) and can
+be treated as input ‘noise’. The accuracy of our model also suffers from them. To demonstrate the
+15
+
+(a) CA
+
+(b) FL
+
+(c) TX
+
+Figure 8: Prediction intervals of confirmed cases for 14-day forecasting. We use the 10-th and the
+90-th quantile prediction as the the lower and the upper bound of prediction intervals, respectively.
+impact of data quality issues, we perform experiments by training and evaluating our model with the
+most recent version of the data (from October), on different cases (note that we still have the same
+time-series split for training, validation and test). Table 8 shows the significant difference in results
+and the potential of our model with better quality data.
+Table 8: τ -day average MAE for 14-day forecasting the number of deaths at state-level.
+Pred. horizon τ
+(days)
+14
+
+F
+
+Pred. date
+06/02/2020
+06/09/2020
+06/16/2020
+
+Ours (data version
+of pred. date)
+32.8
+28.8
+31.4
+
+Ours (recent data
+version)
+29.6
+23.2
+20.9
+
+Rate variable definitions
+
+Table 9: Variables and the covariates that affect them. (doc.: documented, undoc.: undocumented)
+Variable
+β
+η
+α
+γ
+h
+c
+v
+ρ
+κ
+
+G
+
+Description
+Average contacts of doc. infected (β (d) ) / undoc.
+infected (β (u) )
+Re-infected rate
+Inverse latency period
+Diagnosis rate
+Hospitalization rate for infected
+ICU rate for hospitalized
+Ventilator rate from ICU
+Recovery rate for doc. infected (ρ(I,d) ), undoc. infected
+(ρ(I,u) ), hospitalized (ρ(H) ), ICU (ρ(U ) ), ventilator (ρ(V ) )
+Death rate for doc. infected (κ(I,d) ), hospitalized (κ(H) ),
+ICU (κ(C) ), ventilator (κ(V ) )
+
+Covariates
+Mobility, Interventions,
+Density
+Census, Healthcare
+Census, Test info
+
+Census, Income,
+Healthcare
+
+Effective reproduction number
+
+The effective reproduction number Re is the expected number of new infections arising directly from
+one infected individual in a population where all individuals are susceptible to infection [34]. For
+example, the Re for COVID-19 during the early stages of the pandemic in Wuhan, China has been
+estimated to be around 5.7 [51].
+The Next-Generation Matrix [34] is a method to derive expressions for the Re from a given compartment model. The method involves first finding the disease-free equilibrium (DFE) of the model. The
+infected sub-system of the compartment model at DFE is identified and its corresponding differential
+equations are isolated. Then the inflow and outflow terms from each compartment in the sub-system
+are partitioned between two categories–(i) new infection causing events and (ii) all other flows
+between compartments.
+16
+
+Ventilator rate (v)
+Recovery rate (⍴(V))
+
+Remove when data
+not available
+
+Ventilator [V]
+ICU [C]
+
+⍴(U)
+
+Partially-available
+for supervision
+
+ICU rate (c)
+Hospitalized [H]
+
+Re-infection rate
+(ŋ)
+
+Average contacts
+(β(d), β(u))
+
+Inverse latency
+period (𝜶)
+
+Rate variable
+
+Covariates
+
+𝛃
+
+Mobility, Interventions, Density,
+Past Counts
+
+𝜼
+
+Census, Healthcare supply
+
+𝜸
+
+Census, Test count / pos. ratio,
+Past Counts
+Census, Econometrics,
+Healthcare supply
+
+h, c, v, 𝝆, 𝜿
+
+ŋ
+
+Figure 9: Our compartment model with the infection compartments highlighted, and the variables
+from Table 9 indicated next to each transition.
+
+Two matrices–the new infections matrix F and the transitions matrix V–are constructed from the
+inflow and outflow terms.
+The DFE for our model is [S, E, I (d) , I (u) , R(d) , R(u) , H, C, V, D] = [N, 0, 0, 0, 0, 0, 0, 0, 0, 0]. We
+begin by isolating the infection subsystem as shown in Figure 9. All the individuals in these
+→
+−
+compartments X ≡ [E, I (d) , I (u) , H, C, V ] are at some stage of the infection. The individuals in
+→
+−
+Y ≡ [S, R(d) , R(u) , D] are not infected. From the system of difference equations in Section 3, the
+differential equations for the infection subsystem reduces to:
+Ė = (β (d) · I (d) + β (u) · I (u) ) · S/Ni − α · E
+˙ = γ · I (u) − (ρ(I,d) + κ(I,d) + h) · I (d)
+I (d)
+˙ = α · E − (ρ(I,u) + γ) · I (u)
+I (u)
+Ḣ = h · I (d) − κC · (C − V ) − κV · V − (κ(H) + ρ(H) ) · (H − C)
+
+(5)
+
+Ċ = c · (H − C) − (κ(C) + ρ(C) + v) · (C − V ) + κ(V ) · V
+V̇ = v · (C − V ) − (κ(V ) + ρ(V ) ) · V
+
+At the DFE, the subsystem is:
+Ė = (β (d) · I (d) + β (u) · I (u) ) − α · E
+˙ = γ · I (u) − (ρ(I,d) + κ(I,d) + h) · I (d)
+I (d)
+˙ = α · E − (ρ(I,u) + γ) · I (u)
+I (u)
+Ḣ = h · I (d) − κC · (C − V ) − κV · V − (κ(H) + ρ(H) ) · (H − C)
+
+(6)
+
+Ċ = c · (H − C) − (κ(C) + ρ(C) + v) · (C − V ) + κ(V ) · V
+V̇ = v · (C − V ) − (κ(V ) + ρ(V ) ) · V
+
+Examining the right-hand side of the system of equations 5, we see that it is of the form:
+→
+−̇
+→
+−
+X =M× X
+17
+
+(7)
+
+where X ≡ [E, I (d) , I (u) , H, C, V ] and M is given by:
+
+−α
+β (d)
+β (u)
+0
+ 0 −h − κ(I,d) − ρ(I,d)
+γ
+0
+
+α
+0
+−γ − ρ(I,u)
+0
+
+ 0
+h
+0
+−κ(H) − ρ(H)
+
+ 0
+0
+0
+c
+0
+0
+0
+0
+
+0
+0
+0
+−κ(C) + κ(H) + ρ(H)
+−c − v − κ(C) − ρ(C)
+v
+
+
+0
+
+0
+
+
+0
+
+(C)
+(V )
+
+κ
+−κ
+
+(C)
+(V )
+(C)
+κ
+−κ
++ρ
++ v
+−κ(V ) − ρ(V ) − v
+(8)
+
+Upon examination of Figure 9, we see that the only new-infection causing events are described by
+the rates β (d) and β (u) . We define the new infections matrix F as:
+
+
+0 β (d) β (u) 0 0 0
+0
+0
+0
+0 0 0
+
+
+0
+0
+0
+0 0 0
+(9)
+
+
+0
+0
+0 0 0
+0
+0
+
+0
+0
+0 0 0
+0
+0
+0
+0 0 0
+We calculate the transitions matrix V = −(M − F) to be:
+
+α
+0
+0
+0
+0
+ 0 h + κ(I,d) + ρ(I,d)
+−γ
+0
+0
+
+(I,u)
+−α
+0
+γ
++
+ρ
+0
+0
+
+ 0
+−h
+0
+κ(H) + ρ(H) κ(C) − κ(H) − ρ(H)
+
+ 0
+0
+0
+−c
+c + v + κ(C) + ρ(C)
+0
+0
+0
+0
+−v
+
+
+0
+
+0
+
+
+0
+
+(C)
+(V )
+
+−κ
++κ
+
+(C)
+(V )
+(C)
+−κ
++κ
+−ρ
+− v
+κ(V ) + ρ(V ) + v
+(10)
+
+From F and V we get the Next-Generation Matrix K = F × V−1 :
+
+(u)
+(u)
+β (d)
+β (d) γ
+β (d) γ
++ β
++ β
+ (γ+ρ(I,u) )(h+κ(I,d)+ρ(I,d) ) γ+ρ(I,u) h+κ(I,d)+ρ(I,d) (γ+ρ(I,u) )(h+κ(I,d)+ρ(I,d) ) γ+ρ(I,u)
+
+0
+0
+0
+
+0
+0
+0
+
+
+0
+0
+0
+
+
+0
+0
+0
+0
+0
+0
+
+
+0 0 0
+
+0 0 0
+
+0 0 0
+0 0 0
+
+0 0 0
+0 0 0
+(11)
+
+Calculating the eigenvalues of K gives us 5 eigenvalues that are 0, and one non-zero eigenvalue,
+which is the spectral radius of K. This is the effective reproduction number Re :
+R0 =
+
+H
+
+β (d) γ + β (u) (h + κ(I,d) + ρ(I,d) )
+.
+(γ + ρ(I,u) )(h + κ(I,d) + ρ(I,d) )
+
+(12)
+
+Training details
+
+The start date of training is set to 1/21/2020. We assume that the compartmental equation
+regime start when the number of confirmed cases exceed 10 (before it, to avoid noise, we simple assign the initial values). We initialize the values as follows, where ψ() ∼ U [0, 1] denote
+ˆ
+(d)
+random variables with uniform distribution: Êi [0] = max(100ψEi,1 , 10ψEi,2 Qi [0]), Ii [0] =
+ˆ
+ˆ(d)
+ˆ(u)
+(u)
+Qi [0]), Ii [0] = max(100ψEi,1 , 10ψEi,2 Qi [0]), Ri [0] = R[0], Ri [0] = 5ψRi R[0], Ĥi [0] =
+I{H[0]}H[0] + 0.5ψHi (1 − I{H[0]})Q[0], Ĉi [0] = I{C[0]}C[0] + 0.2ψCi (1 − I{C[0]})Q[0] and
+V̂i [0] = I{V [0]}V [0] + (1 − 0.5ψVi I{V [0]})Q[0]. In general, our model is not too sensitive to
+random initialization of the initial values, and we just define wide ranges to enable exploration.
+18
+
+I
+
+Hospitalization forecasts
+
+Fig. 10 exemplifies fitted hospitalization predictions for 8 states. Our model can provide robust
+and accurate forecasts consistently (e.g. in increasing, decreasing or plateauing trends), despite the
+fluctuations in the past observed data.
+
+(a) NY
+
+(b) NJ
+
+(c) WA
+
+(d) DC
+
+(e) DE
+
+(f) VT
+
+(g) PA
+
+(h) NH
+
+Figure 10: Fitted hospitalization compartments for 8 states. The vertical line shows the prediction
+date. Our model can provide robust and accurate forecasts, despite the highly-noisy observed data.
+
+19
+
+J
+
+State-level 14-day forecasts
+
+1000
+
+1000
+500
+0
+
+200
+100
+0
+
+60
+40
+20
+
+6000
+Population Count
+
+Population Count
+
+80
+
+ID (16000)
+death
+Predicted death
+
+200
+150
+100
+50
+0
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Feb
+
+8000
+Population Count
+
+MD (24000)
+death
+Predicted death
+
+3000
+2500
+2000
+1500
+1000
+500
+0
+
+500
+400
+300
+200
+100
+0
+
+6000
+
+1000
+
+2000
+1000
+500
+
+2000
+
+300
+200
+100
+
+1500
+1000
+500
+
+MA (25000)
+death
+Predicted death
+
+4000
+2000
+0
+-01 -01 -01 -01 -01
+Feb Mar Apr May Jun
+Prediction Date
+
+3000
+2500
+2000
+1500
+1000
+500
+0
+6000
+5000
+4000
+3000
+2000
+1000
+0
+
+HI (15000)
+death
+Predicted death
+
+15
+10
+5
+
+Population Count
+
+0
+
+IN (18000)
+death
+Predicted death
+
+IA (19000)
+death
+Predicted death
+
+800
+
+0
+
+KY (21000)
+death
+Predicted death
+
+DE (10000)
+death
+Predicted death
+
+0
+
+GA (13000)
+death
+Predicted death
+
+1500
+
+2500
+
+2000
+
+Population Count
+
+Population Count
+
+250
+
+50
+
+400
+
+0
+
+IL (17000)
+death
+Predicted death
+
+0
+
+KS (20000)
+death
+Predicted death
+
+2000
+
+2500
+
+4000
+
+0
+
+Population Count
+
+FL (12000)
+death
+Predicted death
+
+Population Count
+
+300
+
+100
+
+0
+
+Population Count
+
+400
+
+3000
+2500
+2000
+1500
+1000
+500
+0
+
+3000
+
+Population Count
+
+Population Count
+
+500
+
+DC (11000)
+death
+Predicted death
+
+Population Count
+
+0
+
+150
+
+0
+
+CT (09000)
+death
+Predicted death
+
+Population Count
+
+2000
+
+4000
+
+AR (05000)
+death
+Predicted death
+
+200
+
+Population Count
+
+3000
+
+1500
+
+CO (08000)
+death
+Predicted death
+
+Population Count
+
+4000
+
+Population Count
+
+Population Count
+
+5000
+
+CA (06000)
+death
+Predicted death
+
+AZ (04000)
+death
+Predicted death
+
+600
+400
+200
+0
+
+LA (22000)
+death
+Predicted death
+
+MI (26000)
+death
+Predicted death
+
+-01 -01 -01 -01 -01
+Feb Mar Apr May Jun
+Prediction Date
+
+Population Count
+
+0
+
+1500
+1250
+1000
+750
+500
+250
+0
+
+Population Count
+
+200
+
+Population Count
+
+400
+
+AK (02000)
+death
+Predicted death
+
+Population Count
+
+Population Count
+
+600
+
+12
+10
+8
+6
+4
+2
+0
+
+Population Count
+
+AL (01000)
+death
+Predicted death
+
+800
+
+Population Count
+
+We present the 14-day forecasts for all 50 US states.
+
+ME (23000)
+death
+Predicted death
+
+100
+80
+60
+40
+20
+0
+
+1250
+1000
+750
+500
+250
+0
+
+Feb
+
+MN (27000)
+death
+Predicted death
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Figure 11: Model performance on US states–Alabama to Minnesota.
+
+20
+
+200
+
+100
+
+100
+
+2500
+
+NC (37000)
+death
+Predicted death
+
+Population Count
+
+1000
+750
+500
+250
+
+OK (40000)
+death
+Predicted death
+
+300
+200
+100
+
+200
+150
+
+0
+
+50
+
+400
+200
+
+SD (46000)
+death
+Predicted death
+
+60
+40
+20
+
+150
+125
+100
+75
+50
+25
+0
+
+UT (49000)
+death
+Predicted death
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Feb
+
+60
+50
+40
+30
+20
+10
+0
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Feb
+
+400
+300
+200
+100
+
+OH (39000)
+death
+Predicted death
+
+2000
+1500
+1000
+500
+
+2000
+
+RI (44000)
+death
+Predicted death
+
+1000
+800
+600
+400
+200
+0
+
+TN (47000)
+death
+Predicted death
+
+400
+300
+200
+100
+
+TX (48000)
+death
+Predicted death
+
+2000
+
+0
+
+VT (50000)
+death
+Predicted death
+
+NM (35000)
+death
+Predicted death
+
+0
+
+PA (42000)
+death
+Predicted death
+
+500
+
+0
+
+Population Count
+
+0
+
+20
+
+0
+
+80
+Population Count
+
+600
+
+40
+
+4000
+
+0
+
+SC (45000)
+death
+Predicted death
+
+60
+
+6000
+
+100
+
+50
+
+2500
+
+0
+
+OR (41000)
+death
+Predicted death
+
+100
+
+0
+
+ND (38000)
+death
+Predicted death
+
+80
+
+Population Count
+
+Population Count
+
+5000
+
+0
+
+400
+
+Population Count
+
+7500
+
+0
+
+1250
+Population Count
+
+NY (36000)
+death
+Predicted death
+
+30000
+25000
+20000
+15000
+10000
+5000
+0
+
+Population Count
+
+10000
+
+0
+
+Population Count
+
+Population Count
+
+0
+
+150
+
+500
+
+Population Count
+
+200
+
+NJ (34000)
+death
+Predicted death
+
+12500
+
+200
+
+200
+
+0
+
+Population Count
+
+300
+
+NH (33000)
+death
+Predicted death
+
+Population Count
+
+Population Count
+
+400
+
+0
+
+300
+Population Count
+
+NV (32000)
+death
+Predicted death
+
+500
+
+5
+
+Population Count
+
+0
+
+Population Count
+
+0
+
+10
+
+Population Count
+
+400
+
+15
+
+Population Count
+
+200
+
+600
+
+NE (31000)
+death
+Predicted death
+
+250
+
+1500
+1000
+500
+0
+
+1500
+
+VA (51000)
+death
+Predicted death
+
+1000
+500
+0
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Feb
+
+WA (53000)
+death
+Predicted death
+
+1250
+Population Count
+
+400
+
+MT (30000)
+death
+Predicted death
+
+20
+Population Count
+
+600
+
+800
+
+MO (29000)
+death
+Predicted death
+
+Population Count
+
+Population Count
+
+800
+
+Population Count
+
+MS (28000)
+death
+Predicted death
+
+1000
+
+1000
+750
+500
+250
+0
+
+-01 ar-01 pr-01 ay-01 Jun-01
+A
+M
+M
+Prediction Date
+
+Feb
+
+Figure 12: Model performance on US states–Missouri to Washington.
+
+21
+
+K
+
+County-level 14-day forecasts
+
+We present the 14-day forecasts for selected US counties ordered by deaths from Covid-19.
+
+Nassau County, NY (36059)
+death
+Predicted death
+
+500
+
+Population Count
+
+1200
+
+Population Count
+
+Westchester County, NY (36119)
+1400
+death
+Predicted death
+1200
+1000
+800
+600
+400
+200
+0
+
+140
+120
+100
+80
+60
+40
+20
+
+Philadelphia County, PA (42101)
+death
+Predicted death
+
+1000
+
+Population Count
+
+Population Count
+
+0
+
+800
+600
+400
+200
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+80
+70
+60
+50
+40
+30
+20
+10
+
+Population Count
+
+100
+0
+
+1000
+
+Population Count
+
+150
+50
+
+1500
+
+Broward County, FL (12011)
+death
+Predicted death
+
+200
+
+0
+
+2000
+1750
+1500
+1250
+1000
+750
+500
+250
+0
+
+0
+
+250
+
+50
+
+100
+
+Population Count
+
+100
+
+200
+
+250
+
+Dallas County, TX (48113)
+death
+Predicted death
+
+200
+150
+100
+50
+
+Bexar County, TX (48029)
+death
+Predicted death
+
+350
+300
+
+Clark County, NV (32003)
+death
+Predicted death
+
+300
+Population Count
+
+150
+
+2000
+Population Count
+
+Population Count
+
+200
+
+300
+
+Population Count
+
+Population Count
+
+250
+
+Harris County, TX (48201)
+death
+Predicted death
+
+300
+
+3500
+3000
+2500
+2000
+1500
+1000
+500
+0
+
+250
+200
+150
+100
+
+Orange County, CA (06059)
+death
+Predicted death
+
+Hillsborough County, FL (12057)
+80
+death
+Predicted death
+70
+60
+50
+40
+30
+20
+10
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+350
+300
+250
+200
+150
+100
+50
+0
+300
+250
+
+Cook County, IL (17031)
+death
+Predicted death
+
+Suffolk County, NY (36103)
+death
+Predicted death
+
+Riverside County, CA (06065)
+death
+Predicted death
+
+250
+200
+150
+100
+50
+
+50
+
+0
+
+Palm Beach County, FL (12099)
+death
+Predicted death
+
+San Bernardino County, CA (06071)
+death
+200
+Predicted death
+Population Count
+
+300
+
+400
+
+Maricopa County, AZ (04013)
+death
+Predicted death
+
+150
+100
+50
+0
+
+San Diego County, CA (06073)
+death
+Predicted death
+
+200
+150
+100
+
+40
+Population Count
+
+0
+
+Population Count
+
+500
+
+500
+
+Population Count
+
+1000
+
+Miami-Dade County, FL (12086)
+death
+Predicted death
+
+Population Count
+
+1500
+
+700
+600
+500
+400
+300
+200
+100
+0
+
+Population Count
+
+Population Count
+
+Population Count
+
+2000
+
+Los Angeles County, CA (06037)
+death
+Predicted death
+
+Orange County, FL (12095)
+death
+Predicted death
+
+30
+20
+
+50
+
+10
+
+0
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+-03 -10 -17 -24 -01 -08 -15 -22 -29
+Apr Apr Apr Apr May May May May May
+Prediction Date
+
+Figure 13: Model performance on selected US counties ordered by deaths.
+
+22
+
+L
+
+Potential limitations
+
+In this section, we list the potential limitations and failure cases of our model, to guide those who
+may use the techniques to build forecasting systems that may effect public health decisions:
+• Ground-truth data issues: We are using different case counts data to supervise model
+training. It has been noted that the ground truth case counts might not be completely accurate
+for various reasons, such as the practices to obtain case counts varying across locations
+[52, 53]. We have weighted optimization to balance supervision from different signals, e.g.
+we have higher weight on the supervision from the death case count because it is known to
+be more accurate. Yet, the case counts data quality may also vary across locations and may
+affect our model’s performance.
+• Failure to capture very rapid trend changes: When the case count curves suddenly
+becomes very flat or very sharp, our model can fail to capture such dynamics. Some of such
+trends occur due to modifications in reporting practices, and some due to other factors that
+are not captured by the covariates we use. We believe more optimal temporal encoding
+approaches and integration of additional time-varying covariates may further mitigate this.
+• Using equal weight for all locations: Our goal is to define a nation-wide metric that
+represents all individuals. We do not apply hand-tuned weighting for different locations,
+although it would be trivial with our framework. When equal weights are considered, the
+locations with the high case counts dominate the learning, which is often desired, but if any
+application requires a different emphasis mechanism, such as more accuracy for locations
+specifically with higher average age etc., the coefficient of the constituent locations’ loss
+terms can be re-weighted.
+• Having symmetry in loss: Under- vs. over-prediction have different implications on public
+policy, socioeconomic dynamics and public health. Our framework allows penalizing them
+in an asymmetric way, and we have tried different weights but we could not obtain consistent
+improvements when the overall accuracy is considered. Instead of overall accuracy, if an
+application needs to focus on under- or over-prediction specifically, the model could be
+retrained for improved performance.
+• Performance differences among sub-groups: As COVID-19 is affecting certain subgroups more than others, the case counts are not uniformly distributed among the entire
+population. As absolute errors tend to be higher for greater case counts, there could be
+performance differences among different sub-groups. We do not observe our model to
+exacerbate the inherit case count differences (e.g. for racial and ethnic subgroups).
+• Overfitting to the past: Especially in very early phases of the disease, our model may suffer
+from overfitting in some cases, as the past observations may not have sufficient information
+content for all the dynamics of the future. We have various mitigation mechanisms to prevent
+overfitting, but it is impossible to completely get rid of it. We overall observe improved
+performance relative to the benchmarks with more training data.
+• Prediction intervals and uncertainty: Our approach to obtain prediction intervals is not
+based on Bayesian approaches [54, 55] per se (we do not estimate the posteriors of the
+parameters). We adapt quantile regression to obtain prediction intervals, and we cannot
+decouple the aleatoric (statistical) vs. epistemic (systematic) uncertainty inherent in the data
+and the model, while training. An ideal forecasting model should be able to decouple those
+and while providing accurate (point) forecasts, it should be able to tell the range of scenarios
+accurately (in a well-calibrated way). We leave such Bayesian approaches to improve our
+base ideas to future work.
+
+23
+
+

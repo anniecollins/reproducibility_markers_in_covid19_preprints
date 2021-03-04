@@ -1,0 +1,4599 @@
+Inference in Stochastic Epidemic Models via Multinomial
+Approximations
+Nick Whiteley and Lorenzo Rimella
+School of Mathematics, University of Bristol, and the Alan Turing Institute
+
+arXiv:2006.13700v1 [stat.ME] 24 Jun 2020
+
+June 25, 2020
+Abstract
+We introduce a new method for inference in stochastic epidemic models which uses recursive
+multinomial approximations to integrate over unobserved variables and thus circumvent likelihood
+intractability. The method is applicable to a class of discrete-time, finite-population compartmental
+models with partial, randomly under-reported or missing count observations. In contrast to state-ofthe-art alternatives such as Approximate Bayesian Computation techniques, no forward simulation
+of the model is required and there are no tuning parameters. Evaluating the approximate marginal
+likelihood of model parameters is achieved through a computationally simple filtering recursion.
+The accuracy of the approximation is demonstrated through analysis of real and simulated data
+using a model of the 1995 Ebola outbreak in the Democratic Republic of Congo. We show how the
+method can be embedded within a Sequential Monte Carlo approach to estimating the time-varying
+reproduction number of COVID-19 in Wuhan, China, recently published by Kucharski et al. [2020].
+
+1
+
+Introduction
+
+Compartmental models are used for predicting the scale and duration of epidemics, estimating epidemiological parameters such as reproduction numbers, and guiding outbreak control measures [Brauer, 2008,
+O’Neill, 2010, Kucharski et al., 2020]. They are increasingly important because they allow joint modelling
+of disease dynamics and multimodal data, such as medical test results, cell phone and transport flow data
+[Rubrichi et al., 2018, Wu et al., 2020], census and demographic information [Prem et al., 2020]. However,
+statistical inference in stochastic variants of compartmental models is a major computational challenge
+[Bretó, 2018]. The likelihood function for model parameters is usually intractable because it involves
+summation over a prohibitively large number of configurations of latent variables representing counts of
+subpopulations in disease states which cannot be observed directly.
+This has lead to the recent development of sophisticated computational methods for approximate
+inference involving various forms of stochastic simulation [Funk and King, 2020]. Examples include
+Approximate Bayesian Computation (ABC) [Kypraios et al., 2017, McKinley et al., 2018, Brown et al.,
+2018, 2016], Data Augmentation Markov Chain Monte Carlo (MCMC) [Lekone and Finkenstädt, 2006],
+Particle Filters [Murray et al., 2018], Iterated Filtering [Stocks, 2019], and Synthetic Likelihood [Fasiolo
+et al., 2016]. These methods continue to have real public health impact, for example the ABSEIR R
+package of [Brown et al., 2018] features in the current UK COVID-19 surveillance protocols [de Lusignan
+et al., 2020]. However the intricacy of these methods, their substantial computational cost arising from
+use of stochastic simulation, and their dependence on tuning parameters are obstacles to their wider
+use and scalability. The present work addresses the challenge of finding alternative inference techniques
+which are computationally simple and easy to use.
+Contributions. We introduce a new approach to inference in compartmental epidemic models which:
+• applies to a class of finite population, partially observed, discrete-time, stochastic models. In contrast
+to ODE models, these models can account for statistical variability in disease dynamics;
+• allows approximate evaluation of the likelihood function for model parameters, and filtering and
+smoothing for compartment occupation numbers, all without any stochastic simulation and without
+any algorithm tuning parameters, in contrast to state-of-the-art techniques such as ABC;
+1
+
+• revolves around a computationally simple filtering recursion. The resulting likelihood and smoothing
+approximations can be combined with e.g., MCMC or Expectation Maximization techniques for
+parameter estimation;
+• is shown to recover ground truth parameter values from synthetic data, and to compare favourably
+against Data Augmentation MCMC [Lekone and Finkenstädt, 2006], ABC using the ABSEIR R package
+[Brown et al., 2018] and ODE [Chowell et al., 2004] alternatives analyzing real Ebola outbreak data
+under a model from [Lekone and Finkenstädt, 2006];
+• is used to extend a method of Kucharski et al. [2020] for estimating the time-varying reproduction
+number of COVID-19 in Wuhan, China, from an ODE compartmental model to a stochastic model.
+
+2
+2.1
+
+Preliminaries
+Difficulties of inference in stochastic compartmental models
+
+We use the well-known Susceptible-Exposed-Infective-Recovered (SEIR) model as a simple running
+example. The new methods we propose are applied to more realistic and complex models in section 5.
+SEIR example. The discrete-time stochastic SEIR model is:
+St+1 = St − Bt ,
+
+Et+1 = Et + Bt − Ct ,
+
+It+1 = It + Ct − Dt ,
+
+Rt+1 = Rt + Dt ,
+
+(1)
+
+with conditionally independent, binomially-distributed random variables:
+Bt ∼ Bin(St , 1 − e−hβIt /n )
+
+Ct ∼ Bin(Et , 1 − e−hρ ),
+
+Dt ∼ Bin(It , 1 − e−hγ ),
+
+(2)
+
+where h > 0 is a time-step size, β, ρ, γ are model parameters, and the process is initialized with nonnegative
+integers in each of the compartments (S0 , E0 , I0 , R0 ) such that S0 + E0 + I0 + R0 = n and n is the total
+population size. The interpretation of β is the rate at which an interaction between a susceptible individual
+and the infective proportion of the population results in the disease being passed to that individual. The
+mean exposure and infective periods are respectively 1/ρ and 1/γ. The sequence (St , Et , It , Rt )t≥0 is a
+Markov chain.
+In practice, one typically observes times series of count data associated with some subset of the
+compartments, perhaps subject to random error, or under-reporting. Given such data, evaluating the
+likelihood function of the model parameters and initial condition requires the variables associated with
+unobserved compartments to be marginalized out. In general this is infeasible for models with anything
+but a small population size n and a small number of compartments.
+Stochastic compartmental models also commonly arise in the form of continuous-time pure jump
+Markov processes, in which transitions of individuals between compartments occur in an asynchronous
+manner [Bretó, 2018]. Likelihood-based inference for such processes is similarly intractable in general.
+There are rigorous limit theorems which link continuous time Markov process compartmental models to
+deterministic ODE models in the large population limit, e.g., Kurtz [1970, 1971], Roberts et al. [2015].
+However the precise nature of the asymptotic is somewhat subtle and not always meaningful in practice:
+appendix B includes a simple example in which a stochastic model exhibits substantial statistical variation
+even when the population size is 107 , and the corresponding ODE limit is pathological. Thus in general
+ODE models are no substitute for stochastic models.
+
+2.2
+
+Notation
+
+In the remainder of the paper, bold upper-case and bold lower-case characters are respectively matrices
+and column vectors, e.g., A and b, with generic elements a(i,j) and b(i) . The length-m column vector of
+1’s is denoted 1m . A vector is called a probability vector if its elements are nonnegative and sum to 1. A
+matrix is called row-stochastic if its elements are nonnegative and its row sums are all 1. The indicator
+function is denoted I[·]. The element-wise product of matrices is denoted A ◦ B and the outer product
+of vectors is denoted a ⊗ b. Element-wise natural logarithm and factorial are denoted log A and A!,
+respectively. For positive
+m and n, define Cm := {1, . . . , m} and Sm,n := {x = [x(1) · · · x(m) ]T :
+Pm integers
+(i)
+(i)
+x ≥ 0, i = 1, . . . , m; i=1 x = n}. For x ∈ Sm,n , define η(x) := [x(1) /n · · · x(m) /n]T . For a matrix P
+(resp. a vector π) with nonnegative elements summing to 1, Mult(n, P) (resp. Mult(n, π)) denotes the
+
+2
+
+distribution of the random matrix (resp. vector) whose elements are the incidence counts obtained from
+sampling n times with replacement according to P (resp. π). This is the usual definition of a multinomial
+distribution.
+
+3
+3.1
+
+Model
+A class of compartmental models specified by the transition probabilities
+of individuals.
+
+The general model we consider is defined by: m, the number of compartments; n, the total population
+size; a length-m probability vector π0 ; and for each t ≥ 1, a mapping from length-m probability vectors
+to m × m row-stochastic matrices, η 7→ Kt,η . The population at time t ≥ 0 is a set of n random variables
+(1)
+(n)
+{ξt , . . . , ξt }, each valued in Cm . The counts of individuals in each of the m compartments at time t are
+Pn
+(1)
+(m)
+(i)
+(j)
+collected in a vector xt = [xt · · · xt ]T ∈ Sm,n , xt := j=1 I[ξt = i]. For t ≥ 1 let Zt be the m × m
+P
+(i,j)
+(k)
+(k)
+:= nk=1 I[ξt−1
+matrix with elements zt
+= i, ξt = j], which counts the individuals transitioning from
+compartment i at t − 1 to j at t.
+(1)
+(n)
+The sequence {ξt , . . . , ξt }t≥0 is constructed to be a Markov chain: the members of the initial
+(1)
+(n)
+(i)
+(j)
+(1)
+(n)
+(1)
+(n)
+population {ξ0 , . . . , ξ0 } are i.i.d. with p(ξ0 = j) = π0 , and given {ξt−1 , . . . , ξt−1 }, {ξt , . . . , ξt }
+(i)
+(i)
+are conditionally independent, with ξt drawn from the ξt−1 ’th row of Kt,η(xt−1 ) . It follows from this
+prescription that the sequence of matrices (Zt )t≥0 is also a Markov chain. Indeed, conditional on Zt−1 ,
+and hence automatically on xt−1 since Zt 1m = xt−1 , the rows of Zt are independent, and the distribution
+(i)
+(i,·)
+(i,·)
+of the ith row of Zt is Mult(xt−1 , Kt,η(xt−1 ) ), where Kt,η(xt−1 ) is the ith row of Kt,η(xt−1 ) . Moreover
+T
+noting 1T
+m Zt = xt , we observe (xt )t≥0 is also a Markov chain, but we shall not need an explicit formula
+for its transition probabilities.
+SEIR example. The SEIR model in (1)-(2) is equivalent to taking m = 4,
+
+
+(3)
+(3)
+e−hβη
+1 − e−hβη
+0
+0
+ 0
+
+e−hρ
+1 − e−hρ
+0
+
+Kt,η = 
+−hγ
+−hγ  ,
+ 0
+0
+e
+1−e
+0
+0
+0
+1
+(1)
+
+(2)
+
+(3)
+
+(3)
+
+(4)
+
+for all t ≥ 1, and identifying [xt xt xt xt ]T with respectively the counts of susceptible, exposed,
+infective and recovered individuals at time t.
+We consider two observation models.
+
+3.2
+
+Observations derived from (xt )t≥1
+(i)
+
+In this scenario, the observation at time t ≥ 1 is a length-m vector yt with elements yt
+conditionally independent given xt , and:
+(i)
+
+(i)
+
+(i)
+
+yt ∼ Bin(xt , qt ).
+
+which are
+
+(4)
+
+(i)
+
+We shall collect the parameters qt ∈ [0, 1] in a length-m vector qt . When conducting likelihood-based
+(i)
+inference for xt using this model, if yt is a missing observation, then in the likelihood function associated
+(i)
+(i)
+with (4) one should take yt to be 0, set qt = 0.
+
+3.3
+
+Observations derived from (Zt )t≥1
+(i,j)
+
+In this scenario, the observation at time t ≥ 1 is a m × m matrix Yt with elements yt
+conditionally independent given Zt , and:
+(i,j)
+
+yt
+
+(i,j)
+
+∼ Bin(zt
+
+(i,j)
+
+(i,j)
+
+, qt
+
+).
+
+which are
+
+(5)
+
+The parameters qt
+∈ [0, 1] from (5) are collected into a m × m matrix Qt . Missing data are handled by
+(i,j)
+(i,j)
+putting a 0 in place of the missing yt
+and setting qt
+= 0.
+3
+
+SEIR example. In practice, one typically observes, at each time step, counts of new infectives rather
+than the total number of infectives, subject to some random under-reporting or missing data. How can
+such data be represented in the model? Due to the definition of Zt , the number of new infectives at time
+(2,3)
+t is exactly zt , since the only way an individual can transition to being infective (compartment 3) is
+(2,3)
+by first being exposed (compartment 2). Therefore in this case yt
+following (5) is a count of newly
+(2,3)
+infectives at time t, subject to binomial random under-reporting with parameter qt , as required.
+
+4
+
+Inference
+
+We now introduce our methods for approximating the so-called filtering distributions and marginal
+likelihoods p(xt |y1:t ), p(y1:t ) and p(Zt |Y1:t ), p(Y1:t ) under respectively the observation models of sections
+3.2 and 3.3. These quantities are at the core of smoothing and parameter estimation techniques
+demonstrated in section 5 and detailed in the appendices.
+For the observation model of section 3.2, note that (xt , yt )t≥1 is a hidden Markov model, and in
+principle the filtering distributions can be computed through a two-step recursion:
+p(xt−1 |y1:t−1 )
+
+prediction
+
+−→
+
+update
+
+p(xt |y1:t−1 ) −→ p(xt |y1:t ).
+
+(6)
+
+However in practice, the summations involved in the ‘prediction’ and ‘update’ operations are prohibitively
+expensive since they involve summing over all possible values of xt−1 and xt .
+
+4.1
+
+Approximating the prediction operation
+
+For each x = [x(1) · · · x(m) ]T ∈ Sm,n and length-m probability vector η, let Mt (x, η, ·) be the probability
+T
+mass function on Sm,n of (1T
+m Z) , where Z is a random m × m matrix whose rows are independent,
+(i,·)
+and whose ith row has distribution Mult(x(i) , Kt,η ). So by construction Mt (xt−1 , η(xt−1 ), xt ) is the
+probability transition function for the Markov chain (xt )t≥0 defined in section 3.1. Thus the prediction
+operation in (6) can be written in terms of Mt :
+X
+p(xt |y1:t−1 ) =
+p(xt−1 |y1:t−1 )p(xt |xt−1 )
+xt−1 ∈Sm,n
+
+=
+
+X
+
+p(xt−1 |y1:t−1 )Mt (xt−1 , η(xt−1 ), xt ).
+
+(7)
+
+xt−1 ∈Sm,n
+
+Our approximation to this operation is as follows: assuming we have already obtained a multinomial
+distribution approximation to p(xt−1 |y1:t−1 ), then in (7) we replace p(xt−1 |y1:t−1 ) by this multinomial
+distribution, and replace the vector η(xt−1 ) by its expectation under this multinomial distribution. This
+results in a multinomial distribution approximation to p(xt |y1:t−1 ). The following lemma formalizes this
+recipe.
+Lemma 1. If for a given length-m probability vector π, µ(·) is the probability mass
+Pfunction on Sm,n associated with Mult(n, π) and Eµ [η(x)] is the expected value of η(x) when x ∼ µ, then x∈Sm,n µ(x)Mt (x, Eµ [η(x)], ·)
+is the probability mass function associated with Mult(n, π T Kt,π ).
+The proof is given in appendix C.
+
+4.2
+
+Approximating the update operation
+
+The update operation in (6) is:
+p(xt |y1:t ) =
+
+p(yt |xt )p(xt |y1:t−1 )
+,
+p(yt |y1:t−1 )
+
+p(yt |y1:t−1 ) =
+
+X
+
+p(yt |xt )p(xt |y1:t−1 ),
+
+(8)
+
+xt ∈Sm,n
+
+which has the interpretation of a Bayes’ rule update applied to p(xt |y1:t−1 ). Assuming we have already
+obtained a multinomial distribution approximation to p(xt |y1:t−1 ), our approximation to the update
+operation is to substitute this multinomial distribution in place of p(xt |y1:t−1 ) in (8), resulting in a shiftedmultinomial distribution whose mean vector is used to define a multinomial distribution approximation
+to p(xt |y1:t ). The following lemma formalizes this recipe.
+4
+
+Lemma 2. Suppose that x ∼ Mult(n, π) for a given length-m probability vector π, and assume that
+given x, y is a vector with conditionally independent elements distributed: y (i) ∼ Bin(x(i) , q (i) ). Then the
+conditional distribution of x given y is equal to that of y + x? , where
+
+
+π ◦ (1m − q)
+?
+T
+x ∼ Mult n − 1m y,
+(9)
+1 − πT q
+with q = [q (1) · · · q (m) ]T , and the conditional mean of x given y is:
+
+
+π ◦ (1m − q)
+T
+E[x|y] = (n − 1m y)
+.
+1 − πT q
+
+(10)
+
+Moreover the marginal distribution of y has probability mass function given by:
+log p(y)
+
+=
+
+log(n!) + yT (log π + log q) − 1T
+m log(y!)
+T
+T
++(n − 1T
+m y) log(1 − π q) − log((n − 1m y)!),
+
+(11)
+
+with the convention 0 log 0 ≡ 0.
+The proof is given in appendix C.
+
+4.3
+
+Multinomial filtering
+
+Putting together the results of lemma 1 and lemma 2 in a recursive fashion leads us to algorithm 1; line 3
+is motivated by lemma 1, line 4 is motivated by (9)-(10), lines 5-6 are motivated by (11).
+Algorithm 1 Multinomial filtering with observations derived from (xt )t≥1
+1:
+2:
+3:
+4:
+5:
+6:
+7:
+
+initialize π0|0 ← π0
+for t ≥ 1 do
+T
+πt|t−1 ← (πt−1|t−1
+Kt,πt−1|t−1 )T
+
+
+1T yt πt|t−1 ◦ (1m − qt )
+yt
++ 1− m
+πt|t ←
+T
+n
+n
+1 − πt|t−1
+qt
+T
+log wt ← log(n!) + yt (log πt|t−1 + log qt ) − 1T
+m log(yt !)
+T
+T
++(n − 1T
+m yt ) log(1 − πt|t−1 qt ) − log((n − 1m yt )!)
+end for
+One may take as output from algorithm 1 the approximations:
+p(xt |y1:t−1 ) ≈ Mult(n, πt|t−1 ),
+
+d
+
+p(xt |y1:t ) ≈ yt + x?t ,
+
+(12)
+
+d
+
+where the ≈ term indicates approximation of p(xt |y1:t ) by the distribution of the sum of yt (regarded as
+a constant) and a random variable x?t which is defined to have distribution:
+!
+πt|t−1 ◦ (1m − qt )
+?
+T
+.
+(13)
+xt ∼ Mult n − 1m yt ,
+T
+1 − πt|t−1
+qt
+One may alternatively take p(xt |y1:t ) ≈ Mult(n, πt|t ), which has the same mean as the second approximation in (12), but may be less accurate in general, in particular the support of Mult(n, πt|t ) may not match
+that of p(xt |y1:t ). In view of (11), the quantities wt computed in algorithm 1 can be used to approximate
+the marginal likelihood as follows:
+p(y1:t ) = p(y1 )
+
+t
+Y
+
+p(ys |y1:s−1 ) ≈
+
+s=2
+
+t
+Y
+
+ws .
+
+(14)
+
+s=1
+
+Now turning to the observation model from section 3.3 and noting that (Zt , Yt )t≥1 is a hidden Markov
+model, we approximate the recursion:
+p(Zt−1 |Y1:t−1 )
+
+prediction
+
+−→
+
+update
+
+p(Zt |Y1:t−1 ) −→ p(Zt |Y1:t ).
+5
+
+(15)
+
+Many details are similar to those above so are given in appendix C. The counterpart of algorithm 1 is
+algorithm 2, from which one may take the approximations:
+p(Zt |Y1:t−1 ) ≈ Mult(n, Pt|t−1 ),
+where
+Z?t
+
+d
+
+p(Zt |Y1:t ) ≈ Yt + Z?t ,
+
+
+
+Pt|t−1 ◦ (1m ⊗ 1m − Qt )
+T
+.
+∼ Mult n − 1m Yt 1m ,
+1 − 1T
+m (Pt|t−1 ◦ Qt )1m
+
+(16)
+
+(17)
+
+One may alternatively take p(Zt |Y1:t ) ≈ Mult(n, Pt|t ), but similarly to above, its support may not be
+correct. The marginal likelihood is approximated using the same formula as in (14) but with the wt ’s
+computed as per algorithm 2.
+Algorithm 2 Multinomial filtering with observations derived from (Zt )t≥1
+1:
+2:
+3:
+4:
+5:
+6:
+7:
+8:
+
+initialize π0|0 ← π0
+for t ≥ 1 do
+Pt|t−1 ← (πt−1|t−1 ⊗ 1m ) ◦ Kt,πt−1|t−1
+
+
+Yt
+1T Yt 1m Pt|t−1 ◦ (1m ⊗ 1m − Qt )
++ 1− m
+Pt|t ←
+n
+n
+1 − 1T
+m (Pt|t−1 ◦ Qt )1m
+T
+T
+log wt ← log(n!) + 1m (Yt ◦ log Pt|t−1 )1m + 1T
+m (Yt ◦ log Qt )1m − 1m log(Yt !)1m
+T
+T
++(n − 1m Yt 1m ) log(1 − 1m (Pt|t−1 ◦ Qt )1m ) − log((n − 1T
+m Yt 1m )!)
+T
+πt|t ← (1m Pt|t )T
+end for
+
+5
+
+Numerical results
+
+Additional details of models, data sources, algorithms, prior distributions, hyper-parameter settings and
+further numerical results are given in appendices D and E. Tutorials on the method are available at the webpage: https://github.com/LorenzoRimella/Multinomial-Approximations-for-compartmental-models.
+
+5.1
+
+The 1995 Ebola outbreak in the Democratic Republic of Congo
+
+We analyzed simulated and real data under a discrete-time SEIR model used by [Lekone and Finkenstädt,
+2006] to investigate the impact of control interventions on the 1995 outbreak of Ebola in the Democratic
+Republic of Congo. Our experiments follow closely those in [Lekone and Finkenstädt, 2006] to allow
+comparisons with their Data Augmentation MCMC method. We also include comparisons to the ABC
+method from the ABSEIR R package [Brown et al., 2018], and results of least-squares fitting of an ODE
+model from [Chowell et al., 2004] which [Lekone and Finkenstädt, 2006] used as a benchmark.
+The model of [Lekone and Finkenstädt, 2006] is the same as the SEIR model in (1) with h = 1, except
+that β is replaced by a time-varying parameter βt = β for t < t? and βt = βe−λ(t−t? ) for t ≥ t? where
+t? is the time at which control measures began. Thus Kt,η is as in (3) but with β replaced by this βt .
+Also following [Lekone and Finkenstädt, 2006], the data consist of daily counts of new cases (i.e. new
+infectives) and new deaths (i.e. new removals). In [Lekone and Finkenstädt, 2006] it was assumed these
+counts are observed directly, subject to known proportions of missing data. We consider a slightly more
+(i,j)
+general observation model as per section 3.3 with qt
+= 0 for all (i, j) except (2, 3) and (3, 4), and where
+(2,3)
+(3,4)
+qt
+and qt
+are treated as constant-in-t but otherwise unknown and to be estimated.
+Synthetic data Using the following settings from [Lekone and Finkenstädt, 2006]: (β, λ, ρ, γ), S0 =
+(2,3)
+(3,4)
+5, 364, 500, E0 = 1, I0 = R0 = 0, t? = 130 , plus qt
+= 291/316 and qt
+= 236/316 for all t ≥ 1
+informed by realistic proportions of non-missing data [Lekone and Finkenstädt, 2006], we simulated the
+epidemic from the model until extinction, which took 175 time steps. Table 1 shows MLE’s from an EM
+algorithm which uses our approximate filtering and smoothing methods, and marginal posterior means and
+standard deviations estimated using a Metropolis-within-Gibbs MCMC algorithm which incorporates our
+approximate marginal likelihood, under three sets of prior distributions over (β, λ, ρ, γ) labelled ‘vague’,
+‘informative’ and ‘noncentered’ by [Lekone and Finkenstädt, 2006]. The basic reproduction number is
+R0 = β/γ. The results show accurate recovery of the true parameter values.
+6
+
+Table 1: Parameter estimation for synthetic data under the Ebola model using our EM and MCMC
+methods under three sets of prior distributions specified by [Lekone and Finkenstädt, 2006]. For the
+MCMC results, the posterior means is reported as the point estimate and the numbers in parentheses are
+posterior standard deviations.
+Parameter
+
+β
+
+λ
+
+ρ
+
+γ
+
+q (2,3)
+
+q (3,4)
+
+R0
+
+True value
+
+0.2
+
+0.2
+
+0.2
+
+0.143
+
+0.92
+
+0.75
+
+1.40
+
+MLE (EM-alg.)
+
+0.20
+
+0.18
+
+0.21
+
+0.139
+
+1.00
+
+0.81
+
+1.44
+
+MCMC (vague)
+
+0.23 (0.028)
+
+0.21 (0.080)
+
+0.22 (0.076)
+
+0.173 (0.024)
+
+0.81 (0.140)
+
+0.66 (0.119)
+
+1.31 (0.088)
+
+MCMC (infor.)
+
+0.22 (0.020)
+
+0.22 (0.065)
+
+0.20 (0.035)
+
+0.162 (0.017)
+
+0.83 (0.130)
+
+0.67 (0.112)
+
+1.34 (0.082)
+
+MCMC (noncent.)
+
+0.32 (0.048)
+
+0.35 (0.101)
+
+0.17 (0.031)
+
+0.256 (0.049)
+
+0.79 (0.147)
+
+0.64 (0.125)
+
+1.28 (0.084)
+
+Real data We analyzed the same real Congo Ebola data as in [Lekone and Finkenstädt, 2006]. Table 2
+shows several interesting findings. 1) The results from our methods are generally close to those from the
+Data Augmentation MCMC sampler of [Lekone and Finkenstädt, 2006] than those from the ABC method
+of [Brown et al., 2018]; the former targets the true posterior distribution whilst the latter does so only
+approximately. 2) Under the ‘vague’ prior our method finds bi-modal posteriors for β, λ, and 1/ρ. For β,
+one of the modes roughly matches the posterior mean obtained using [Lekone and Finkenstädt, 2006]
+whilst the other is more similar to the least-squares estimate from [Chowell et al., 2004]; we conjecture
+that our MCMC sampler has better mixing than that of [Lekone and Finkenstädt, 2006], allowing it to
+find these two modes. 3) We can report estimates for q (2,3) and q (3,4) , whilst the other methods do not.
+Figure 1 shows posterior and posterior-predictive distributions for the counts of new infectives each day.
+The former estimates for the true numbers which gave rise to the under-reported data, whilst the latter
+shows coverage of the data hence a good model fit [Gelman et al., 1996].
+Table 2: Parameter estimation for the real Ebola data. Numbers in parentheses in column 5 are standard
+errors, for all other columns they are posterior standard deviations. For columns 2,3,4,6 the parameter
+estimates are posterior means. For each of β, λ, and 1/ρ the pairs of estimates in column 1 were obtained
+from the respective bi-modal posteriors by applying k-means clustering, with k = 2, to the MCMC output.
+Parameter
+
+Our MCMC method
+vague prior
+
+Our MCMC method
+informative prior
+
+Data Aug. MCMC [Lekone and Finkenstädt, 2006]
+vague prior
+
+Data Aug. MCMC [Lekone and Finkenstädt, 2006]
+informative prior
+
+ODE + least squares
+[Chowell et al., 2004]
+
+ABC ABSEIR
+[Brown et al., 2018]
+
+β
+
+0.360 (0.049)
+0.225 (0.025)
+
+0.263 (0.033)
+
+0.243 (0.020)
+
+0.209 (0.017)
+
+0.33 (0.006)
+
+0.297 (0.088)
+
+λ
+
+0.322 (0.14)
+0.055 (0.008)
+
+0.123 (0.064)
+
+0.161 (0.009)
+
+0.153 (0.010)
+
+0.976 (unknown)
+
+0.356 (0.325)
+
+1/ρ
+
+10.392 (1.554)
+1.861 (0.487)
+
+6.068 (1.919)
+
+9.431 (0.620)
+
+10.110 (0.713)
+
+5.30 (0.230)
+
+7.907 (2.703)
+
+1/γ
+
+6.174 (1.042)
+
+6.857 (0.834)
+
+5.712 (0.548)
+
+6.523 (0.564)
+
+5.61 (0.190)
+
+15.011 (32.863)
+
+R0
+
+2.177 (0.227)
+1.422 (0.102)
+
+1.64 (0.696)
+
+1.383 (0.127)
+
+1.359 (0.128)
+
+1.83 (0.060)
+
+3.665 (6.592)
+
+q (2,3)
+
+0.445 (0.103)
+
+0.496 (0.109)
+
+_
+
+_
+
+_
+
+_
+
+q (3,4)
+
+0.364 (0.088)
+
+0.408 (0.093)
+
+_
+
+_
+
+_
+
+_
+
+Posterior distribution for new infective
+35
+
+25
+
+Daily observed new cases
+
+30
+
+Daily new cases
+
+Posterior predictive distribution for observed new infective
+
+Data
+Posterior mean
+50% credible interval
+95% credible interval
+
+20
+15
+10
+5
+0
+
+Data
+Posterior predictive mean
+50% credible interval
+95% credible interval
+
+14
+12
+10
+8
+6
+4
+2
+0
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+120
+
+Time of symptoms onset (days from March 1, 1995)
+
+140
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+120
+
+Time of symptoms onset (days from March 1, 1995)
+
+140
+
+Figure 1: Analysis of real Ebola data with our method. Posterior smoothing distributions for the number
+of new infectives per day and posterior predictive distributions for the associated observations, i.e., subject
+to under-reporting. Control measures were introduced on day 70.
+
+7
+
+5.2
+
+Estimating the time-varying reproduction number of COVID-19 in Wuhan,
+China
+
+4
+0
+
+2
+
+Rt
+
+6
+
+8
+
+A compartmental model for estimating the time-varying reproduction number of COVID-19 in Wuhan,
+China, has recently been published in [Kucharski et al., 2020]. The model has 15 compartments:
+susceptibles in Wuhan become exposed and either stay in Wuhan or depart internationally, then in either
+case pass through further stages being exposed, infective, symptomatic and confirmed. The transmission
+rate is modelled as time-varying (βt )t≥0 , a-priori by a geometric random walk, and βt is considered
+proportional to the reproductive number Rt . [Kucharski et al., 2020] proposed a Sequential Monte Carlo
+(SMC) algorithm to estimate (Rt )t≥0 which weights samples of (βt )t≥0 by the likelihood of the associated
+ODE solution under a Poisson observation model. Our methods can be used to replace their ODE model
+with a discrete-time stochastic version of the compartmental model, and with their Poisson model replaced
+our binomial observation model from section 3.3. Our version of the SMC algorithm weights samples of
+(βt )t≥0 by their approximate marginal likelihoods, computed using our multinomial filtering techniques.
+We jointly analyzed two of three data sets from [Kucharski et al., 2020]: daily counts of new infectives
+by date of symptom onset in Wuhan, and internationally exported from Wuhan. Figure 2 shows our
+
+Feb 01
+
+confirmed
+
+Data (out−of−sample)
+Posterior mean
+50% credible interval
+95% credible interval
+
+Dec 15
+
+Jan 01
+
+Jan 15
+
+Feb 01
+
+2
+
+4
+
+6
+
+8
+
+Data
+Posterior mean
+50% credible interval
+95% credible interval
+
+0
+
+New international onsets
+Jan 15
+
+4000
+
+8000
+
+Jan 01
+
+0
+
+New cases in Wuhan
+
+Dec 15
+
+0
+2000
+4000
+New international exports confirmed
+0 2 4 6 8 10
+
+20
+15
+5
+
+10
+
+Data
+Posterior mean
+50% credible interval
+95% credible interval
+
+Feb 01
+
+10
+
+Jan 15
+
+25
+
+Jan 01
+
+0
+
+New onsets in Wuhan
+
+Dec 15
+
+Dec 15
+
+Jan 01
+
+Jan 15
+
+Feb 01
+
+date_range
+Data (out−of−sample)
+Posterior mean
+50% credible interval
+95% credible interval
+
+Dec 15
+
+Jan 01
+
+Jan 15
+
+Feb 01
+
+Figure 2: Results for the COVID-19 model using our methods. Red line is date at which travel restrictions
+were introduced. Top: estimated reproduction number. Middle row: estimated daily new confirmed cases
+in Wuhan (left) and internationally (right), both with in-sample data by date of symptom onset. Bottom
+row, left: estimated new symptomatic but possibly unconfirmed cases (left axis) and out-of-sample new
+confirmed cases data (right axis); right: estimated confirmed international cases by date of confirmation,
+and out-of-sample data.
+results in the format of [Kucharski et al., 2020]. Compared to results obtained using their ODE model
+(see supplementary material), our estimates of Rt are generally lower, and closer 1 for the period after
+travel restrictions are introduced; and our credible intervals for the in-sample plots are generally wider,
+reflecting the stochastic nature of our compartmental model. In the bottom two plots our posteriors are
+mostly concentrated on lower values than those from the method of [Kucharski et al., 2020].
+
+A
+
+Reader’s guide to the appendices
+
+Appendix B discusses some of the shortcomings of deterministic compartmental models, expanding on the
+discussion in section 2.1. Appendix C contains proofs of lemmas 1 and 2, plus corresponding results and
+proofs for the observation model from section 3.3, and derivation of smoothing algorithms. Appendix D
+provides additional details and numerical results for the Ebola example in section 5.1. Additional details
+and numerical results for the COVID-19 example in section 5.2 are given in appendix E.
+
+8
+
+B
+
+Stochastic vs. deterministic SEIR models
+
+Perhaps the most widely applied formulation of a compartmental model is as a system of ordinary
+differential equations.
+SEIR example. For a population of size n, the SEIR ODE model is:
+dS
+βSI
+=−
+,
+dt
+n
+
+dE
+βSI
+=
+− ρE,
+dt
+n
+
+dI
+= ρE − γI,
+dt
+
+dR
+= γI,
+dt
+
+(18)
+
+initialized with nonnegative integers in each of the compartments (S0 , E0 , I0 , R0 ) such that S0 + E0 +
+I0 + R0 = n
+The most obvious drawback of ODE models is that, once model parameters and the initial population
+are fixed, any discrepancy between observed data and the solution of the ODE has to be explained as
+observation error, which is a serious restriction from a modelling point of view. In practice one can try to
+estimate unknown parameters and/or the initial condition by numerically minimizing this discrepancy,
+e.g. under squared error loss. Standard errors for parameter estimates can be derived using asymptotic
+theory for nonlinear least squares, but calculation of them in practice involves numerical differentiation
+of the ODE solution flow w.r.t. parameters [Chowell et al., 2004]. When a probabilistic observation
+model is specified, Bayesian approaches allow for uncertainty quantification over parameters via posterior
+distributions, but evaluating the likelihood function for model parameters still involves numerical solution
+of the ODE.
+Figure 3 shows simulation output for the proportion of infective individuals in the discrete-time SEIR
+model with n = 102 , 103 , 105 , 107 and initial conditions (S0 , E0 , I0 , R0 ) = (n − 1, 1, 0, 0), with β = 0.8,
+ρ = 1/9 and γ = 0.2. It is evident that the sample paths become smoother as n grows, but there is still
+substantial variability across sample paths even with n = 107 . This can be explained by the fact that
+since (E0 , I0 ) = (1, 0) independently of n, the numbers of exposed and infective individuals in the first
+few time periods of the epidemic are typically very small, despite the fact that the overall population size
+may be large, and the statistical variability associated with these small numbers has a lasting effect on
+the overall timing of the outbreak.
+0.20
+0.15
+0.10
+0.05
+0.00
+0.20
+0.15
+0.10
+0.05
+0.00
+
+0
+
+50
+
+100
+
+150
+
+200 0
+
+50
+
+100
+
+150
+
+200 0
+
+50
+
+100
+
+150
+
+200 0
+
+50
+
+100
+
+150
+
+200
+
+Figure 3: Proportion of infective individuals against time in simulations from the discrete-time stochastic
+SEIR model with β = 0.8, ρ = 1/5, γ = 1/9 and h = 1 over 200 time steps. Columns left to right:
+n = 102 , 103 , 105 , 107 and initial conditions (S0 , E0 , I0 , R0 ) = (n − 1, 1, 0, 0). Top row: 10 realizations
+from the model. Bottom row: at each time step shaded regions indicate percentile intervals of the form
+[α, 1 − α] × 100%, for α = 0.05, 0.1, 0.2, 0.3, 0.4 estimated from 104 realizations from the model.
+To explain how this relates to ODE limits, for n ≥ 1 and initial proportions of the population
+(s0 , e0 , i0 , r0 ), i.e., s0 + e0 + i0 + r0 = 1, let us write Dn (s0 , e0 , i0 , r0 ) for the collection of ODEs in
+(18) together with the initial condition (ns0 , ne0 , ni0 , nr0 ). It can be checked by substitution that
+t 7→ (St , Et , It , Rt ) is a solution of D1 (s0 , e0 , i0 , r0 ) if and only if t 7→ (nSt , nEt , nIt , nRt ) is a solution of
+
+9
+
+Dn (s0 , e0 , i0 , r0 ). Thus we see that n plays a trivial role in the ODE model: it is just a scaling factor for
+the solution.
+The limit theorems of Kurtz [1970, 1971] applied in this situation pertain to the probabilistic
+convergence on a finite time-window as n → ∞ of the path of the continuous-time SEIR Markov process
+with initial condition (S0 , E0 , I0 , R0 ) = (n − 1, 1, 0, 0) and compartment counts normalized by n, to the
+solution of D1 (s0 , e0 , i0 , r0 ), where (s0 , e0 , i0 , r0 ) = limn→∞ (n − 1, 1, 0, 0)/n = (1, 0, 0, 0). However in the
+solution of D1 (1, 0, 0, 0), the exposed and infective compartments are always empty, i.e. an epidemic never
+occurs. This can be reconciled with figure 3 by observing that there the peak in the number of infectives
+typically occurs later as n grows: the limiting n → ∞ case is that in which a peak never occurs.
+This illustrates that sequences of well-behaved stochastic models can have ODE limits which are
+unrealistic to the point of being pathological, and therefore these limits are not always a sensible
+justification for using ODE models.
+
+C
+C.1
+
+Supplementary information about multinomial filtering and
+smoothing
+Proofs of Lemmas 1 and 2
+
+Proof of Lemma 1. Since µ P
+is the probability mass function associated with Mult(n, π), Eµ [η(x)] = π,
+so we need to prove that
+x∈Sm,n µ(x)Mt (x, π, ·) is the probability mass function associated with
+T
+Mult(n, π Kt,π ). We shall achieve this using the unique characterization of the probability mass function
+by its moment generating function.
+P
+e ∼ Mt (x, π, ·), so by construction x∈Sm,n µ(x)Mt (x, π, ·) is the marginal probability
+With x ∼ µ, let x
+T
+e. Therefore by the definition of Mt in section 4.1, x
+e = (1T
+mass function of x
+m Z) , where the rows of Z
+are conditionally independent given x, and the conditional distribution of the ith row of Z given x is
+(i,·)
+e can be written:
+Mult(x(i) , Kt,π ). Using these facts, the moment generating function of x
+
+
+
+
+E exp(e
+xT b) = E exp(1T
+m Zb)
+
+
+
+m
+X
+= E exp 
+Z (i,j) b(j) 
+i,j=1
+
+ 
+
+
+
+= E E  exp 
+
+m
+X
+
+
+
+
+
+Z (i,j) b(j)  x
+
+i,j=1
+
+
+= E
+
+m
+Y
+
+
+
+
+
+
+m
+X
+E  exp 
+Z (i,j) b(j)  x(i)  .
+
+i=1
+
+(19)
+
+j=1
+
+h
+P
+
+i
+m
+(i,j) (j)
+(i)
+Now we use the fact that, again by definition of Mt , E exp
+Z
+b
+x
+is the m.g.f. of
+j=1
+(i,·)
+
+(i,j)
+
+Mult(x(i) , Kt,η ), where Kt,η has elements kt,η , i.e. :
+
+
+ 
+x(i)
+m
+m
+X
+X
+(j)
+(i,j)
+E  exp 
+Z (i,j) b(j)  x(i)  = 
+kt,η eb 
+.
+
+
+j=1
+
+j=1
+
+10
+
+Substituting this into (19) and then using x ∼ µ = Mult(n, π),
+
+
+
+E exp(e
+xT b) = E 
+
+m
+Y
+
+ 
+
+x(i) 
+
+
+m
+m
+m
+X
+Y X (i,j) b(j)  
+kt,η e
+E  exp 
+Z (i,j) b(j)  x(i)  = E  
+
+
+
+i=1
+
+X
+
+=
+
+i=1
+
+j=1
+
+n!
+
+(i)
+m
+Y
+(π (i) )x
+
+m
+X
+
+
+
+x(i) !
+
+i=1
+
+(x(1) ,...,x(m) )∈Sm,n
+
+
+
+j=1
+
+x(i)
+(i,j) (j)
+kt,η eb 
+
+j=1
+
+
+x(i)
+m
+m
+X
+Y
+1 X (i) (i,j) b(j) 
+n!
+=
+π kt,η e
+x(i) ! j=1
+i=1
+(x(1) ,...,x(m) )∈Sm,n
+
+n 
+n
+m X
+m
+m
+X
+X
+(j)
+(j)
+(i,j)
+=
+π (i) kt,η eb  =  (π T Kt,η )(j) eb  ,
+i=1 j=1
+
+j=1
+
+where the penultimate equality
+n holds by the multinomial theorem. The proof is completed by noticing
+Pm
+T
+(j) b(j)
+that
+is the moment generating function of Mult(n, π T Kt,η ).
+j=1 (π Kt,η ) e
+Proof of Lemma 2. Under the distributional assumptions in the statement of the lemma, for x ∈ Sm,n ,
+m
+Y
+(j)
+n!
+(π (j) )x ,
+(j)
+j=1 x ! j=1
+
+p(x) = Qm
+and for 0 ≤ y (j) ≤ x(j) , j = 1, . . . , m,
+p(y|x) =
+Therefore
+
+m
+Y
+
+(j)
+(j)
+(j)
+x(j) !
+(q (j) )y (1 − q (j) )x −y .
+(j) !(x(j) − y (j) )!
+y
+j=1
+
+(j)
+(j)
+(j)
+(j)
+m
+Y
+(π (j) )x (q (j) )y (1 − q (j) )x −y
+p(x, y) = n!
+,
+y (j) !(x(j) − y (j) )!
+j=1
+
+(20)
+
+and
+(j)
+(j)
+(j)
+(j)
+m
+Y
+(π (j) )x (q (j) )y (1 − q (j) )x −y
+n!
+p(y) =
+y (j) !(x(j) − y (j) )!
+P
+j=1
+{x(j) :x(j) ≥y (j) , j x(j) =n}
+
+
+m
+(j) y (j)
+(j) y (j)
+Y
+(q
+)
+(π
+)
+
+= n! 
+y (j) !
+j=1
+
+
+m
+(j) x(j) −y (j)
+(j) x(j) −y (j)
+X
+Y
+(π
+)
+(1
+−
+q
+)
+
+
+×
+(x(j) − y (j) )!
+P (j)
+(j) (j)
+(j)
+j=1
+
+X
+
+{x
+
+
+= n! 
+
+m
+Y
+j=1
+
+:x
+
+≥y
+
+(q
+
+(j) y (j)
+
+)
+
+,
+
+(π
+
+y (j) !
+
+j
+
+x
+
+=n}
+
+(j) y (j)
+
+)
+
+(j)
+n−Pm
+j=1 y
+(j)
+(j)
+π
+(1
+−
+q
+)
+j=1
+Pm
+,
+(n − j=1 y (j) )!
+
+ Pm
+
+
+(21)
+
+where the final equality holds by the multinomial theorem. Dividing (20) by (21) gives
+
+
+
+x(j) −y(j)
+m
+m
+Y
+X
+1
+π (j) (1 − q (j) )
+(j) 
+
+Pm (i)
+!
+p(x|y) = n −
+y
+,
+(i)
+(x(j) − y (j) )!
+i=1 π (1 − q )
+j=1
+j=1
+which is the probability mass function of y + x? given in the statement of the lemma.
+Remark 1. The probability mass function in (21) has the interpretation of being a multinomial distribution
+over
+1 compartments, where the count variable associated with the (m + 1)th compartment is n −
+Pm n +
+(j)
+y
+.
+j=1
+11
+
+C.2
+
+Approximating the prediction and update operations for (Zt , Yt )t≥1
+
+Algorithm 2 is derived from lemma 3 and 4. Given Z and η, let M t (Z, η, ·) be the probability mass
+e such that 1T Z = (Z1
+e m )T with probability 1, and such that
+function of a random m × m matrix, say Z,
+m
+e m , rows of Z
+e are independent and the conditional distribution of the ith row is
+given the row-sums Z1
+(i,·)
+(i)
+T
+T
+Mult(x , Kt,η ) where x = 1m Z. So by construction M t (Zt−1 , η(1T
+m Zt−1 ), Zt ) gives the transition
+probabilities of the Markov chain (Zt )t≥1 defined in section 3.1.
+Lemma 3. If for a given m × m matrix P, µ is the probability mass function
+P)
+P associated with Mult(n,
+T
+T
+and Eµ [η(1T
+Z)]
+is
+the
+expected
+value
+of
+1
+Z
+when
+Z
+∼
+Mult(n,
+P),
+then
+µ(Z)M
+(Z,
+E
+[η(1
+Z)],
+·)
+t
+µ
+m
+m
+m
+Z
+is the probability mass function associated with Mult(n, (π ⊗ 1m ) ◦ Kt,π ) where π T = 1T
+P.
+m
+Proof. The proof is similar to the proof of Lemma 1, so some steps and commentary are omitted. Note
+T
+T
+T
+e
+e
+Eµ [η((1T
+m Z) )] = (1m P) = π, and let Z ∼ M (Z, π, ·). The moment generating function of Z is:
+
+
+
+m
+m
+Y
+X
+e
+ exp 
+E[exp(1T
+ze(i,j) b(i,j) 
+m (Z ◦ B)1m )] = E
+i=1
+
+ 
+= E E 
+
+j=1
+m
+Y
+
+
+ 
+m
+X
+exp 
+ze(i,j) b(i,j)  Z
+
+i=1
+
+
+
+j=1
+
+
+
+
+
+
+m
+m
+Y
+X
+(i) 
+= E  E  exp 
+ze(i,j) b(i,j)  (1T
+m Z)
+i=1
+
+j=1
+
+
+(1Tm Z)(i) 
+m
+m
+
+Y X (i,j) (i,j) 
+kt,π b
+= E 
+
+
+
+i=1
+
+j=1
+(i)
+m
+Y
+(π (i) )x
+
+X
+
+= n!
+
+(x(1) ,...,x(m) )∈Sm,n i=1
+
+x(i) !
+
+x(i)
+
+m
+X
+(i,j)
+(i,j)
+
+kt,π eb 
+j=1
+
+
+n
+m X
+m
+X
+(i,j)
+(i,j)
+=
+π (i) kt,π eb  .
+i=1 j=1
+
+Lemma 4. Suppose that Z ∼ Mult(n, P) for a given m × m matrix P, and given Z, Y is a matrix with
+conditionally independent entries distributed: y (i,j) ∼ Bin(z (i,j) , q (i,j) ). Then the conditional distribution
+of Z given Y is equal to that of Y + Z? where
+
+
+P ◦ (1m ⊗ 1m − Q)
+Z? ∼ Mult n − 1T
+Y1
+,
+m
+m
+1 − 1T
+m (P ◦ Q)1m
+and
+E [Z|Y] = (n − 1T
+m Y1m )
+
+P ◦ (1m ⊗ 1m − Q)
+.
+1 − 1T
+m (P ◦ Q)1m
+
+Moreover
+T
+T
+log p(Y) = log(n!) + 1T
+m (Y ◦ log P)1m + 1m (Y ◦ log Q)1m − 1m log(Y!)1m
+T
+T
++(n − 1T
+m Y1m ) log(1 − 1m (P ◦ Q)1m ) − log((n − 1m Y1m )!).
+
+The proof is very similar to the proof of Lemma 2 so is omitted.
+
+C.3
+
+Smoothing with the observation model from section 3.2
+
+Assuming that algorithm 1 has already been run up to a given time t, our objective in this section is to
+derive algorithm 3, from which we take the approximations:
+p(xs |y1:t ) ≈ Mult(n, πs|t ),
+
+p(Zs |y1:t ) ≈ Mult(n, (1m ⊗ πs|t ) ◦ LT
+s−1 ).
+12
+
+Algorithm 3 Multinomial smoothing with observations derived from (xt )t≥1
+for s = t − 1, . . . , 0 do
+(i,j)
+(j) (j,i)
+T
+let Ls be the matrix with elements ls ← πs|s ks+1,πs|s /(πs|s
+Ks+1,πs|s )(i)
+T
+T
+3:
+πs|t ← (πs+1|t Ls )
+4: end for
+
+1:
+2:
+
+We start by considering the identities:
+p(x0:t |y1:t ) = p(xt |y1:t )
+
+t−1
+Y
+
+p(xs |xs+1 , y1:s )
+
+s=0
+
+p(xs |y1:s )p(xs+1 |xs )
+p(xs |xs+1 , y1:s ) =
+p(xs+1 |y1:s )
+X
+p(xs+1 |y1:s ) =
+p(xs |y1:s )p(xs+1 |xs ),
+
+(22)
+
+xs ∈Sm,n
+
+with the conventions p(x0 |x1 , y1:0 ) ≡ p(x0 |x1 ), p(x0 |y1:0 ) ≡ p(x0 ). The smoothing distributions p(xs |y1:t ),
+s = 0, . . . , t, satisfy the ‘backward’ recursion.
+X
+p(xs+1 |y1:t )p(xs |xs+1 , y1:s ) = p(xs |y1:t ).
+(23)
+xs+1 ∈Sm,n
+
+All these formulae are standard identities for hidden Markov models [Briers et al., 2010].
+In order to approximate (23) we approximate each of the terms p(xs |xs+1 , y1:s ). Consider first the
+numerator in (22). Recall from section 4.1 that the transition probabilities of the (xs )s≥0 process can be
+written in terms of (Ms )s≥1 , so:
+p(xs |y1:s )p(xs+1 |xs ) = p(xs |y1:s )Ms+1 (xs , η(xs ), xs+1 ).
+
+(24)
+
+We replace p(xs |y1:s ) in (24) by its multinomial approximation Mult(n, πs|s ) obtained using algorithm 1,
+and replace η(xs ) in (24) by its expected value under this multinomial distribution, i.e. πs|s , to give
+µs|s (xs )Ms+1 (xs , πs|s , xs+1 )
+,
+z∈Sm,n µs|s (z)Ms+1 (z, πs|s , xs+1 )
+
+p(xs |xs+1 , y1:s ) ≈ P
+
+(25)
+
+where µs|s (·) is the probability mass function associated with Mult(n, πs|s ).
+Lemma 5. With xs+1 considered fixed, the function which maps xs to the right hand side of (25) is the
+e
+e
+probability mass function associated with 1T
+m Z, where Z is an m × m random matrix whose ith row has
+(i)
+(i,·)
+distribution Mult(xs+1 , Ls ) and Ls is the row-stochastic matrix with entries
+(j)
+
+ls(i,j) =
+
+(j,i)
+
+πs|s ks+1,πs|s
+T K
+(i)
+(πs|s
+s+1,πs|s )
+
+,
+
+(i,j)
+
+where ks+1,πs|s are the elements of Ks+1,πs|s .
+Proof. Recalling the definition of Ms+1 from section 4.1, the numerator in (25) is:
+µs|s (xs )Ms+1 (xs , πs|s , xs+1 )
+
+
+
+(i,j)
+m (π (i) )x(i)
+m
+m (k (i,j)
+s
+Y
+X
+Y
+Y
+)z
+s+1,π
+s|s
+s|s
+
+
+xs(i) !
+= n!
+(i)
+(i,j) !
+z
+x
+!
+s
+j=1
+i=1
+Z∈Tm,n (xs ,xs+1 ) i=1
+!
+(i,j)
+(i,j)
+m
+m
+Y (i) (i)
+X
+Y (ks+1,πs|s )z
+xs
+= n!
+(πs|s )
+z (i,j) !
+i=1
+i,j=1
+Z∈Tm,n (xs ,xs+1 )
+
+= n!
+
+X
+
+m (π (i) )z
+Y
+s|s
+
+Z∈Tm,n (xs ,xs+1 ) i,j=1
+
+(i,j)
+
+(i,j)
+
+(ks+1,πs|s )z
+
+z (i,j) !
+
+13
+
+(i,j)
+
+,
+
+(26)
+
+where Tm,n (xs , xs+1 ) is the set of m × m matrices, say Z, with nonnegative entries such that Z1m = xs ,
+T
+T
+(1T
+m Z) = xs+1 , and 1m Z1m = n.
+Now in order to derive an expression for the the denominator in (25), observe that (26) can be
+disintegrated to give:
+z (i,j)
+m (π (i) )z (i,j) (k (i,j)
+Y
+s+1,πs|s )
+s|s
+,
+n!
+z (i,j) !
+i,j=1
+which is the probability mass function of Z ∼ Mult(n, (πs|s ⊗ 1m ) ◦ Ks+1,πs|s ). Therefore using the fact
+T
+the marginal of this multinomial distribution over 1T
+m Z is Mult(n, πs|s Ks+1,πs|s ), the denominator in
+(25) is
+(j)
+m
+T
+X
+Y
+((πs|s
+Ks+1,πs|s )(j) )xs+1
+µs|s (xs )Ms+1 (xs , πs|s , xs+1 ) = n!
+.
+(27)
+(j)
+xs+1 !
+j=1
+xs ∈Sm,n
+Dividing (26) by (27) gives:
+
+X
+
+m
+Y
+
+(j)
+
+xs+1 !
+
+Z∈Tm,n (xs ,xs+1 ) i=1
+
+m
+Y
+
+
+
+
+j=1
+
+(i)
+
+(i,j)
+
+πs|s ks+1,πs|s
+T K
+(j)
+(πs|s
+s+1,πs|s )
+
+z(i,j)
+
+
+1
+.
+z (i,j) !
+
+e := ZT and interchanging i and j yields the result.
+Re-writing this sum with the change of variable Z
+Now considering (23) and the approximation (25), define the probability mass functions:
+X
+
+µs|t (xs ) :=
+
+µs|s (xs )Ms+1 (xs , πs|s , xs+1 )
+,
+z∈Sm,n µs|s (z)Ms+1 (z, πs|s , xs+1 )
+
+µs+1|t (xs+1 ) P
+
+xs+1 ∈Sm,n
+
+s < t,
+
+recalling from (25) that µt|t (·) is the probability mass function associated with Mult(n, πt|t ).
+Lemma 6. For 0 ≤ s ≤ t, µs|t (·) is the probability mass function associated with Mult(n, πs|t ), where
+πs|t is computed as per algorithm 3.
+Proof. The result can be proved by induction. The induction is initialized using the fact that µt|t (·) is by
+definition the probability mass function associated with Mult(n, πt|t ), and then proceeds by combining
+the result of lemma 5 with moment generating function techniques similar to those used in the proof of
+lemma 1. The details are omitted to avoid repetition.
+
+C.4
+
+Smoothing with the observation model from section 3.3
+
+Assuming algorithm 2 has already been run up to a given time t, our objective in this section is to derive
+algorithm 4, from which we take the approximation:
+p(Zs |y1:t ) ≈ Mult(n, Ps|t ).
+
+Algorithm 4 Multinomial smoothing with observations derived from (Zt )t≥1
+1:
+2:
+3:
+4:
+5:
+
+for s = t − 1, . . . , 1 do
+πs|t ← Ps+1|t 1m
+(i,j)
+
+let Ls be the matrix with elements ls
+
+(j,i)
+
+(i)
+
+← ps|s /πs|s
+
+T
+
+Ps|t ← (1m ⊗ πs|t ) ◦ Ls
+end for
+
+(i,j)
+(i)
+T
+In algorithm 4, ps|s are the elements of Ps|s and πs|s are the elements of πs|s := (1T
+m Ps|s ) , with
+Ps|s computed in algorithm 2.
+
+14
+
+Similarly to section C.3, to derive our approximations we start from the fact that (Zt , Yt )t≥1 is a
+hidden Markov model, and consider the identities:
+p(Z1:t |Y1:t ) = p(Zt |Y1:t )
+
+t−1
+Y
+
+p(Zs |Zs+1 , Y1:s )
+
+s=1
+
+p(Zs |Y1:s )p(Zs+1 |Zs )
+p(Zs |Zs+1 , Y1:s ) =
+p(Zs+1 |Y1:s )
+X
+p(Zs |Y1:s )p(Zs+1 |Zs ).
+p(Zs+1 |Y1:s ) =
+
+(28)
+
+Zs
+
+The backward recursion is in this case:
+X
+p(Zs+1 |Y1:t )p(Zs |Zs+1 , Y1:s ) = p(Zs |Y1:t ).
+
+(29)
+
+Zs+1
+
+Writing µs|s (·) for the probability mass function associated with Mult(n, Ps|s ), our approximation to (28)
+is:
+µs|s (Zs )M s+1 (Zs , πs|s , Zs+1 )
+p(Zs |Zs+1 , Y1:s ) ≈ P
+.
+(30)
+e
+e
+e µ (Z)M s+1 (Z, πs|s , Zs+1 )
+Z
+
+s|s
+
+where M s+1 was introduced in section C.2 and in the setting of (30) has the explicit formula:
+
+
+(j,`)
+
+zs+1
+(j,`)
+m
+m
+Y ks+1,πs|s
+Y
+
+T 
+.
+M s+1 (Zs , πs|s , Zs+1 ) = I[1T
+(Zs+1 1m )(j) !
+m Zs = (Zs+1 1m ) ] 
+
+(j,`)
+zs+1 !
+j=1
+`=1
+Lemma 7. With Zs+1 considered fixed, the function which maps Zs to the right hand side of (30) is
+the probability mass function such that the columns of Zs are independent and the distribution of the ith
+(i,·)
+column is Mult((Zs+1 1m )(i) , Ls ), where Ls is the row-stochastic matrix with entries
+(i,j)
+
+ls
+
+(j,i)
+
+(i)
+
+= ps|s /πs|s
+
+(i,j)
+(i)
+T
+where ps|s are the elements of Ps|s , and πs|s are the elements of πs|s := (1T
+m Ps|s ) with Ps|s computed
+in algorithm 2.
+
+Proof. For the numerator in (30) is
+µs|s (Zs )M s+1 (Zs , πs|s , Zs+1 )
+
+
+m (p(i,j) )zs(i,j)
+Y
+s|s
+T
+ I[1T
+= n!
+m Zs = (Zs+1 1m ) ]
+(i,j)
+z
+!
+s
+i,j=1
+
+
+(j,`)
+
+zs+1
+(j,`)
+m
+m
+Y ks+1,πs|s
+Y
+
+(j)
+,
+×
+(Z
+1
+)
+!
+s+1
+m
+
+
+(j,`)
+z
+!
+j=1
+s+1
+`=1
+
+(31)
+
+and for the denominator in (30),
+X
+µs|s (Zs )M s+1 (Zs , πs|s , Zs+1 )
+Zs
+
+
+=
+
+(j)
+(j)
+(πs|s )(Zs+1 1m )
+n!
+(Zs+1 1m )(j) !
+j=1
+
+m
+Y
+
+
+(j,`)
+
+zs+1
+(j,`)
+ks+1,πs|s
+
+
+,
+  (Zs+1 1m )(j) !
+
+
+(j,`)
+zs+1 !
+j=1
+`=1
+
+
+
+
+m
+Y
+
+m
+Y
+
+(32)
+
+where the equality in (32) holds by combining (31) with the fact that the marginal of µs|s over 1T
+m Zs is
+Mult(n, 1T
+P
+)
+=
+Mult(n,
+π
+).
+s|s
+s|s
+m
+15
+
+Dividing (31) by (32) results in
+
+T
+I[1T
+m Zs = (Zs+1 1m ) ]
+
+m
+Y
+
+(Zs+1 1m )(j) !
+
+j=1
+
+m
+Y
+
+
+
+
+i=1
+
+(i,j)
+
+ps|s
+
+(j)
+πs|s
+
+zs(i,j) !
+1
+
+(i,j)
+
+(i,j)
+
+where ps|s are the elements of Ps|s , Ls is the matrix with elements ls
+
+(i,j)
+zs !
+(j,i)
+
+,
+
+(33)
+
+(i)
+
+= ps|s /πs|s .
+
+Now considering (29) and the approximation (30), define the probability mass functions:
+µs|t (Zs ) :=
+
+µs|s (Zs )M s+1 (Zs , πs|s , Zs+1 )
+µs+1|t (Zs+1 ) P
+,
+e
+e
+e µs|s (Z)M s+1 (Z, πs|s , Zs+1 )
+Zs+1
+Z
+X
+
+s < t,
+
+(34)
+
+where µt|t (·) is defined to be the probability mass function associated with Mult(n, Pt|t ).
+Lemma 8. For 0 ≤ s ≤ t, µs|t (·) is the probability mass function associated with Mult(n, Ps|t ), where
+Ps|t is computed as per algorithm 4.
+Proof. The proof is by induction for s = t, t − 1, . . ., initialized using the fact that µt|t (·) is defined to be
+the probability mass function associated with Mult(n, Pt|t ), and for the induction step plugging (33),
+which is an explicit expression for the right hand side of (30), into (34), and using the fact the marginal
+of µs+1|t (Zs+1 ) over Zs+1 1m is Mult(n, Ps+1|t 1m ).
+
+D
+
+Ebola example: further details and numerical results
+
+In this section we provide more information about the numerical results from section 5.1 in the main part
+of the paper.
+
+D.1
+
+Model
+
+The model from Lekone and Finkenstädt [2006] is a discrete-time stochastic SEIR model with time
+varying β. Kt,η is as in (3) with h = 1 and with β replaced by
+(
+β
+t < t?
+βt =
+,
+(35)
+−λ(t−t? )
+βe
+t ≥ t?
+where t? has the interpretation as the day on which control measures were introduced. Following Lekone
+and Finkenstädt [2006], the initial distribution was fixed to π0 = [1 − 1/n, 1/n, 0, 0]T with n = 5, 364, 501.
+(i,j)
+The observation model from section 3.3 was used with qt
+= 0 for all t and all (i, j) except (2, 3) and
+(2,3)
+(3,4)
+(2,3)
+(3,4)
+(3, 4), and where qt
+≡q
+and qt
+≡q
+are treated as constant-in-t and to be estimated. The
+parameters of the model are thus:
+Θ = (β, λ, ρ, γ, q (2,3) , q (3,4) ).
+
+D.2
+
+Details of the EM algorithm
+
+In numerical experiments we found that a robust approach to approximate maximum likelihood estimation
+of Θ was to take a profile-likelihood approach using an EM algorithm: 1) choose a grid of values for
+(β, λ); 2) for each point on this grid, say (β̂, λ̂), run an EM algorithm to approximately maximize
+p(Y1:t |β̂, λ̂, ρ, γ, q (2,3) , q (3,4) ) with respect to (ρ, γ, q (2,3) , q (3,4) ) then evaluate the marginal likelihood at
+the resulting parameter values using algorithm 2; 3) maximize over the grid.
+The EM component of this procedure follows the usual steps for a hidden Markov model [Cappé et al.,
+2006], so we just provide an outline. One step of the EM procedure is as follows: given Θ one performs
+forward filtering using algorithm 2 then backward smoothing using algorithm 4 resulting in (Ps|t )s≤t .
+The expected complete data log-likelihood is then maximized with respect to the parameters of interest.
+
+16
+
+It turns out that for the Ebola model, the maximization steps for (ρ, γ, q (2,3) , q (3,4) ) have closed-form
+solutions, leading to the update equations:
+
+
+
+
+Pt
+Pt
+(3,4)
+(2,3)
+p
+p
+s=1 s|t
+s=1 s|t
+,
+,
+ρ ← log 1 + Pt
+γ ← log 1 + Pt
+(2,2)
+(3,4)
+s=1 ps|t
+s=1 ps|t
+Pt
+Pt
+(2,3)
+(3,4)
+ys /n
+ys /n
+q (2,3) ← 1 ∧ s=1(2,3)
+,
+q (3,4) ← 1 ∧ s=1(3,4)
+,
+ps|t
+ps|t
+(i,j)
+
+where ps|t are the elements of Ps|t .
+
+D.3
+
+Details of the MCMC algorithm
+
+We implemented a Metropolis-within-Gibbs MCMC algorithm targeting the approximate posterior
+distribution pb(Θ|Y1:t ) ∝ pb(Y1:t |Θ)p(Θ), where pb(Y1:t |Θ) is the approximate marginal likelihood computed
+using algorithm 2, and
+p(Θ) = p(β)p(λ)p(ρ)p(γ)p(q (2,3) )p(q (3,4) ).
+We considered the three sets of Gamma prior distributions over β, λ, ρ, γ specified in section 3.3 of
+Lekone and Finkenstädt [2006] and referred to as ‘vague’, ‘informative’ and ‘non-centered’. The priors
+p(q (2,3) ), p(q (3,4) )) were taken to be uniform densities on [0, 1].
+Gaussian random walk proposals were applied to each parameter, with variances manually tuned to
+give acceptance rates between 20% and 40% [Roberts et al., 2001].
+
+D.4
+
+Synthetic data: supplementary plots for our MCMC method
+
+To generate the data we used the following parameter values from Lekone and Finkenstädt [2006]:
+β = 0.2,
+
+λ = 0.2,
+
+ρ = 0.2,
+
+γ = 0.143,
+
+t? = 130,
+
+(36)
+
+together with q (2,3) = 291/316 and q (3,4) = 236/316. The data are shown in figure 4. Figures 5 and
+
+14
+10
+
+Daily reported deaths
+
+Daily reported new cases
+
+12
+10
+8
+6
+4
+
+6
+4
+2
+
+2
+0
+
+8
+
+20
+
+40
+
+60
+
+80
+
+100
+
+120
+
+Days since the start of the outbreak
+
+140
+
+160
+
+180
+
+(2,3)
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+120
+
+140
+
+Day of death (counting from the start of the outbreak)
+
+160
+
+180
+
+(3,4)
+
+Figure 4: Synthetic data (yt )t≥1 , which are daily numbers of reported new cases, and (yt )t≥1 ,
+which are the daily numbers of reported new deaths, simulated from the Ebola model of Lekone and
+Finkenstädt [2006]. Blue lines indicate the day t? = 130 at which control measures were introduced.
+6 show traceplots and histograms of the MCMC output from which the point estimates and posterior
+standard deviations in table 1 were calculated. The MCMC chain was run for 5 × 105 iterations, the first
+105 iterations were discarded for burn-in, and the remaining samples thinned to result in a sample size of
+104 .
+
+17
+
+0.6
+
+0.6
+
+0.5
+
+β
+
+0.5
+
+β
+
+0.4
+
+0.4
+
+0.3
+
+0.3
+
+0.2
+
+0.2
+
+0.1
+
+0.1
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+2.5
+
+5.0
+
+7.5
+
+10.0
+
+12.5
+
+15.0
+
+0.8
+
+λ
+
+0.6
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+8000
+
+10000
+
+0
+
+5
+
+10
+
+15
+
+20
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+2
+
+4
+
+6
+
+8
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+1
+
+2
+
+3
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+1
+
+2
+
+3
+
+0.8
+
+0.6
+
+0.6
+
+ρ
+
+0.4
+
+0.4
+
+0.2
+
+0.2
+
+0.0
+
+0.0
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+2
+
+4
+
+6
+
+8
+
+0.6
+
+2
+
+4
+
+6
+
+8
+
+10
+
+12
+
+0.6
+
+γ
+
+0.4
+
+0.4
+
+0.2
+
+0.2
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+2.5
+
+5.0
+
+7.5
+
+10.0
+
+12.5
+
+15.0
+
+17.5
+
+1.0
+
+5
+
+10
+
+15
+
+20
+
+1.0
+
+q
+
+(2, 3) 0.8
+
+(2, 3) 0.8
+
+0.6
+
+0.6
+
+0.4
+
+0.4
+
+0
+
+q
+
+6000
+
+0.4
+
+0.8
+
+q
+
+4000
+
+0.2
+
+0
+
+γ
+
+2000
+
+0.6
+
+λ
+
+0.4
+
+0.2
+
+ρ
+
+0
+0.8
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+3.5
+
+1.0
+
+1.0
+
+0.8
+
+0.8
+
+q
+
+(3, 4)
+0.6
+
+0.4
+
+4
+
+(3, 4)
+0.6
+
+0.4
+
+0.2
+
+0.2
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+3.5
+
+4
+
+Figure 5: Traceplots and histograms for our MCMC method applied to synthetic data from the Ebola
+model, with the ‘vague’ set of priors (left) and the ‘informative’ set of priors (right) specified by Lekone
+and Finkenstädt [2006]. Blue lines show true parameter values.
+0.6
+0.5
+
+β
+
+0.4
+0.3
+0.2
+0.1
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+0
+
+2000
+
+4000
+
+6000
+
+8000
+
+10000
+
+0.0
+
+2
+
+4
+
+6
+
+8
+
+0.8
+
+λ
+
+0.6
+
+0.4
+
+0.2
+
+1
+
+2
+
+3
+
+4
+
+0.8
+
+ρ
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+2.5
+
+5.0
+
+7.5
+
+10.0
+
+12.5
+
+15.0
+
+0.6
+
+γ
+
+0.4
+
+0.2
+
+2
+
+4
+
+6
+
+8
+
+10
+
+1.0
+
+q
+
+(2, 3) 0.8
+
+0.6
+
+0.4
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+1.0
+
+q
+
+0.8
+
+(3, 4)
+0.6
+
+0.4
+
+0.2
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+Figure 6: Traceplots and histograms for our MCMC method applied to synthetic data from the Ebola
+model, with the ‘noncentered’ set of priors specified by Lekone and Finkenstädt [2006]. Blue lines show
+true parameter values.
+
+18
+
+D.5
+
+Real data: supplementary plots and further details for our MCMC
+method
+
+The data are shown in figure 7. Traceplots and histograms for our MCMC method are displayed in figure
+8, we considered only the ‘vague’ and ‘uninformative’ sets of priors.
+
+14
+12
+
+12
+
+Daily reported deaths
+
+Daily reported new cases
+
+14
+
+10
+8
+6
+4
+
+8
+6
+4
+2
+
+2
+0
+
+10
+
+0
+
+20
+
+40
+
+60
+
+80
+
+Days from March 1, 1995
+
+100
+
+120
+
+0
+
+140
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+120
+
+Day of death from March 1, 1995
+
+140
+
+Figure 7: Data from the 1995 Ebola outbreak in the Democratic Republic of Congo per day from March
+1, 1995 to July 16, 1995. Blue lines indicate the 9th of May when control measurements were introduced.
+It can be observed that the posteriors over β, λ, ρ appear to be bimodal under the ‘vague’ prior.
+According to this observation, we separated the MCMC samples out by applying the k-means algorithm
+to the marginal samples for ρ. Qualitatively, this identifies:
+1. a mode with big β, big λ and small ρ;
+2. a mode with small β, small λ and big ρ.
+
+β
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+2
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0.0
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+2
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+2
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+4
+
+6
+
+8
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+2
+
+3.0
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+2
+
+14
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+1
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0.0
+
+0
+
+20000
+
+40000
+
+60000
+
+80000
+
+100000
+
+0
+
+4
+
+6
+
+8
+
+10
+
+12
+
+λ
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+4
+
+6
+
+8
+
+10
+
+12
+
+ρ
+
+4
+
+6
+
+8
+
+10
+
+12
+
+2
+
+3
+
+4
+
+5
+
+6
+
+γ
+
+q
+
+q
+
+4
+
+6
+
+8
+
+10
+
+12
+
+14
+
+5
+
+10
+
+15
+
+20
+
+(2, 3)
+
+1
+
+2
+
+3
+
+4
+
+0.5
+
+1.0
+
+1.5
+
+2.0
+
+2.5
+
+3.0
+
+3.5
+
+(3, 4)
+
+1
+
+2
+
+3
+
+4
+
+1
+
+2
+
+3
+
+Figure 8: Traceplots and histogram for the MCMC on the Ebola data.
+
+19
+
+4
+
+This can be interpreted in terms of two alternative explanations of the observed data: the first one
+consists of a big initial growth of the epidemic (big β) with a slow transition to the infective state (small
+ρ), followed by an effective intervention (big λ) that slows down the spread of the virus; the second
+one is essentially the opposite, a small initial growth of the epidemic (small β) with a fast transition to
+the infective state (big ρ), followed by mild control measures (small λ). Posterior means and standard
+deviations are reported in Table 2, along with the values for the Data Augmentation MCMC method of
+Chowell et al. [2004], and the least-squares method of Lekone and Finkenstädt [2006]. For the ABSEIR
+ABC method of Brown et al. [2016] we obtained the estimates ourselves by running the code available at
+http://grantbrown.github.io/ABSEIR/vignettes/Kikwit.html.
+Observe that the estimate for β from Lekone and Finkenstädt [2006] is close to our first mode while
+that from Chowell et al. [2004] is closer to our second mode. We conjecture that the analyses in these
+works were each exploring only a single combination of parameters and excluding the other, and we
+conjecture that our MCMC method mixes more quickly than that of Lekone and Finkenstädt [2006].
+
+D.6
+
+Additional numerical results concerning filtering bias and credible interval coverage
+
+This is a supplementary experiment, not reported in the main part of the paper. The purpose of the
+experiment is to study the accuracy of the approximate filtering distributions obtained from algorithm 2
+when applied to the Ebola model.
+The ground truth parameter values in (36) were taken together with q (2,3) = 291/316, q (3,4) = 236/316.
+We considered three population sizes n = 5 × 102 , 5 × 104 , 5 × 106 , and in each case the initial distribution
+was π0 = [1 − 1/n, 1/n, 0, 0]T . For each value of n, we simulated 2 × 104 data sets from the model, each
+over 200 time steps.
+To assess accuracy we considered bias and credible-interval coverage. For the former we calculated
+the empirical bias associated with the mean vector of the approximation to p(xt |Y1:t ) obtained from
+algorithm 2 as an estimator of xt . For the latter we calculated the empirical coverage of the nominal
+(i)
+95%-credible interval for the marginal over each xt , i = 1, 2, 3, 4. For the true (i.e. approximation-free)
+filtering distributions, asymptotically in the number of simulated data sets the bias would be zero and
+the coverage would be 95%.
+0.2
+
+bias
+
+0.1
+0.0
+0.1
+
+coverage
+
+0.2
+1.00
+0.98
+0.96
+0.94
+
+50
+
+100
+t
+
+150
+
+200
+
+50
+
+100
+t
+
+150
+
+200
+
+50
+
+100
+t
+
+150
+
+200
+
+Figure 9: Empirical bias and empirical coverage of nominal 95%-credible intervals from 2 × 104 simulations
+over 200 time steps of the Ebola model. Columns from left to right:n = 5 × 102 , 5 × 104 , 5 × 106 . Top row:
+(i)
+bias, bottom row: coverage. Red, yellow, blue, green correspond to xt , i = 1, 2, 3, 4, i.e. susceptible,
+exposed, infective, recovered.
+Figure 9 shows that for all three values of n, the bias at every time step and for every compartment is less
+(i)
+than 0.1 in magnitude. This shows the approximation is very accurate: the true values of xt , i = 1, 2, 3, 4
+are always integers, and a bias less than 0.5 in magnitude means that, on average, if the estimated
+number of individuals is rounded to the nearest integer, the true number of individuals is recovered. The
+credible interval coverage reported in figure 9 shows that the approximate filtering distributions tend to
+20
+
+over-represent uncertainty: the empirical coverage at all time steps for all compartments of the nominal
+95% interval is is between 97% and 100%. The bias and coverage appear robust to population size.
+
+E
+
+COVID-19 example: further details and numerical results
+
+E.1
+
+Model
+
+We consider the following discrete-time, stochastic version of the ODE model from Kucharski et al. [2020].
+• St is the number of susceptible individuals in Wuhan (compartment 1);
+(1,W )
+
+(2,W )
+
+• Et
+, Et
+are the numbers of exposed individuals in Wuhan in the first and second stage of
+the incubation period (compartments 2&3);
+(1,W )
+
+(2,W )
+
+(1,T )
+
+(2,T )
+
+• It
+, It
+are the numbers of infective individuals in Wuhan in the first and second stage of the
+disease (compartments 3&4);
+• Et
+, Et
+are the numbers of individuals who were initially exposed whilst in Wuhan and
+subsequently travelled to other countries, in their first and second stage of the incubation period
+(compartments 5&6);
+(1,T )
+
+(2,T )
+
+• It
+, It
+are the numbers of infective individuals who were initially exposed whilst in Wuhan and
+subsequently travelled to other countries, in their first and second stage of the disease (compartments
+7&8);
+• Rt is the number of removed individuals (compartment 9).
+The evolution of the compartments is as follows:
+(1,W )
+
+St+1 = St − Bt
+(1,W )
+
+Et+1
+
+where:
+
+(1,W )
+
+= Et
+
+(1,T )
+
+− Bt
+
+(1,W )
+
++ Bt
+
+,
+
+(37)
+(2,W )
+
+− Bt
+
+,
+
+(38)
+
+(2,W )
+(2,W )
+(2,W )
+(1,W )
+Et+1 = Et
++ Bt
+− Ct
+,
+(1,W )
+(1,W )
+(1,W )
+(2,W )
+It+1 = It
++ Ct
+− Ct
+,
+(2,W )
+(2,W )
+(2,W )
+W
++ Ct
+− Dt ,
+It+1 = It
+(1,T )
+(1,T )
+(1,T )
+(2,T )
++ Bt
+− Bt
+,
+Et+1 = Et
+(2,T )
+(2,T )
+(2,T )
+(1,T )
+Et+1 = Et
++ Bt
+− Ct
+,
+(1,T )
+(1,T )
+(1,T )
+(2,T )
++ Ct
+− Ct
+,
+It+1 = It
+(2,T )
+(2,T )
+(2,T )
+T
+It+1 = It
++ Ct
+− Dt ,
+(W )
+(T )
+Rt+1 = Rt + Dt + Dt ,
+
+(39)
+
+(41)
+(42)
+(43)
+(44)
+(45)
+(46)
+
+
+ 
+
+(1,W )
+Bt
+(1 − ft )pt
+
+
+(1,T )
+ ,
+ft pt
+
+ ∼ Mult St , 
+Bt
+(1,T )
+(1,W )
+1
+−
+p
+t
+St − Bt
+− Bt
+
+
+
+
+
+
+(1,W )
+(2,T )
+(1,T )
+∼ Bin Et
+, pC , Bt
+∼ Bin Et
+, pC ,
+
+
+
+
+(1,W )
+(2,W )
+(1,T )
+(2,T )
+Ct
+∼ Bin Et
+, pC , Ct
+∼ Bin Et
+, pC ,
+
+
+
+
+(2,W )
+(1,W )
+(2,T )
+(1,T )
+Ct
+∼ Bin It
+, pR , Ct
+∼ Bin It
+, pR ,
+
+
+
+
+(W )
+(2,W )
+(T )
+(2,T )
+Dt
+∼ Bin It
+, pR , Dt ∼ Bin It
+, pR ,
+(2,W )
+
+Bt
+
+with
+
+(40)
+
+(1,W )
+
+pt = 1 − e−hβt (It
+
+(2,W )
+
++It
+
+)/n
+
+,
+
+pC = 1 − e−h2ρ ,
+21
+
+pR = 1 − e−h2γ ,
+
+(47)
+(48)
+(49)
+(50)
+
+(51)
+
+where ft is the fraction of cases that depart from Wuhan to other countries at time t. The ODE model of
+Kucharski et al. [2020] incorporates a a number of other compartments which are used to accumulate the
+numbers of individuals which have passed through certain states, but which otherwise do not play an
+active role in the model, hence we do not specify them here.
+The time-varying transmission rate (βt )t≥0 follows a log-normal random walk:
+βt+1 = βt exp(Vt ),
+
+Vt ∼ N (0, σV2 ).
+(3,4)
+
+(7,8)
+
+The observations consist of the new infectives in Wuhan, yt , and internationally, yt
+time step, subject to random under-reporting:
+
+
+
+
+(3,4)
+(1,W ) (W )
+(7,8)
+(1,T ) (T )
+yt
+∼ Bin Ct
+,q
+, yt
+∼ Bin Ct
+,q
+.
+
+E.2
+
+, at each
+
+(52)
+
+Data and Parameter settings
+(3,4)
+
+(7,8)
+
+The series (yt )t≥0 and (yt )t≥0 , i.e. the reported numbers of new infectives in Wuhan and internationally, constitute two of the three data sets considered for inference by Kucharski et al. [2020].
+They additionally considered a third data set consisting of information about prevalence of infections
+on evacuation flights. We exclude this prevalence data from our analysis, since the structure of the
+observation model required fall outside the class of models we consider in this paper.
+We set ft , n, ρ, γ to the same values used in Kucharski et al. [2020], including the fact that ft is set to
+zero after the date when travel restrictions were introduced. We estimated q (W ) = 0.00175, q (T ) = 0.8 via
+approximate maximum likelihood over a grid. We set h = 1.
+
+E.3
+
+Implementation
+
+We based our implementation directly on the R code accompanying Kucharski et al. [2020], which is
+available at https://github.com/adamkucharski/2020-ncov/.
+We also re-ran the experiments reported in Kucharski et al. [2020] using their method, but excluding
+the evacuation flight data mentioned above. This allows for like-for-like comparisons of our results with
+theirs - see below.
+
+E.4
+
+Inference
+
+Algorithm 5 is based directly on the Sequential Monte Carlo algorithm of Kucharski et al. [2020],
+incorporates our discrete-time stochastic model instead of their ODE model. The first stage consists
+(i)
+(i)
+of a particle filter where for time step s, the ith of npart particles consists of βs and Ps|s , and the
+(i)
+
+unnormalized importance weight ws is computed similarly to algorithm 2. The second stage samples
+from the smoothing distribution of βs by tracing back the ancestors of a selected particle - see [Andrieu
+et al., 2010] for details of the role of ancestors in resampling. In addition backward steps as in algorithm
+4 compute the corresponding smoothing distribution over Zs , for s = t, . . . , 1.
+
+E.5
+
+Results
+
+The effective sample size for algorithm 5 and the SMC method of Kucharski et al. [2020] applied to the
+same data are reported in figure 10.
+We followed the procedure of Kucharski et al. [2020] in producing the remainder of our results: we
+ran the algorithm 100 times with npart = 3 × 103 , resulting in 100 samples of {β̃s , P̃s|t , Z̃s }ts=1 (we note
+that more sophisticated approaches to particle smoothing are available in the literature, but we did not
+use them in order to make fair comparisons with results from Kucharski et al. [2020] ). Based on these
+sample we then report in figure 2, in the main paper, the mean and credible intervals associated with the
+following 5 quantities (from Kucharski et al. [2020]). Below κ is the rate of reporting, we used the same
+numerical value as in Kucharski et al. [2020], and F (W ) and F (T ) are auxiliary compartments.
+1. The time-varying reproduction number Rs = β̃s /γ for s = 1, . . . , t;
+(3,4)
+
+2. The new confirmed cases by date of onset in Wuhan and China ỹs
+for s = 1, . . . , t:
+
+
+
+
+(3,4)
+ẑs ∼ Bin n, p̃s|t
+and ỹs(3,4) ∼ Bin ẑs , q (W ) .
+22
+
+(53)
+
+Algorithm 5 Particle filter and backward sampler for COVID-19 application
+(i)
+
+(i)
+
+initialize π0|0 ← π0 , β0 = β0 ,
+2: for s = 1 to t do
+3:
+for i = 1 to npart do
+
+1:
+
+(i)
+
+for i = 1, . . . , npart
+
+(i)
+
+βs ← βs−1 exp(V (i) ), V (i) ∼ N(0, σV2 )
+(i)
+(i)
+Ps|s−1 ← (πs−1|s−1 ⊗ 1m ) ◦ Kt,π(i)
+(i)
+,β
+s−1|s−1 t
+(i)
+
+
+1T Ys 1m Ps|s−1 ◦ (1m ⊗ 1m − Qs )
+Ys
+(i)
++ 1− m
+Ps|s ←
+(i)
+n
+n
+1 − 1T
+m (Ps|s−1 ◦ Qs )1m
+
+4:
+5:
+
+6:
+
+(i)
+
+(i)
+
+T
+T
+log ws ← log(n!) + 1T
+m (Ys ◦ log Ps|s−1 )1m + 1m (Ys ◦ log Qs )1m − 1m log(Ys !)1m
+
+7:
+
+(i)
+
+T
+T
++(n − 1T
+m Ys 1m ) log(1 − 1m (Ps|s−1 ◦ Qs )1m ) − log((n − 1m Ys 1m )!)
+
+8:
+(p)
+
+(i)
+
+T
+πs|s ← (1T
+m Ps|s )
+end for
+(j)
+(i)
+(s) P
+w̄s ← wi / j ws ,
+
+9:
+10:
+11:
+
+resample
+
+12:
+
+(1)
+
+i = i, . . . , npart
+
+(i)
+(i) npart
+{βs , πs|s }i=1
+
+(i) n
+
+part
+according to {w̄s }i=1
+and keep track of ancestors in as =
+
+(nparts ) T
+
+[as · · · as
+13: end for
+
+]
+
+14:
+15:
+
+(i) n
+
+part
+sample ζ according to {w̄t }i=1
+(ζ)
+(ζ)
+(ζ)
+16: π̃t|t ← πt|t ,
+P̃t|t ← Pt|t , β̃t ← βt
+
+sample Z̃t from Mult(n, P̃t|t )
+for s = t − 1, . . . , 1 do
+π̃s|t ← P̃s+1|t 1m
+(ζ)
+
+ζ ← as ,
+
+20:
+21:
+22:
+23:
+24:
+
+(ζ)
+
+P̃s|s ← Ps|s ,
+(i,j)
+
+(ζ)
+
+β̃s ← βs
+(j,i)
+
+(i)
+
+Let Ls be the matrix with elements ls ← p̃s|s /π̃s|s
+for i = 1, . . . , m do
+(i,·)
+(·,i)
+sample Z̃s from Mult((Z̃s+1 1m )(i) , Ls )
+end for
+T
+P̃s|t ← (1m ⊗ π̃s|t ) ◦ Ls
+end for
+return {β̃s , P̃s|t , Z̃s }ts=1
+
+ESS
+
+0
+
+1000
+0
+
+ESS
+
+2500
+
+25:
+26:
+
+(ζ)
+
+π̃s|s ← πs|s ,
+
+2500
+
+18:
+19:
+
+1000
+
+17:
+
+0
+
+20
+
+40
+
+60
+
+80
+
+0
+
+20
+
+40
+
+60
+
+80
+
+Figure 10: Effective sample size for algorithm 5 on the left, and for the the particle filter of Kucharski
+et al. [2020] on the right. Remark that we exclude the evacuation flights data from Kucharski et al. [2020]
+from the latter to make a fair comparison with our model.
+(7,8)
+
+3. The new confirmed cases by date of onset internationally ỹs
+for s = 1, . . . , t:
+
+
+
+
+(7,8)
+ẑs ∼ Bin n, p̃s|t
+and ỹs(7,8) ∼ Bin ẑs , q (T ) .
+
+23
+
+(54)
+
+(W )
+
+^s
+4. The new confirmed cases by date in Wuhan ∆Conf
+(W )
+
+F̃0
+
+for s = 1, . . . , t:
+
+= 0,
+
+(55)
+
+
+(W )
+
+
+−γκ
+
+∆F̃s(W ) ∼ Bin z̃s(3,4) , 1 − e−e
+
+
+
+∼ Bin F̃s(W ) , 1 − e−κ ,
+
+^s
+∆Conf
+
+,
+
+(56)
+
+(W )
+
+(W )
+
+^s
+F̃s+1 = F̃s(W ) + ∆F̃s(W ) − ∆Conf
+
+.
+
+(57)
+(T )
+
+^s
+5. The new confirmed cases by date internationally ∆Conf
+(T )
+
+F̃0
+
+for s = 1, . . . , t:
+
+= 0,
+
+(58)
+
+
+∆F̃s(T ) ∼ Bin z̃s(7,8) , 1 − e−e
+
+−γκ
+
+
+
+(T )
+
+^s
+∆Conf
+
+,
+
+
+
+
+
+∼ Bin F̃s(T ) , 1 − e−κ ,
+
+(59)
+
+(T )
+
+(T )
+
+^s .
+F̃s+1 = F̃s(T ) + ∆F̃s(T ) − ∆Conf
+
+(60)
+
+4
+0
+
+2
+
+Rt
+
+6
+
+8
+
+Figure 11 shows the results for the SMC algorithm Kucharski et al. [2020] applied to the same data
+as our method, i.e. with the evacuation flights data left out of the analysis. Therefore figure 11 can be
+compared directly against our figure 2 - see discussion in the main part of the paper.
+
+0
+Dec 15
+
+Jan 01
+
+Jan 15
+
+10
+8
+6
+4
+Dec 15
+
+confirmed
+
+Data (out−of−sample)
+Kurchaski (2020)
+50% credible interval
+95% credible interval
+
+Feb 01
+
+Data
+Kucharski (2020)
+50% credible interval
+95% credible interval
+
+2
+
+Feb 01
+0
+2000
+4000
+Daily new cases internationally
+0
+2
+4
+6
+8 10
+
+Jan 15
+
+20000
+
+40000
+
+Jan 01
+
+Feb 01
+
+0
+
+Daily cases internationally
+
+5
+
+10
+
+15
+
+20
+
+25
+
+Jan 15
+
+Data
+Kucharski (2020)
+50% credible interval
+95% credible interval
+
+Dec 15
+Daily new cases in Wuhan
+
+Jan 01
+
+0
+
+Daily new cases in China
+
+Dec 15
+
+Jan 01
+
+Jan 15
+
+Feb 01
+
+date_range
+Data (out−of−sample)
+Posterior mean
+50% credible interval
+95% credible interval
+
+Dec 15
+
+Jan 01
+
+Jan 15
+
+Feb 01
+
+Figure 11: Results for the COVID-19 model using Kucharski et al. [2020] methods without rescue flights
+data. Red line is date at which travel restrictions were introduced. Top: estimated reproduction number.
+Middle row: estimated daily new confirmed cases in Wuhan (left) and internationally (right), both with
+in-sample data by date of symptom onset. Bottom row, left: estimated new symptomatic but possibly
+unconfirmed cases (left axis) and out-of-sample new confirmed cases data (right axis); right: estimated
+confirmed international cases by date of confirmation, and out-of-sample data.
+
+References
+Christophe Andrieu, Arnaud Doucet, and Roman Holenstein. Particle markov chain monte carlo methods.
+Journal of the Royal Statistical Society: Series B (Statistical Methodology), 72(3):269–342, 2010.
+Fred Brauer. Compartmental models in epidemiology. Springer, 2008.
+Carles Bretó. Modeling and inference for infectious disease dynamics: a likelihood-based approach.
+Statistical Science: a review journal of the Institute of Mathematical Statistics, 33(1):57–69, 2018.
+
+24
+
+Mark Briers, Arnaud Doucet, and Simon Maskell. Smoothing algorithms for state–space models. Annals
+of the Institute of Statistical Mathematics, 62(1):61, 2010.
+Grant D Brown, Jacob J Oleson, and Aaron T Porter. An empirically adjusted approach to reproductive
+number estimation for stochastic compartmental models: A case study of two Ebola outbreaks.
+Biometrics, 72(2):335–343, 2016.
+Grant D Brown, Aaron T Porter, Jacob J Oleson, and Jessica A Hinman. Approximate Bayesian
+Computation for spatial SEIR(S) epidemic models. Spatial and Spatio-temporal Epidemiology, 24:27–37,
+2018.
+Olivier Cappé, Eric Moulines, and Tobias Rydén. Inference in hidden Markov models. Springer Science &
+Business Media, 2006.
+Gerardo Chowell, Nick W Hengartner, Carlos Castillo-Chavez, Paul W Fenimore, and Jim Michael Hyman.
+The basic reproductive number of Ebola and the effects of public health measures: the cases of Congo
+and Uganda. Journal of Theoretical Biology, 229(1):119–126, 2004.
+Simon de Lusignan, Jamie Lopez Bernal, Maria Zambon, Oluwafunmi Akinyemi, Gayatri Amirthalingam,
+Nick Andrews, Ray Borrow, Rachel Byford, André Charlett, Gavin Dabrera, et al. Emergence of a
+novel coronavirus (COVID-19): protocol for extending surveillance used by the Royal College of general
+practitioners research and surveillance centre and public health England. JMIR Public Health and
+Surveillance, 6(2):e18606, 2020.
+Matteo Fasiolo, Natalya Pya, and Simon N Wood. A comparison of inferential methods for highly
+nonlinear state space models in ecology and epidemiology. Statistical Science, 31(1):96–118, 2016.
+Sebastian Funk and Aaron A King. Choices and trade-offs in inference with infectious disease models.
+Epidemics, 30:100383, 2020.
+Andrew Gelman, Xiao-Li Meng, and Hal Stern. Posterior predictive assessment of model fitness via
+realized discrepancies. Statistica Sinica, 6(4):733–760, 1996.
+Adam J Kucharski, Timothy W Russell, Charlie Diamond, Yang Liu, John Edmunds, Sebastian Funk,
+Rosalind M Eggo, Fiona Sun, Mark Jit, James D Munday, et al. Early dynamics of transmission and
+control of COVID-19: a mathematical modelling study. The Lancet Infectious Diseases, 20(5):553–558,
+2020.
+Thomas G Kurtz. Solutions of ordinary differential equations as limits of pure jump Markov processes.
+Journal of Applied Probability, 7(1):49–58, 1970.
+Thomas G Kurtz. Limit theorems for sequences of jump Markov processes approximating ordinary
+differential processes. Journal of Applied Probability, 8(2):344–356, 1971.
+Theodore Kypraios, Peter Neal, and Dennis Prangle. A tutorial introduction to Bayesian inference for
+stochastic epidemic models using Approximate Bayesian Computation. Mathematical Biosciences, 287:
+42–53, 2017.
+Phenyo E Lekone and Bärbel F Finkenstädt. Statistical inference in a stochastic epidemic SEIR model
+with control intervention: Ebola as a case study. Biometrics, 62(4):1170–1177, 2006.
+Trevelyan J McKinley, Ian Vernon, Ioannis Andrianakis, Nicky McCreesh, Jeremy E Oakley, Rebecca N
+Nsubuga, Michael Goldstein, and Richard G White. Approximate Bayesian computation and SimulationBased Inference for Complex Stochastic Epidemic Models. Statistical Science, 33(1):4–18, 2018.
+Lawrence Murray, Daniel Lundén, Jan Kudlicka, David Broman, and Thomas Schön. Delayed sampling
+and automatic Rao-Blackwellization of probabilistic programs. In International Conference on Artificial
+Intelligence and Statistics (AISTATS). PMLR, 2018.
+Philip D O’Neill. Introduction and snapshot review: relating infectious disease transmission models to
+data. Statistics in Medicine, 29(20):2069–2077, 2010.
+Kiesha Prem, Yang Liu, Timothy W Russell, Adam J Kucharski, Rosalind M Eggo, Nicholas Davies,
+et al. The effect of control strategies to reduce social mixing on outcomes of the COVID-19 epidemic in
+Wuhan, China: a modelling study. The Lancet Public Health, 2020.
+25
+
+Gareth O Roberts, Jeffrey S Rosenthal, et al. Optimal scaling for various Metropolis-Hastings algorithms.
+Statistical science, 16(4):351–367, 2001.
+Mick Roberts, Viggo Andreasen, Alun Lloyd, and Lorenzo Pellis. Nine challenges for deterministic
+epidemic models. Epidemics, 10:49–53, 2015.
+Stefania Rubrichi, Zbigniew Smoreda, and Mirco Musolesi. A comparison of spatial-based targeted disease
+mitigation strategies using mobile phone data. EPJ Data Science, 7(1):1–15, 2018.
+Theresa Stocks. Iterated filtering methods for Markov process epidemic models. In Leonhard Held, Niel
+Hens, Philip D O’Neill, and Jacco Wallinga, editors, Handbook of Infectious Disease Data Analysis,
+chapter 11, pages 199–220. CRC Press, 2019.
+Joseph T Wu, Kathy Leung, and Gabriel M Leung. Nowcasting and forecasting the potential domestic
+and international spread of the 2019-nCoV outbreak originating in Wuhan, China: a modelling study.
+The Lancet, 395(10225):689–697, 2020.
+
+26
+
+

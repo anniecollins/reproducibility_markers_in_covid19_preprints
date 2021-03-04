@@ -1,0 +1,4552 @@
+Quantifying the Effects of Contact Tracing, Testing, and
+Containment Measures in the Presence of Infection Hotspots
+Lars Lorch∗ , Heiner Kremer† , William Trouleau‡ , Stratis Tsirtsis§ , Aron Szanto¶ ,
+Bernhard Schölkopf†,∗ , Manuel Gomez-Rodriguez§
+ETH Zürich, llorch@student.ethz.ch
+Max Planck Institute for Intelligent Systems, {heiner.kremer,bs}@tuebingen.mpg.de
+‡
+École Polytechnique Fédérale de Lausanne, william.trouleau@epfl.ch
+§
+Max Planck Institute for Software Systems, {stsirtsis,manuelgr}@mpi-sws.org
+¶
+Zerobase Foundation, aron@zerobase.io
+
+arXiv:2004.07641v4 [cs.LG] 26 Oct 2020
+
+∗
+
+†
+
+October 27, 2020
+Abstract
+Multiple lines of evidence at the individual and population level strongly suggest that infection
+hotspots, or superspreading events, where a single individual infects many others, play a key role in the
+transmission dynamics of COVID-19. However, most of the existing epidemiological models either assume
+or result in a Poisson distribution of the number of infections caused by a single infectious individual,
+often called secondary infections. As a result, these models overlook the observed overdispersion in the
+number of secondary infections and are unable to accurately characterize infection hotspots. In this
+work, we aim to fill this gap by introducing a temporal point process framework that explicitly represents
+sites where infection hotspots may occur. Under our model, overdispersion on the number of secondary
+infections emerges naturally. Moreover, using an efficient sampling algorithm, we demonstrate how to
+apply Bayesian optimization with longitudinal case data to estimate the transmission rate of infectious
+individuals at sites they visit and in their households, as well as the mobility reduction due to social
+distancing. Simulations using fine-grained demographic data and site locations from several cities and
+regions demonstrate that our framework1 faithfully characterizes the observed longitudinal trend of
+COVID-19 cases. In addition, the simulations show that our model can be used to estimate the effect of
+testing, contact tracing, and containment at an unprecedented spatiotemporal resolution, and reveal that
+these measures do not decrease overdispersion in the number of secondary infections.
+
+1
+
+Introduction
+
+As countries around the world aim to counteract rising numbers of COVID-19 infections [1–3], overwhelmingly
+growing evidence suggests that few infected people in infection hotspots, or superspreading events (SSEs),
+may be responsible for both explosive early growth of cases and sustained transmission in later stages [4–9].
+For example, in Hong Kong, the largest infection hotspots were traced back to four bars, which accounted for
+32.5% of all locally acquired infections from January 23 to April 28, 2020 [4]. In South Korea, an infection
+hotspot linked to a church was responsible for at least 60% of all recorded cases by March 18, 2020, and over
+1,000 infections were traced back to a single individual [10]. The first major outbreak in Germany occurred
+after an infected couple attended a carnival festivity in Heinsberg, with superspreading dynamics later verified
+from virus genome sequencing [11]. These lines of evidence suggests that, for COVID-19, the number of
+secondary infections caused by a single individual is overdispersed —most individuals infect few and a few
+infect many [12–14].
+1 Our
+
+code is publicly available at: https://github.com/covid19-model/
+
+1
+
+Most of the existing epidemiological models, including those developed and used in the context of the
+COVID-19 pandemic, either assume or result in a Poisson distribution of infections caused by an individual
+and do not explicitly represent sites of transmission. As Poisson distributions have the same mean and
+variance, this seemingly justifies containment measures that merely aim to reduce the effective reproduction
+number, i.e., the average number of infections caused by an individual. However, due to the overdispersion
+observed for COVID-192 , these models have been of little use for identifying conditions under which hotspots
+emerge [8, 12], helping design control measures tailored to prevent SSEs [18], or predicting where infection
+hotspots are most likely to occur [14].
+In this work, we take a first step towards addressing the above limitations and develop a flexible modeling
+framework that explicitly represents visits to sites where infections occur and hotspots may emerge. In
+particular, to realistically model the exposure of individuals at sites, our framework introduces
+(i) a “check-in” mobility model that characterizes the frequency and duration of each individual’s visits
+to specific sites, which can be configured using a variety of publicly available data
+(ii) a new rate of transmission at sites that quantifies the influence of environmental drivers, individual
+mobility patterns, and containment measures on the risk that each infected individual poses to their
+community.
+By using this new rate of transmission and an explicit representation of sites, our framework can naturally
+exhibit overdispersion of secondary infections, i.e., without explicitly encoding it, as shown in Figures 3 and 6.
+Our model uses temporal point processes [19] to represent events when individuals
+... check in at different sites, where they get in contact with and infect each other, possibly creating
+infection hotspots (Mobility).
+... become exposed, asymptomatic, presymptomatic, symptomatic, hospitalized, recovered, or die
+(Epidemiology).
+... are affected by measures such as social distancing and quarantines, or sites implement hygienic and
+capacity-limiting policies (Containment measures).
+... get tested or receive the outcome of a test (Testing).
+The efficient sampling algorithm for our model allows us to simulate the spread of COVID-19 in real-world
+cities and regions with hundreds of thousands of inhabitants under a variety of interventions and what-if
+scenarios. Building on this procedure, we demonstrate how to apply Bayesian optimization [20–22] with
+longitudinal COVID-19 case data to estimate the model parameters that control transmissions at sites.
+Finally, we showcase our method using fine-grained demographic data and site locations from several cities
+and regions in Germany and Switzerland. Our results demonstrate that our model can faithfully characterize
+real COVID-19 case trends and be used to estimate the effect of testing, contact tracing, and containment at
+an unprecedented spatiotemporal resolution. Moreover, they also reveal that these interventional measures
+do not decrease overdispersion in secondary infections. To facilitate research in this area, we release the
+implementation of our framework that includes the code required to run simulations in any desired region.
+Related work Most of the classical epidemiological literature has focused on developing population models
+[23, 24], unable to capture heterogeneous transmission dynamics at the individual level. More recently, there
+has been research on agent-based epidemic modeling [25–29], also in the context of COVID-19 [30–36].
+These models predominantly use multi-layer contact networks, discrete time, meta-populations, or Poisson
+transmission rate assumptions to characterize individual infections, rather than the frequency and duration of
+each individual’s visits to specific sites, as our model does. Two notable exceptions are by Aleta et al. [37],
+who use check-in data of real sites, yet only to configure the layers of a multi-layer contact network, and
+Ferreti et al. [38], who employ a time-varying transmission rate, but ultimately average over individuals
+who infect few or many others. However, none of the above models, including these two exceptions, are
+2 Overdispersion
+
+has been also observed in MERS and SARS outbreaks [15–17].
+
+2
+
+able to characterize the overdispersion in secondary infections that has been identified as a root cause of
+SSEs [4, 6–8]. In contrast, our model presents a paradigm shift in individual-level epidemic modeling, under
+which overdispersion in the number of secondary infections naturally emerges.
+
+2
+
+A Spatiotemporal Epidemic Model
+
+Given a set of individuals V, we track the current state of each single individual i ∈ V using a collection of
+state variables, which determine their mobility pattern, epidemiological condition, and testing status. The
+state transitions are modeled using stochastic differential equations (SDEs) with jumps, which faithfully
+captures (i) the stochastic nature of infection events and mobility patterns, (ii) events in continuous time, i.e.
+not in aggregate over a time period, and (iii) discrete state transitions—an individual either does or does not
+get infected, visit a site, or is tested positively.
+Specifically, the jumps are modeled using counting processes [19], say N (t), which record the number of
+discrete events in time {t1 , t2 , . . . , tn }, ti ∈ R+ before time t. The probability of an event occurring in a small
+time window [t, t + dt) is given by P (dN (t) = 1 | H(t)) = λ(t) dt with dN (t) ∈ {0, 1}, history of events H(t),
+and conditional intensity function λ(t), which can be interpreted as the instantaneous rate of events per unit
+of time. To ease the exposition, we describe the different types of state variables separately.
+Mobility Let S be the set of sites individuals can visit. For each individual i, let the indicator Pi,k (t) = 1
+if the individual is at site k ∈ S at time t and Pi,k (t) = 0 otherwise. We characterize the value of the states
+Pi,k (t) using the following SDE with jumps:
+dPi,k (t) = dUi,k (t) − dVi,k (t)
+
+(1)
+
+where Ui,k (t) and Vi,k (t) are counting processes recording the events of individual i arriving at and leaving
+site k ∈ S, respectively. Moreover, we define their intensity functions as follows:
+Y
+P (dUi,k (t) = 1 | H(t)) = λi,k (t)
+(1 − Pi,l (t)) dt
+l∈S
+(2)
+P (dVi,k (t) = 1 | H(t)) = Ui,k (t) vk dt
+where λi,k (t) is the rate at which individual i visits site k and 1/vk is the average duration of a visit to
+site k. The rates λi,k (t) and average duration 1/vk for every individual and site can be configured using
+publicly available data as available and desired. In our simulations, we used the spatial distribution of site
+locations, high-resolution population density data, country-specific information about household structure,
+and region-specific age demographics.
+Epidemiology We build on recent variations of the Susceptible-Exposed-Infected-Resistant (SEIR) compartment models that have been introduced in the context of COVID-19 modeling [33, 38]. More specifically,
+we define the epidemiological condition of each individual i ∈ V using the indicator state variables S(t) = {Si (t),
+Ei (t), Iia (t), Iip (t), Iis (t), Hi (t), Ri (t), Di (t)}i∈V with each ∈ {0, 1}, whose meaning is specified in Table 1.
+Their values and state transitions are characterized by the following SDEs with jumps:
+dSi (t) = −Si (t)dNi (t)
+dEi (t) = dNi (t) − dMi (t)
+dIia (t) = ai dMi (t) − dRia (t)
+dIip (t) = (1 − ai )dMi (t) − dWi (t)
+dIis (t) = dWi (t) − (1 − bi )dRis (t) − bi dZi (t)
+dRi (t) = ai dRia (t) + (1 − ai )dRis (t)
+dHi (t) = hi Iis (t)dYi (t) − (1 − bi )Hi (t)dRis (t) − bi Hi (t)dZi (t)
+dDi (t) = bi dZi (t)
+3
+
+(3)
+
+Table 1: Epidemiological state variables S(t)
+State
+Si (t)
+Ei (t)
+Iia (t)
+Iip (t)
+Iis (t)
+Hi (t)
+Ri (t)
+Di (t)
+
+Description
+Infected Contagious Symptoms
+is susceptible
+is exposed
+X
+is asymptomatic,
+mild course of disease
+X
+X
+is pre-symptomatic,
+progresses to Iis (t) later X
+X
+is symptomatic
+X
+X
+X
+is hospitalized
+X
+X
+X
+is resistant & recovered
+has died
+-
+
+where ai ∼ Bern(αa ) indicates whether an infected individual i is asymptomatic, hi ∼ Bern(αh ) whether
+they eventually require hospitalization, and bi ∼ Bern(αb ) whether they eventually die.
+The counting processes C(t) = {Ni (t), Mi (t), Ria (t), Ris (t), Wi (t), Yi (t), Zi (t)}i∈V model all the state
+transitions. For individual i, the first arrivals of the processes model the transition of i from susceptible to
+exposed (Ni (t)), from exposed to infected (Mi (t)), from presymptomatic infected to symptomatic infected
+(Wi (t)), from asymptomatic infected to resistant (Ria (t)), from symptomatic infected to resistant (Ris (t)),
+from symptomatic infected to hospitalized (Yi (t)), and from symptomatic infected to dead (Zi (t)).
+At the core of our modeling framework, we define the conditional intensity function λ∗i (t) of the exposure
+counting process Ni (t) as
+λ∗i (t)
+
+=
+
+X
+k∈S
+
+where
+
+βk Pi,k (t)
+
+X Z
+j∈V\{i}
+
+t
+
+Kj,k (τ ) e−γ(t−τ ) dτ
+
+(4)
+
+t−δ
+
+
+Kj,k (τ ) = Ijs (τ ) + Ijp (τ ) + µIja (τ ) Pj,k (τ )
+
+and P (dNi (t) = 1 | H(t)) = λ∗i (t) dt. In the above, we have that
+(i) βk ≥ 0 is the transmission rate due to presymptomatic and symptomatic individuals currently visiting
+site k.3
+(ii) µ ∈ [0, 1] is the relative transmission rate of asymptomatic compared to (pre-)symptomatic individuals.
+Rt
+(iii) t−δ Kj,k (τ )e−γ(t−τ ) dτ accounts for environmental transmission, i.e., it accounts for the fact that the
+virus may survive for some period of time on surfaces or in the air after an infected individual has left a
+site [39].
+The exposure intensity in Eq. 4 models that an individual’s instantaneous rate of exposure increases by a
+constant site-specific transmission rate βk when in contact with another infectious individual at a site, in
+addition to capturing environmental transmission. The exposure rate of each individual i only depends on
+the individual’s contacts, not the contacts of others. Infections within households can be characterized by
+adding an additional additive rate λH(i) (t) with transmission rate ξ to λ∗i (t), as outlined in Appendix A.
+As commonly done in this context [40, 41], the time-to-event distributions of the remaining mobilityindependent counting processes Mi (t), Ria (t), Ris (t), Wi (t), Yi (t), and Zi (t) are modeled as log-normal (log N ),
+starting at the time Ei (t), Iip (t), Iia (t) or Iis (t) become one, respectively. Their parameters are fixed based on
+recent estimates by COVID-19 literature and summarized in Table 2.
+3 Depending on the availability of labeled and unlabeled data, one may consider different settings, such as all sites sharing the
+same parameter β or sites of the same category c sharing βc .
+
+4
+
+Figure 1: Site locations by category in the mobility model of Bern, Switzerland. Circles depict
+schools and research institutes (blue), social places (orange), bus stops (green), workplaces (red), and
+supermarkets (purple).
+Containment measures In the above context, we can characterize a variety of containment measures.
+These may range from less restrictive (e.g., isolating individuals who have tested positive) to more restrictive
+(e.g., implementing a state of “lockdown” for the entire population via curfews). The effect of social distancing
+and quarantine can be faithfully characterized by reducing the rates λi,k (t) at which individuals visit sites in
+the mobility model by a fraction ρ. Business restrictions can be characterized by reducing (e.g., hygienic
+measures) or setting to zero (e.g., closures) the transmission rates βk of the sites individuals visit. In both
+cases, the measures lead to a reduction of the conditional intensities λ∗i (t) of the exposure counting processes
+Ni (t), possibly dynamically.
+Testing Our model maintains a queue Qtest of individuals to be tested. Over time, individuals are added
+to the queue according to a testing policy πtest (t), e.g., testing only symptomatic or vulnerable people.
+Individuals from the queue are tested at a rate λtest (t), which can be chosen to match location specific testing
+statistics. The outcome of tests is only known after a reporting delay ∆test .
+Formally, let the counting process T (t) record the number of known test outcomes by time t, and let Ti+ (t)
+and Ti− (t) be the number of times an individual i ∈ V has been tested positive and negative, respectively, by
+time t. Then, we characterize the state variables Ti+ (t) and Ti− (t) using the following SDEs with jumps:
+
+
+dTi+ (t) = Ei (t) + Iia (t) + Iip (t) + Iis (t) di (t) dT (t + ∆test )
+(5)
+
+
+dTi− (t) = Si (t) + Ri (t) di (t) dT (t + ∆test )
+where P (dT (t) = 1|H(t)) = λtest (t)dt and di (t) ∈ {0, 1} ∼ πtest (t) indicates whether i is tested at time t
+according to the policy.
+Contact tracing When an individual i is tested positive, individuals previously in contact with i could be
+isolated or advised to seek testing. Under our model, a location-based contact tracing system records the
+times when an individual i checks in at different sites k ∈ S, i.e., it observes Pi,k (t). Thus, it can identify
+the set of individuals Ci (t0 , tf ) who had contact with individual i during a time window [t0 − δ, tf ] at any
+possible site k ∈ S, where δ accounts for environmental transmission [39], analogous to the exposure rates
+λ∗i in Eq. 4. By contrast, a proximity-based tracing system would be unable to account for environmental
+transmission, only identifying physically close contacts Ci0 (t0 , tf ) of individual i during a time window [t0 , tf ].
+Once a tracing system has identified contacts Ci (t0 , tf ) or Ci0 (t0 , tf ), different contact tracing policies could be
+implemented in various contexts. Amongst many possible policies, we study the strategy of allocating tests
+5
+
+based on the empirical exposure probability of contacts of an infectious person, which can be estimated using
+our framework. Refer to Appendix B for details.
+
+3
+
+Sampling Algorithm
+
+In this section, we describe how to generate exact simulations of the individual epidemiological states S(t)
+under social distancing measures, business restrictions, and a testing and tracing strategy, given initial
+conditions S(0) as well as fixed or a priori simulated mobility patterns Pi,k (t) over a time horizon t ∈ [0, tmax ].
+Algorithmic backbone First, note that the epidemiological state variables S(t) in the model SDEs (3)
+change at – and only change at – events of the counting processes C(t). Since these state transitions happen
+at specific points in continuous time, all state variables S(t) are constant between two consecutive events
+when considering all event times of C(t) on one timeline. This leads us to the backbone principle for
+generating realizations of our model. We initialize the state variables S(0), compute the next time of state
+transition for each i ∈ V, and push these transition events onto one single temporally-sorted priority queue Q,
+simultaneously tracking the next events for all individuals of the model. Then, the algorithm loops repeatedly
+through (i) popping the next event e from Q; (ii) updating the state of individual i associated with e; (iii)
+sampling the next time t of state transition e0 for i; and (iv) pushing e0 to Q with priority t.
+As explained in Section 2, we fix the time-to-event distributions of all non-exposure processes C(t)\{Ni (t)}i∈V
+to independent, easy-to-sample distributions as estimated by clinical COVID-19 literature. Thus, sampling
+the first event time of Ni (t), i.e., the exposure time, is the central difficulty as the rates λ∗i (t) interact with
+all other state variables S(t) through the mobility model Pi,k (t).
+Sampling exposure times To sample the exposure event time of individual i, we need to sample the time
+to the next event of Ni (t) with rate λ∗i (t). To this end, we first decompose the intensity λ∗i (t) into a sum of
+contributions λ∗j→i (t) caused by other individuals j
+λ∗i (t) =
+
+X X
+j∈V\{i} k∈S
+
+Z
+
+t
+
+βk Pi,k (t)
+
+Kj,k (τ )e−γ(t−τ ) dτ =:
+
+t−δ
+
+X
+
+λ∗j→i (t),
+
+(6)
+
+j∈V\{i}
+
+where the last summation over j ∈ V\{i} is sparse as it effectively indexes over contacts of individuals i at
+times in the future, since λ∗j→i (t) = 0 when i and j are not in contact directly or j left site k ∈ S more than
+δ-time before i arrived.
+By Eq. 6, the counting process
+Ni (t) can be seen as a superposition of several processes Nj→i (t) with
+P
+rates λ∗j→i (t), i.e., Ni (t) = j∈V\{i} Nj→i (t). Hence, the first arrival of the counting process Ni (t) is the
+minimum of the next arrival times of all Nj→i (t) [19, 42]. Since we have the temporally-sorted priority
+queue Q in place, we can use its ordering invariant to process valid exposure events of individuals on the fly.
+Whenever an individual j becomes infectious – either via Ija = 1 or Ijp = 1 – we sample the next exposure
+event that j causes for every individual i in contact with j in the future at rate λ∗j→i (t), and push the events
+onto Q. When an exposure event e for individual i is popped from Q in step (i), we check that e is the first
+exposure of individual i by verifying Si (t) = 0, discarding later exposure events for i that get popped from Q
+by finding Si (t) = 1.
+We can sample the next event time of Nj→i (t) after time t0 by thinning [19], i.e., adding up τ ∼ Expo(λmax
+j→i )
+max
+∗
+to t0 until stopping with probability λ∗j→i (t0 )/λmax
+j→i , where λj→i is an upper bound on λj→i (t). By Eq. 6, we
+∗
+∗
+have λmax
+j→i = maxk∈S {βk (1 − exp(−γδ))/γ} ≥ λj→i (t) ∀t ∈ R+ . Note that λj→i (t) is non-zero only when j
+has infectious contact with i, either by meeting i at a site k ∈ S or by leaving k less than δ-time before i
+arrives. We skip zero-intensity windows whenever reaching λ∗j→i (t) = 0 during thinning, which is sound by
+viewing Nj→i (t) itself as a superposition of counting processes, one for each interval of non-zero intensity,
+and skipping their initial zero-rate periods by the memoryless property.4
+4 If
+
+T ∼ Expo(λ), then P (T ≥ t + s | T ≥ s) = P (T ≥ t).
+
+6
+
+Thinning While the above handles the generation of exposure events, an individual j could recover before
+all exposures caused by j occurred, i.e., got popped from Q. If j recovers, i.e. Rj (t) = 1, then λ∗j→i (t) = 0 in
+Eq. 6 at the time of this event, which was pushed to Q earlier when λ∗j→i (t) > 0. By the principle of thinning,
+such an exposure event has to be discarded, which can be easily verified on the fly by checking Rj (t) 6= 1 at
+the time of exposure. Lastly, note that measures such as social distancing – sparsifying Pi,k (t) – or business
+restrictions – reducing βk – always reduce the rates λ∗j→i (t) in Eq. 6, and can thus also be implemented using
+thinning, i.e., rejecting affected exposure events with some probability.
+Queue-based sampling algorithm Combining our considerations above, we arrive at an efficient sampling
+procedure using a single temporally-sorted priority queue Q for generating sound simulations of the model
+SDEs. The pseudocode for the overall sampling algorithm is provided in Algorithms 2 and 3 in the appendix.
+While a formal analysis of its computational complexity depends on many moving parts, we have empirically
+found that our sampling algorithm scales to regions with hundreds of thousands of inhabitants. For example,
+an 8-week simulation of Tübingen under “lockdown“ interventions with 90,546 inhabitants and 1,472 sites
+(see Section 6, Figure 2) takes 20.7 ± (4.6) minutes on a 2020 MacBook Air. Moreover, note that random
+rollouts can be embarrassingly parallelized.
+
+4
+
+Parameter Estimation
+
+Given a fixed set of individual mobility traces Pi,k (t) for t ∈ [0, tmax ] over tmax days as well as initial conditions
+S(0), we build upon the sampling algorithm introduced in Section 3 and apply Bayesian optimization (BO)
+to estimate the model parameters θ = {{βk }, ξ, ρ} using real COVID-19 case data in a given region [20, 21].
+Bayesian optimization BO defines a probabilistic surrogate model p of a black-box objective f to be
+maximized, which is however only observed at a set D of noisy evaluations. As commonly done, we choose p
+to be a Gaussian process (GP) posterior. An acquisition function defined over p guides the strategy of where
+to next evaluate f . BO then amounts to repeatedly evaluating f at arguments proposed by the acquisition
+function over p, and updating p with the newly observed evaluations of f [20, 43].
+Black-box model We define the black-box functions observed from our model as the mean number of
+positive cases at time t
+gt (θ) = ET ∼T(θ)
+
+h X
+
+i
+Ti+ (t) ≈
+
+Ti+ ∈T
+
+J
+1X
+J j=1
+
+X
+
+Ti+ (t)
+
+(7)
+
+Ti+ ∈T (j)
+
+with free exposure parameters θ and {Ti+ (t)} =: T (j) ∼ θ being sets of state variables indicating a positive
+test, sampled independently and randomly from the model under θ. Observations of gt (θ) are stochastic and
+can be seen as noisy, as we use mean positive cases of J random realizations to approximate the expectation.
+Realizations T (j) are stochastic not only due to the counting processes, but in absence of real mobility
+traces also due to random seeds S(0) and synthetic Pi,k (t), independently simulated for each rollout. We will
+view the tmax stochastic functions gt as one vector-valued black-box function defined as g(θ) ∈ R|tmax | with
+g(θ)t := gt (θ).
+Objective function The objective we aim to minimize in our setting is the sum of daily squared errors of
+cumulative positive cases between the model predictions and real COVID-19 case data over a horizon of tmax
+days. This allows us to form a link between the spatiotemporal states of each individual in the model and
+aggregate longitudinal case data. The squared error has been previously considered in parameter estimation
+for black-box models [44].
+
+7
+
+Algorithm 1 Parameter estimation using Bayesian optimization
+Input: Black-box simulator g(θ), parameter domain dom(θ), time horizon tmax , case data ctrue
+, hyperparameters N , M , J
+t
+P max true
+(ct
+− xt )2
+1: s(x) := − tt=1
+2: θ1:M ← first M points of Sobol sequence [50] in |θ| dims., scaled to dom(θ)
+3: D ← ∅
+4: for i ∈ [M ] do
+. Quasi-random exploration for initialization
+5:
+Obtain noisy sim. evaluation g(θi ) from J random roll-outs
+6:
+D ← D ∪ {(θi , g(θi ))}
+7: while |D| ≤ N do
+. Bayesian Optimization
+8:
+p(g(θ)) | D) ← GP(D)
+9:
+θ∗ ← arg maxθ0 ∈dom(θ) KG(θ0 )
+10:
+Obtain noisy sim. evaluation g(θ∗ ) from J random roll-outs
+11:
+D ← D ∪ {(θ∗ , g(θ∗ ))}
+12: return arg max(θ,g(θ))∈D s(g(θ))
+
+Let ctrue
+be the cumulative number of real COVID-19 cases at the end of day t as provided by the national
+t
+authorities [45, 46]. Then, our objective f to be maximized is a composition of the negative squared error
+score s and the black-box function g from above.
+tX
+max 
+
+
+2
+f (θ) = s g(θ) = −
+ctrue
+−
+g
+(θ)
+t
+t
+
+(8)
+
+t=1
+
+The composition of f allows for greater sample efficiency since the surrogate model p is able to learn the
+black-box function g directly, which has recently shown to bear great performance boosts [43, 44].
+Knowledge gradient Since evaluations of f are inherently noisy, we use the knowledge gradient acquisition
+function (KG) [47, 48] to navigate parameter proposals, which often shows favorable performance in noisy
+settings [43, 49]. KG quantifies the expected increase in the maximum of the posterior mean of p after an
+observation at a given θ. The KG of measuring at θ is defined as
+h
+
+i
+KG(θ) := Ey∼p(g(θ) | D) µ∗ D ∪ {(θ, y)} − µ∗ D
+(9)
+
+
+
+µ∗ (.) = 0 max E s g(θ0 ) .
+(10)
+θ ∈dom(θ)
+
+where µ∗ (D ∪ {(θ, y)}) and µ∗ (D) denote the maxima of the conditional means of the objective f given the
+observations D ∪ {(θ, y)} and D, respectively, under the surrogate model p.
+Combining the above into the BO paradigm, the overall parameter estimation procedure is summarized in
+Algorithm 1.
+
+5
+
+Experimental Design
+
+We showcase our modeling framework on both rural and urban areas in Germany and Switzerland spanning
+a wide range of infection levels until July 2020. More specifically, we experiment with two cities and one
+district (Landkreis) in Germany—Tübingen, Kaiserslautern and the Landkreis of Rheingau-Taunus—and two
+cities and one state (Canton) in Switzerland—Bern, Locarno, and the Canton of Jura. See Table 4 in the
+appendix for details.
+
+5.1
+
+Scenarios
+
+We use the sampling algorithm for our model derived in Section 3 to simulate the spread of COVID-19 under
+a variety of interventions in two different scenarios:
+8
+
+• Scenario A (Initially uncontrolled): Early stage of the outbreak. After a reaction delay, governments
+aim to globally contain and suppress infections in the population. At the time of intervention, there is
+already a significant number of infections.
+Setup: We simulate the spread of COVID-19 from the day when a given region had five to ten confirmed
+cases, typically in early March, until the end of the “lockdown” period5 , assuming that measures are in
+place only during the “lockdown” period. Refer to Appendix C for details on state initialization in this
+scenario.
+• Scenario B (Continual suppression): Later stage of the epidemic. Measures taken by the governments
+ended the first wave of infections. Local outbreaks occur due to imported cases, e.g., from visits to other
+regions. Contact tracing and localized interventions are employed as more fine-grained tools.
+Setup: We simulate the spread of COVID-19 for 120 days assuming five imported cases per week per 100,000
+inhabitants in expectation.
+
+5.2
+
+Mobility traces
+
+For lack of real check-in traces Pi,k (t) available to us, we utilize real demographic and geolocation data to set
+the values of the intensities λi,k (t) and vk in the mobility model of Section 2, which we then use to generate
+synthetic check-in traces.
+Demographic data We use high-resolution population density data provided by Facebook Data for Good
+[54] to build a region-specific population model. A respective area population V is proportionally assigned to
+equally-sized tiles according to the population density in each tile. Individuals belong to one of six age groups
+according to the real demographics of the region, matching the age groups of the COVID-19 case data [45, 46].
+Ultimately, these individuals are placed in households of sizes one to five according to their age categories
+and country-specific household structure [55, 56], and then are located uniformly at random within their tile.
+Geolocation data To obtain relevant site locations in our regions of interest, we use geolocation data
+provided by OpenStreetMap [57]. Specifically, we retrieve the location of all sites S in five site categories:
+education (schools, universities, research institutes), social (restaurants, cafés, bars), transportation (bus
+stops), work (offices, shops), and groceries (supermarkets, convenience stores).
+Setting the intensity values We assume each individual i visits only a constrained set of unique sites
+Si ⊂ S, which are picked with probability inversely proportional to the squared distance from their homes.
+This reflects the fact that individuals typically study or work at only one place, form habits regarding the
+public transportation they use, and social places or supermarkets they visit. More specifically, we assume
+each individual visits one site for education and work, ten social sites, five sites for transportation, and two
+sites for groceries. Then, for each individual i and site k ∈ Si , we set the intensity λi,k (t) to a constant value
+that depends on the individual’s age group and the site type. Refer to Table 3 for details. Here, we assume
+people of younger ages spend most of their time at school and social sites, middle-age people spend most of
+their time at work and elderly people have lower activity over all. Finally, we set the mean duration 1/vk of
+any visit to a site heuristically according to the site type. In particular, we set the mean duration of visits to
+sites in education and work, social, transportation, and groceries to 120, 90, 12 and 30 minutes, respectively.
+Note that since people are neither exposed to all others at a site nor continually exposed during their visit,
+the visit duration in some categories are set to lower values than one would expect as real visit durations.
+5 This period of most restrictive measures started on March 23 and 16, 2020 and ended on May 3 and 10, 2020 in Germany
+and Switzerland, respectively [51–53].
+
+9
+
+.BS 
+
+"QS 
+
+Tübingen
+
+
+
+.BS 
+
+"QS  .BZ 
+
+Locarno
+
+
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+
+
+"QS 
+
+"QS 
+
+Kaiserslautern
+
+
+.BS 
+
+"QS 
+
+Bern
+
+"QS 
+
+
+
+
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+
+
+1PTJUJWF DBTFT
+
+
+
+1PTJUJWF DBTFT
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+1PTJUJWF DBTFT
+
+
+
+
+
+1PTJUJWF DBTFT
+
+1PTJUJWF DBTFT
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+
+
+
+
+
+
+
+1PTJUJWF DBTFT
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+
+
+4JNVMBUFE DBTFT
+3FBM DBTFT
+
+
+
+.BS 
+
+"QS 
+
+Rheingau-Taunus-Kreis
+
+
+
+.BS 
+
+"QS 
+
+.BZ 
+
+Canton Jura
+
+Figure 2: Cumulative number of cases for the models of the considered regions. The red line
+represents the mean cumulative number of positively tested individuals over 48 random realizations, shaded
+regions correspond to two times the standard deviation. The dashed line represents the start of the “lockdown”
+measures, and the black line the real observed cases. Averaged over days of simulation, the mean absolute
+error (MAE) of predicted cases ranges between 10-30 cases across the six regions.
+
+5.3
+
+Exposure parameter estimation
+
+Using the procedure described in Section 4, we estimate a single transmission rate βk = β for all sites, a
+parameter ξ for households, and the mobility reduction ρ due to social distancing, randomly generating
+mobility traces Pi,k (t) for each new rollout T (j) of the model as described above. To this end, we use
+COVID-19 case data of county-level administrative regions6 [45, 46] over the time period described in
+Scenario A and set the mortality and hospitalization rates per age group using this data and previous
+studies [30]. Moreover, we emulate the corresponding business restrictions in place during the “lockdown”. For
+scalability reasons, we downscale the model during parameter estimation. Refer to Appendix D for additional
+information. Appendix E discusses when parameter estimation using downscaled models may fail.
+
+5.4
+
+Testing
+
+To abstract away from testing criteria implemented in different regions, we assume that only true symptomatic
+individuals are registered for testing unless noted otherwise, and that the testing queue follows the first-infirst-out principle. We set the reporting delay ∆test to 48 hours, accounting for both the delay in self-reporting
+and the testing procedure, and set the daily testing rate λtest (t) to the inverse of the maximum daily increase
+in positive cases in the COVID-19 data of the region. Moreover, we assume tests have perfect accuracy and
+positively tested individuals stop visiting sites and isolate themselves from their household.
+
+6
+
+Results
+
+Using the estimated parameters β, ξ, ρ as listed in Table 5, we first validate that our model is able to faithfully
+characterize the real COVID-19 case data during the time period of Scenario A. Figure 2 summarizes the
+results, which show that the model consistently reproduces the longitudinal trend of real cases in all regions,
+and that the parameters estimated using the downscaled models are a good fit for the full-scale models used
+during validation. For the same setting, Figure 3 shows the distribution of secondary infections for the city
+of Bern. We find that the effective reproduction number Rt is pushed below the threshold of one, yet also
+observe that the measure of dispersion kt is significantly lower than one during and after interventions. This
+suggests overdispersion in the number of secondary infections, i.e., a situation where few individuals are
+likely to infect many. We found qualitatively similar results for all the other regions, which are summarized
+in Figures 8 and 9 in the Appendix.
+Next, we use the estimated parameters to investigate the extent to which containment of the first wave of
+infections in Scenario A would have been feasible using measures with lower impact on civil liberties and the
+economy. To this end, we explore three counterfactual “what-if” scenarios that implement milder containment
+measures than those that were in place during the “lockdown” period. We show the results of an informative
+6 For
+
+cities, cases scaled proportionally to population, for lack of more available data.
+
+10
+
+ճՙ
+
+ϯ
+
+ճՙ
+
+ϯ
+
+Κ
+
+ϵ
+
+ϵ
+
+φ
+
+φ
+Apr 07
+
+Ј
+Mar 10 Mar 24
+
+Apr 21
+
+(a) Realistic lockdown
+
+0.6
+
+𝑅𝑡 = 3.32 ± (0.75)
+𝑘𝑡 = 1.11 ± (0.38)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+(c) Pre-lockdown
+
+Probability
+
+Probability
+
+0.8
+
+0.4
+
+𝑅𝑡 = 0.52 ± (0.07)
+𝑘𝑡 = 0.69 ± (0.20)
+
+0.2
+
+Apr 21
+
+0.8
+
+NB
+Empirical
+
+0.6
+
+0.0
+
+Apr 07
+
+(b) Early ending lockdown
+
+0
+
+10
+
+Number of Secondary Cases
+(d) During lockdown
+
+Probability
+
+Ј
+Mar 10 Mar 24
+
+0.4
+
+Interv.
+
+Interv.
+
+Κ
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 3.34 ± (1.85)
+𝑘𝑡 = 0.19 ± (0.06)
+
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+(e) Post-lockdown
+
+Figure 3: Effective reproduction number in Bern (a) in the realistic lockdown scenario and (b)
+when restrictions are lifted after 4 weeks, where lines represent mean estimates with shaded
+standard deviations. We use the approach of Athreya et al. [9], which fit a Negative-Binomial (NB)
+distribution to the number of secondary cases. For (b), we also report the distribution of secondary cases
+for pre-lockdown (c), in-lockdown (d), and post-lockdown (e) periods, where kt < 1 corresponds to the
+overdispersion regime.
+subset of the investigated regions here and refer to the longer version of the paper for a comprehensive
+visualization of all results.
+Early ending “lockdown” We implement the same restrictive measures as in place during the “lockdown”
+period both in Germany and Switzerland, but reduce their duration. Figures 3 and 4a summarize the results
+for Bern and Rheingau-Taunus-Kreis, and Figure 10 in the Appendix for the other regions. The results
+suggest that, to end the first wave of infections, it should have been sufficient to maintain the “lockdown”
+period for just one month rather than two, whereas a period of two weeks would have been insufficient.
+However, in Bern as well as in all other regions except for Rheingau-Taunus-Kreis, a resurgence of infections
+would have occurred shortly after the end of the one month “lockdown”.
+Alternating curfews for random subgroups We divide the population into K subgroups and, on each
+day, alternately prescribe curfews to K − 1 of the groups, only allowing one group to follow their usual
+daily activities. Figure 4b summarizes the results for Kaiserslautern and Canton Jura, and Figure 10 in the
+Appendix for the remaining regions. The results suggest that, as long as the number of groups K > 2, this
+containment strategy would be effective at reducing both intra- and inter-group exposure events, as argued
+by previous work [58, 59], and the number of infected individuals would have followed a similar course as in
+the “lockdown” scenario. However, for K = 2 groups, the results are mixed. In all the considered German
+towns and regions, the strategy would still be relatively successful, while in Bern and the Canton of Jura, the
+number of infected individuals would have constantly increased. Interestingly, this qualitative difference in
+outcome for K = 2 is reflected in the effective reproduction number shown in Figure 10, which is estimated
+as marginally below and above the threshold of 1, respectively.
+
+11
+
+ϵЈЈЈ
+
+ΚЈЈ
+ϵЈЈ
+
+Ј
+Mar 10
+
+Ј
+
+May 05
+
+Apr 07
+Bern
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+ΘЈЈ
+
+ϩЈЈ
+
+People
+
+φЈЈЈ
+
+Interventions
+
+People
+
+φΘЈЈ
+
+΅ЈЈ
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Mar 17
+
+Mar 31
+
+Apr 14
+
+Apr 28
+
+Rheingau-Taunus-Kreis
+(a) Early ending lockdown
+
+ϵЈЈ
+
+People
+
+ϯЈЈ
+
+Interventions
+
+People
+
+ΚЈЈ
+
+ϯЈЈЈ
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+ϵЈЈЈ
+φЈЈЈ
+
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+Interventions
+
+ΘЈЈ
+
+φЈЈ
+Ј
+
+Mar 31
+
+Ј
+
+Apr 21
+
+Mar 24
+
+Kaiserslautern
+
+Apr 21
+
+Canton Jura
+(b) Curfews for subgroups
+
+Figure 4: Number of infected individuals in different counterfactual scenarios and regions. The
+lines in panel represent the mean of the number of infected over 48 random realizations of the simulations,
+the shaded regions correspond to two times the standard deviation.
+Social distancing of vulnerable groups In this scenario, the population over 60 years old, who typically
+suffers more complications from COVID-19 [45], follows the same social distancing measures that were in
+place during the “lockdown” period and the rest of the population follows their usual daily activities. Figure 11
+in the Appendix summarizes the results, which are consistent across all considered regions. The results
+suggest that this containment strategy would not end the first wave of infections. In addition, we also find
+that such a strategy would only modestly reduce the number of hospitalizations and fatalities, questioning
+the effectiveness of controversial policies that initially advocated for isolating only the people who are most
+endangered.
+Next, we focus on Scenario B and investigate the effectiveness of adaptive containment measures that utilize
+testing and contact tracing to suppress a second wave of infections.
+Conditional “lockdowns” based on weekly incidence Whenever the number of new cases within 7
+days exceeds the threshold of 50 per 100,000 inhabitants, we implement the same restrictive measures that
+were in place during the “lockdown” period in Scenario A. This has been the strategy in place in Germany
+after May 6, 2020 [60]. Figure 5 shows the number of infected people over time in single realizations of the
+model for Tübingen and Bern. The other regions are shown in Figure 12 in the Appendix. We observe that
+the repeated lifting of measures leads to fluctuations in the number of infected individuals, but the short
+“lockdowns” are able to quickly reduce the number of new cases below the desired threshold. While the typical
+length of the interventions is two weeks in Tübingen, we find that, e.g., in Bern, case-conditional “lockdowns”
+typically last for four weeks. Qualitatively similar results were obtained across realizations for all the other
+regions.
+
+12
+
+ϵЈЈЈ
+
+ϵЈЈЈ
+No interventions
+Conditional measures
+
+φΘЈЈ
+
+People
+
+People
+
+φΘЈЈ
+φЈЈЈ
+ΘЈЈ
+Ј
+
+No interventions
+Conditional measures
+
+φЈЈЈ
+ΘЈЈ
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+Ј
+
+φЈЈ
+
+(a) Tübingen
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+(b) Bern
+
+Figure 5: Number of infected people in single simulations of the model of Tübingen and Bern
+under conditional “lockdowns” based on weekly incidence. Dashed and solid vertical lines indicate
+beginning and ending of the “lockdowns”.
+Contact tracing for isolation and testing Whenever an individual is tested positive, we use contact
+tracing to identify all their contacts in the 10 days leading up to the test result and isolate them from everyone
+for 14 days, unless mentioned otherwise. We investigate to what extent the use of rapid testing [61], i.e.,
+setting ∆test = 3h, or further testing of contacts7 can increase the effectiveness of the above basic strategy.
+Finally, we evaluate the effectiveness of contact tracing for isolation and testing under constraints on the
+compliance and an advanced testing strategy.
+Figure 6 summarizes our results for Tübingen. In Figure 6a, we observe that the basic strategy, which only
+implements isolation of contacts, is already able to avoid a significant resurgence in infections. Moreover, the
+use of rapid tests and further testing of contacts provide an additional reduction on the mean and variance
+of infection counts across random roll-outs. Interestingly, under further testing of contacts, the number of
+infected people over time reaches a steady state—the effective reproduction number Rt is pushed towards
+one, as shown in Figure 6b. However, in this steady state, Figure 6c shows that the number of secondary
+infections is overdispersed with kt = 0.25 ± (0.22), and thus a resurgence in infections may be increasingly
+likely due to a superspreading event. Similar findings are obtained for all other regions studied, as shown
+in Figure 13 in the Appendix. In further investigations, we also find that, when testing only the top 20
+contacts ranked according to empirical probability of exposure of Appendix B, it is possible to achieve the
+same reduction in infections as when testing all contacts, even though the overall number of tests is reduced
+by 70-90% (from 47,927 to 8,821 tests in Tübingen). Finally, in Figure 6d, we observe that the effectiveness
+of contact tracing gradually degrades with lower compliance due to the “x2 problem” of adoption [38, 62],
+i.e., two parties needing to adopt contact tracing for the infection chain to be tracked.
+Narrowcasting exposure risk at sites To circumvent the “x2 problem”, we also test an alternative
+strategy called narrowcasting [63], where health authorities use contact tracing data of positively tested
+individuals to make public announcements about risk of infection, highly tailored to a location or a subset of
+individuals. In Appendix F, we explain how to estimate the empirical probability of exposure at a site, which
+help us identify potential infection hotspots. Figure 7 presents an example of narrowcasting the empirical
+probability of exposure in Tübingen during Scenario A under the estimated “lockdown” measures. Figure 15
+in the Appendix presents narrowcasting for the other towns and regions.
+
+7
+
+Discussion
+
+Motivated by multiple lines of evidence that strongly suggest for infection hotspots to play a key role in the
+transmission dynamics of COVID-19, we have introduced a spatiotemporal epidemic model that explicitly
+7 Here,
+
+we assume sufficient testing capacity for every traced contact to be tested.
+
+13
+
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+Κ
+
+0.8
+
+ϵЈЈ
+
+Probability
+
+ϯ
+
+ճՙ
+
+People
+
+ϯЈЈ
+
+ϵ
+
+φЈЈ
+Ј
+
+φ
+Ј
+
+ΘЈ
+
+Ј
+
+φЈЈ
+
+֏ [days]
+
+(a) Infected people
+
+Ј
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+φϵΘ
+
+NB
+Empirical
+
+0.6
+
+𝑅𝑡 = 0.82 ± (0.27)
+𝑘𝑡 = 0.24 ± (0.11)
+
+0.4
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+
+(b) Effective reproduction number (c) Distribution of secondary cases
+(isolate & test)
+(isolate & test)
+
+ϵЈЈЈЈ
+No interventions
+25% compliance
+50% compliance
+65% compliance
+75% compliance
+100% compliance
+
+People
+
+φΘЈЈЈ
+φЈЈЈЈ
+ΘЈЈЈ
+Ј
+
+Ј
+
+ϵЈ
+
+ΚЈ
+
+ϩЈ
+
+֏ [days]
+
+΅Ј
+
+φЈЈ
+
+φϵЈ
+
+(d) Robustness against compliance
+(isolate & test)
+
+Figure 6: Contact tracing for isolation and testing in the model of Tübingen. Panel (a) shows
+the number of infected people under different strategies and reporting delays ∆test . Within the testing and
+isolation scenario (∆test = 48h), panel (b) shows the effective reproduction number, (c) the distribution of
+secondary cases and (d) infected people for different compliance levels.
+represents sites where infections occur and hotspots may emerge. Through an extensive case study that used
+fine-grained demographic data, site locations, and COVID-19 data from several cities and regions in Germany
+and Switzerland, we have demonstrated that our model faithfully characterizes the observed longitudinal
+trend of COVID-19 cases. Our results reveal both qualitative and quantitative differences and similarities
+across geographically diverse areas spanning a wide range of case incidences, and demonstrate that our model
+may allow individuals and policy-makers to make more effective decisions. Importantly, our results also
+suggest that social distancing or contact tracing did not reduce overdispersion in the number of secondary
+infections, though effective containment measures would demand preventing SSEs [12, 18]. To facilitate this,
+we release an easy-to-use implementation of the entire framework necessary to perform experiments for any
+desired region.
+In our work, we have used fine-grained demographic data and site locations to configure our mobility
+model. However, if data from contact tracing become accessible to researchers, we believe that our predictions
+could have lower variance and it would be possible to use our framework to identify areas with higher risk of
+infection in real time. Beyond legal compliance and gaining societal acceptance, the use of epidemic models
+with high spatiotemporal resolution such as ours should respect each individual’s privacy. In this context,
+it is important to highlight that, both during parameter estimation and contact tracing, we only need to
+compute the contact duration of individuals with an infected person—the identity of the infected person is
+not required. As a result, there are reasons to believe that such computations can be made in a decentralized
+and privacy-preserving manner [64, 65]. Finally, although our model has greater resolution than many of
+those in use today, its predictions can only be faithfully considered when being aware of the high variance
+observed across random realizations.
+14
+
+Figure 7: Narrowcasting of exposure risk at sites during a time window of two weeks of the
+realistic “lockdown” scenario in Tübingen. Circles represent sites and the size of each circle is proportional to the site’s empirical probability of exposure of a visiting individual during the time period. Colors
+represent site types as in Figure 1.
+
+Acknowledgements
+We thank the Robert-Koch-Institute, OpenStreetMaps and Facebook for providing data to make this work
+possible. We thank Brian Karrer from Facebook for his insightful comments and suggestions regarding
+Bayesian optimization, Kevin Murphy, Yusef Shafi and others from Google for helpful discussions, and Yannik
+Schaelte for useful comments on a preliminary version of this work. We thank Cansu Culha and the Stanford
+Future Bay Initiative as well as Pavol Harar from the University of Vienna for working with us to improve
+our publicly available implementation. This work was supported in part by SNSF under grant number
+200021-182407.
+
+References
+[1] World Health Organization, “Coronavirus disease (COVID-2019) situation reports,” 2020. [Online].
+Available: https://www.who.int/emergencies/diseases/novel-coronavirus-2019/situation-reports/
+[2] Johns Hopkins University & Medicine, “Coronavirus resource center,” 2020. [Online]. Available:
+https://coronavirus.jhu.edu/
+[3] World Health Organization, “WHO Director-General’s opening remarks at the media briefing on
+COVID-19 - 11 March 2020,” 2020. [Online]. Available: https://www.who.int/dg/speeches/detail/
+who-director-general-s-opening-remarks-at-the-media-briefing-on-covid-19---11-march-2020
+[4] D. C. Adam et al., “Clustering and superspreading potential of SARS-CoV-2 infections in Hong Kong,”
+Nature Medicine, 2020.
+[5] MSF, “Too little, too late: The unacceptable neglect of the elderly in care homes during the COVID-19
+epidemic in Spain,” 2020. [Online]. Available: https://msfcovid19.org/wp-content/uploads/2020/08/
+msf-report-too-little-too-late-elderly-and-covid-in-ltcf-english.pdf
+
+15
+
+[6] A. Endo et al., “Estimating the overdispersion in COVID-19 transmission using outbreak sizes outside
+China,” Wellcome Open Research, 2020.
+[7] M. S. Lau et al., “Characterizing superspreading events and age-specific infectiousness of SARS-CoV-2
+transmission in Georgia, USA,” Proceedings of the National Academy of Sciences, vol. 117, no. 36, 2020.
+[8] T. Frieden and C. Lee, “Identifying and interrupting superspreading events—implications for control of
+severe acute respiratory syndrome coronavirus 2,” 2020.
+[9] S. Athreya, N. Gadhiwala, and A. Mishra, “Effective reproduction number and dispersion under
+contact tracing and lockdown on COVID-19 in Karnataka,” medRxiv, 2020. [Online]. Available:
+https://www.medrxiv.org/content/early/2020/08/22/2020.08.19.20178111
+[10] “The Korean clusters: How coronavirus cases exploded in South Korean churches and hospitals,” 2020.
+[Online]. Available: https://graphics.reuters.com/CHINA-HEALTH-SOUTHKOREA-CLUSTERS/
+0100B5G33SB/index.html
+[11] A. Walker et al., “Genetic structure of SARS-CoV-2 reflects clonal superspreading and multiple independent introduction events, North-Rhine Westphalia, Germany, February and March 2020,” Eurosurveillance,
+vol. 25, no. 22, 2020.
+[12] M. Cevik et al., “SARS-CoV-2 transmission dynamics should inform policy,” SSRN 3692807, 2020.
+[13] A. Hasan et al., “Superspreading in early transmissions of COVID-19 in Indonesia,” medRxiv, 2020.
+[14] Y. Zhang et al., “Evaluating transmission heterogeneity and super-spreading event of COVID-19 in a
+metropolis of China,” International Journal of Environmental Research and Public Health, 2020.
+[15] M.-d. Oh et al., “Middle east respiratory syndrome coronavirus superspreading event involving 81 persons,
+Korea 2015,” Journal of Korean medical science, vol. 30, no. 11, pp. 1701–1705, 2015.
+[16] J. O. Lloyd-Smith, S. J. Schreiber, P. E. Kopp, and W. M. Getz, “Superspreading and the effect of
+individual variation on disease emergence,” Nature, vol. 438, no. 7066, pp. 355–359, 2005.
+[17] R. A. Stein, “Super-spreaders in infectious diseases,” International Journal of Infectious Diseases, vol. 15,
+no. 8, pp. e510–e513, 2011.
+[18] B. M. Althouse et al., “Stochasticity and heterogeneity in the transmission dynamics of SARS-CoV-2,”
+arXiv preprint arXiv:2005.13689, 2020.
+[19] A. De, U. Upadhyay, and M. Gomez-Rodriguez, “Temporal point processes,” Technical report, Saarland
+University, Tech. Rep., 2019.
+[20] E. Brochu, V. M. Cora, and N. de Freitas, “A tutorial on bayesian optimization of expensive cost
+functions, with application to active user modeling and hierarchical reinforcement learning,” 2010.
+[21] D. R. Jones, M. Schonlau, and W. J. Welch, “Efficient global optimization of expensive black-box
+functions,” Journal of Global optimization, vol. 13, no. 4, pp. 455–492, 1998.
+[22] J. Snoek et al., “Practical bayesian optimization of machine learning algorithms,” in Advances in neural
+information processing systems, 2012, pp. 2951–2959.
+[23] H. W. Hethcote, “The mathematics of infectious diseases,” SIAM review, vol. 42, no. 4, pp. 599–653,
+2000.
+[24] A. W. Roddam, “Mathematical Epidemiology of Infectious Diseases: Model Building, Analysis and
+Interpretation,” International Journal of Epidemiology, 2001.
+
+16
+
+[25] H. J. Ahn and B. Hassibi, “Global dynamics of epidemic spread over complex networks,” in CDC, 2013.
+[26] E. Cator and P. Van Mieghem, “Second-order mean-field susceptible-infected-susceptible epidemic
+threshold,” Physical review E, 2012.
+[27] D. Chakrabarti et al., “Epidemic thresholds in real networks,” ACM TISSEC, 2008.
+[28] P. Van Mieghem, “The N-intertwined SIS epidemic network model,” Computing, 2011.
+[29] P. Van Mieghem, J. Omic, and R. Kooij, “Virus spread in networks,” IEEE/ACM TON, 2009.
+[30] N. M. Ferguson et al., “Impact of non-pharmaceutical interventions (NPIs) to reduce COVID-19 mortality
+and healthcare demand,” London: Imperial College COVID-19 Response Team, March, vol. 16, 2020.
+[31] S. M. Moghadas et al., “Projecting hospital utilization during the COVID-19 outbreaks in the United
+States,” PNAS, 2020.
+[32] C. R. Wells et al., “Impact of international travel and border control measures on the global spread of
+the novel 2019 coronavirus outbreak,” PNAS, 2020.
+[33] R. Li et al., “Substantial undocumented infection facilitates the rapid dissemination of novel coronavirus
+(SARS-CoV2),” Science, 2020.
+[34] L. Di Domenico et al., “Expected impact of school closure and telework to mitigate COVID-19 epidemic
+in France,” 2020.
+[35] R. Herbrich, R. Rastogi, and R. Vollgraf, “Crisp: A probabilistic model for individual-level COVID-19
+infection risk estimation based on contact data,” 2020.
+[36] A. J. Kucharski et al., “Effectiveness of isolation, testing, contact tracing, and physical distancing on
+reducing transmission of SARS-CoV-2 in different settings: a mathematical modelling study,” The Lancet
+Infectious Diseases, 2020.
+[37] A. Aleta et al., “Modelling the impact of testing, contact tracing and household quarantine on second
+waves of COVID-19,” Nature Human Behaviour, 2020.
+[38] L. Ferretti et al., “Quantifying dynamics of SARS-CoV-2 transmission suggests that epidemic control
+and avoidance is feasible through instantaneous digital contact tracing,” Science, 2020.
+[39] N. van Doremalen et al., “Aerosol and surface stability of HCoV-19 (SARS-CoV-2) compared to SARSCoV-1,” medRxiv, 2020.
+[40] S. A. Lauer et al., “The incubation period of coronavirus disease 2019 (COVID-19) from publicly reported
+confirmed cases: Estimation and application,” Annals of Internal Medicine, 2020.
+[41] N. M. Linton et al., “Incubation period and other epidemiological characteristics of 2019 novel coronavirus
+infections with right truncation,” Journal of Clinical Medicine, vol. 9, no. 2, 2020.
+[42] O. O. Aalen, Ø. Borgan, and H. K. Gjessing, Survival and Event History Analysis.
+2008.
+
+Springer New York,
+
+[43] M. Balandat et al., “Botorch: Programmable bayesian optimization in pytorch,” 2019.
+[44] R. Astudillo and P. I. Frazier, “Bayesian optimization of composite functions,” 2019.
+[45] Robert Koch-Institut (RKI), “COVID-19 data set,”
+npgeo-corona-npgeo-de.hub.arcgis.com/datasets/
+
+17
+
+2020. [Online]. Available:
+
+https://
+
+[46] Bundesamt für Gesundheit, Schweiz, “BAG COVID-19 situation summary,” 2020. [Online].
+Available: https://www.bag.admin.ch/bag/en/home/krankheiten/ausbrueche-epidemien-pandemien/
+aktuelle-ausbrueche-epidemien/novel-cov/situation-schweiz-und-international.html
+[47] P. I. Frazier, W. B. Powell, and S. Dayanik, “A knowledge-gradient policy for sequential information
+collection,” SIAM J. Control Optim., vol. 47, no. 5, p. 2410–2439, Sep. 2008.
+[48] J. Wu and P. Frazier, “The parallel knowledge gradient method for batch bayesian optimization,” in
+Advances in Neural Information Processing Systems 29. Curran Associates, Inc., 2016, pp. 3126–3134.
+[49] P. I. Frazier, “A tutorial on bayesian optimization,” 2018.
+[50] I. Sobol, “On the distribution of points in a cube and the approximate evaluation of integrals,” USSR
+Computational Mathematics and Mathematical Physics, vol. 7, no. 4, 1967.
+[51] Land Baden-Württemberg, “Verordnung der Landesregierung über infektionsschützende Massnahmen gegen die Ausbreitung des Virus SARS-Cov-2 (Corona-Verordnung),”
+2020.
+[Online]. Available:
+https://www.baden-wuerttemberg.de/de/service/aktuelle-infos-zu-corona/
+aktuelle-corona-verordnung-des-landes-baden-wuerttemberg/
+[52] Bundesländer der Bundesrepublik Deutschland, “Corona-Regelungen in den Bundesländern,” 2020. [Online]. Available: https://www.bundesregierung.de/breg-de/themen/coronavirus/
+corona-bundeslaender-1745198
+[53] Der Schweizerische Bundesrat, “Verordnung 2 über Massnahmen zur Bekämpfung des Coronavirus
+(COVID-19) (COVID-19-Verordnung 2),” 2020. [Online]. Available: https://www.admin.ch/opc/de/
+classified-compilation/20200744/index.html
+[54] “Facebook Data for Good,” 2020. [Online]. Available: https://dataforgood.fb.com
+[55] Statistisches Bundesamt, Deutschland, “Households, by type of household. Long-term series with annual
+data from 1961,” 2020. [Online]. Available: https://www.destatis.de/EN/Themes/Society-Environment/
+Population/Households-Families/Tables/lrbev05.html
+[56] Bundesamt für Statistik, Schweiz, “Households,” 2020. [Online]. Available: https://www.bfs.admin.ch/
+bfs/de/home/statistiken/bevoelkerung/stand-entwicklung/haushalte.html
+[57] “OpenStreetMap,” 2020. [Online]. Available: https://www.openstreetmap.org/
+[58] O. Karin et al., “Adaptive cyclic exit strategies from lockdown to suppress COVID-19 and allow economic
+activity,” medRxiv, 2020.
+[59] D. Meidan et al., “An alternating lock-down strategy for sustainable mitigation of COVID-19,” arXiv
+preprint arXiv:2004.01453, 2020.
+[60] Bundesregierung
+Deutschland,
+“Telefonschaltkonferenz
+der
+Bundeskanzlerin
+mit
+den
+Regierungschefinnen
+und
+Regierungschefs
+der
+Länder
+am
+6.
+Mai
+2020,”
+2020. [Online]. Available:
+https://www.bundesregierung.de/resource/blob/973812/1750986/
+fc61b6eb1fc1d398d66cfea79b565129/2020-05-06-mpk-beschluss-data.pdf
+[61] European Center for Disease Prevention and Control, “An overview of the rapid test situation for
+COVID-19 diagnosis in the EU/EEA,” 2020. [Online]. Available: https://www.ecdc.europa.eu/sites/
+default/files/documents/Overview-rapid-test-situation-for-COVID-19-diagnosis-EU-EEA.pdf
+[62] J. Langford, “Critical issues in digital contract tracing,” 2020. [Online]. Available:
+//hunch.net/?p=13762603
+
+18
+
+https:
+
+[63] J. Chan et al., “Pact: Privacy sensitive protocols and mechanisms for mobile contact tracing,” arXiv
+preprint arXiv:2004.03544, 2020.
+[64] M. Nanni et al., “Give more data, awareness and control to individual citizens, and they will help
+COVID-19 containment,” 2020.
+[65] C. Troncoso et al., “Decentralized privacy-preserving proximity tracing,” 2020. [Online]. Available:
+https://github.com/DP-3T/documents/blob/master/DP3T%20White%20Paper.pdf
+[66] World Health Organization, “Report of the WHO-China joint mission on coronavirus disease
+2019 (COVID-19),” 2020. [Online]. Available: https://www.who.int/docs/default-source/coronaviruse/
+who-china-joint-mission-on-covid-19-final-report.pdf
+[67] X. He et al., “Temporal dynamics in viral shedding and transmissibility of COVID-19,” Nature Medicine,
+vol. 26, no. 5, pp. 672–675, May 2020.
+[68] R. Woelfel et al., “Clinical presentation and virological assessment of hospitalized cases of coronavirus
+disease 2019 in a travel-associated transmission cluster,” medRxiv, 2020.
+[69] D. Wang et al., “Clinical characteristics of 138 hospitalized patients with 2019 novel coronavirus-infected
+pneumonia in Wuhan, China,” JAMA, 2020.
+[70] H. Nishiura et al., “Estimation of the asymptomatic ratio of novel coronavirus infections (COVID-19),”
+medRxiv, 2020.
+[71] E. Lavezzo et al., “Suppression of COVID-19 outbreak in the municipality of Vo, Italy,” medRxiv, 2020.
+[72] Robert Koch-Institut (RKI), “Epidemiologisches Bulletin des Robert Koch-Instituts (Ausgabe 15/2020),”
+2020. [Online]. Available: https://www.rki.de/DE/Content/Infekt/EpidBull/Archiv/2020/Ausgaben/
+15_20.pdf?__blob=publicationFile
+[73] L. Tindale et al., “Transmission interval estimates suggest pre-symptomatic spread of COVID-19,”
+medRxiv, 2020.
+
+19
+
+Table 2: Epidemiological model parameters in units of days. Hospitalization and fatality rates αh and αb
+mentioned in the main body are estimated from COVID-19 case data in the region and is age-dependent.
+Log-normal parameters denote the underlying normal mean and standard deviation.
+Counting process
+Mi (t)
+Ris (t), Ria (t)
+Wi (t)
+Yi (t)
+Zi (t)
+Parameter
+µ
+γ
+δ
+αa
+
+Value
+0.55
+0.3465 h−1
+4.6438 h
+0.4
+
+Starts when
+dEi (t) = 1
+dIis (t) = 1
+dIip (t) = 1
+dIis (t) = 1
+dIis (t) = 1
+
+log N parameters
+(0.9470, 0.6669)‡
+(2.6365, 0.0713)§
+(0.7463, 0.4161)§
+(1.9358, 0.1421)§
+(2.5620, 0.0768)§
+
+Source
+[40]
+[66–68]
+[67]
+[69]
+[41]
+
+Description
+relative asymptomatic transmission rate
+decay of infectiousness at sites
+non-contact contamination window¶
+proportion of asymptomatic individuals
+
+Source
+[33]
+[39]
+[39]
+[38, 70, 71]
+
+‡
+§
+
+Incubation period from [40], corrected by pre-symptomatic infectiousness [67].
+Approximate log-normal parameters constructed because COVID-19 literature results only
+reported using mean or median estimates of times.
+¶ For computational purposes, set from γ by the time when rate of infection drops below 20%
+after leaving a site.
+
+Table 3: Average number of visits per week per site type by individuals of different age groups.
+Age group Education
+0-4
+5
+5-14
+5
+15-34
+2
+35-59
+60-79
+80+
+-
+
+A
+
+Social
+1
+2
+2
+2
+3
+2
+
+Transportation
+3
+3
+1
+2
+1
+
+Work Groceries
+3
+1
+5
+1
+1
+1
+
+Household infections
+
+If information about households H(i) that each individual i ∈ V belongs to is available, one can account for
+infections within households by adding the following base rate λH(i) (t) to the conditional intensity function
+λ∗i (t) of the exposure counting process Ni (t):
+λH(i) (t) = ξ
+
+X
+j∈H(t)\i
+
+where
+
+Z
+
+t
+H
+e−γ(t−τ ) Ki,j
+(τ ) dτ
+
+(11)
+
+Y
+
+(12)
+
+t−δ
+
+H
+Ki,j
+(τ ) = (Ijs (τ ) + Ijp (τ ) + µI a (τ ))
+
+(1 − Pi,k (τ ))(1 − Pj,k (τ ))
+
+k∈S
+
+where ξ ≥ 0 is the base transmission rate within households. This intensity function models our assumption
+that individuals within a household are in contact as long as they are not visiting any site.
+Exposure events caused by λH(i) (t) can be sampled analogously to the principles for sampling exposure
+times introduced in Section 3. Their superposition with exposures at sites is handled by the priority queue.
+
+20
+
+B
+
+Testing based on empirical probability of exposure
+
+In this work, we consider the possibility of allocating tests based on the empirical exposure probability
+of contacts of an infectious person, as resources are often initially limited in practice [72]. We define the
+risk
+empirical risk testing policy πtest
+as allocating tests only to the top K individuals j of contacts Ci (t0 , tf )
+ranked by their empirical probability of exposure p̂j←i (t0 , tf ) during a time window [t0 , tf ] associated with i
+in the process Nj (t):
+
+C
+p̂j←i (t0 , tf ) = 1 − exp −Ki,j
+(t0 , tf )
+(13)
+with
+C
+Ki,j
+(t0 , tf )
+
+=
+
+X
+k∈S
+
+Z
+
+tf
+
+βk
+
+0
+
+Z
+
+t0
+
+Pj,k (t )
+t0 −δ
+
+t0
+
+0
+
+Pi,k (τ )e−γ(t −τ ) dτ dt0
+
+(14)
+
+and where the inner integral would be substituted by Pj,k under proximity-based tracing, ignoring environmental transmission.
+Disregarding second order effects and inaccuracies in estimating the empirical probability of exposure, the
+empirical risk testing policy can be interpreted as a greedy allocation of tests under limited resources. We
+leave the consideration of more sophisticated contact tracing policies for future work.
+
+C
+
+State variable initialization
+
+While background exposures in Scenario B are directly modeled by adding a constant base rate λ∗0,i (t) to
+λ∗i (t) in the exposure counting processes Ni (t), e.g., to model visits to neighboring regions, there need to be
+non-degenerate initial conditions when simulating Scenario A and for parameter estimation during the same
+period. Since COVID-19 case data is available during this time window, we opt to heuristically compute
+aggregate initial seed counts for the state variables. The starting point of Scenario A is selected such that
+approximately five to ten COVID-19 cases occurred.
+P
+s
+We set the number of initially symptomatic individuals Iinit
+= i∈V I s (0) equal to the real observed
+COVID-19 cases in a region at the start date, or scaled proportionally to the population size in an administrative
+a
+s
+region, and set all to be positively tested. Based on the above, we seed Iinit
+= αa /(1−αa )Iinit
+individuals to be
+initially asymptomatic to obtain a proportion of recently estimated αa = 0.4 asymptomatic seeds [38, 70, 71].
+a
+s
+Assuming that infectious individuals have exposed R0 others on average, we seed Einit = R0 (Iinit
++ Iinit
+)
+initially exposed individuals, using recent estimates of the basic reproduction number of approximately
+R0 = 2.0 [38, 66, 73]. In a simulation of Scenario A, Ei (0), Iia (0), Iis (0) are seeded uniformly at random
+following the above heuristic counts. Neither asymptomatic nor symptomatic seeds cause further exposures,
+and no other states are seeded for simplicity.
+
+D
+
+Experimental setup for estimation
+
+In this section, we provide additional details on the experimental setup used for parameter estimation, which
+we perform separately for each of the cities and regions. One central challenge for parameter estimation using
+real COVID-19 case data is that the epidemic did not evolve without interventions. The spread of COVID-19
+was significantly influenced by social distancing measures and business restrictions in both Germany and
+Switzerland during most of the time periods for which data is available. The period of most restrictive
+measures, also referred to as the “lockdown”, occurred largely from March 23, 2020 to May 3, 2020 in Germany,
+and from March 16, 2020 to May 10, 2020 in Switzerland [51–53]. To allow for parameter estimation over the
+entire time period of Scenario A, we account for the restrictions in place during the “lockdown” by
+(i) scaling down βk at sites of specific categories to mimic business restrictions. Specifically, we reduce the
+individual transmission rate at educational sites, workplaces and social sites by 50% during the period of
+the “lockdown”.
+21
+
+Table 4: Summary for towns and regions studied in Germany and Switzerland.
+Region
+Rheingau-Taunus
+Kanton Jura
+Kaiserslautern
+Bern
+Locarno
+Tübingen
+∗
+
+GER
+CH
+GER
+CH
+CH
+GER
+
+|V|
+187,163
+73,416
+104,044
+133,790
+15,820
+90,539
+
+|S|
+2,352
+729
+1,525
+2,174
+494
+1,446
+
+Urban?
+X
+X
+X
+
+Incidence∗ Lockdown
+144.8
+03/23
+355.5
+03/16
+200.7
+03/23
+191.4
+03/16
+943.8
+03/16
+570.1
+03/23
+
+Number of COVID-19 cases per 100,000 inhabitants before July 13, 2020, taken at Landkreis
+and Kanton-level from data provided by the national authorities [45, 46].
+
+(ii) letting individuals practice social distancing by skipping a given visit with probability ρ during the
+“lockdown”. This social distancing factor ρ is estimated, controls how strictly governmental interventions
+were followed in a given town, and guides how much the case curve flattened during the “lockdown”.
+Note that before the “lockdown”, i.e., in periods without intervention, ρ and the βk -multipliers at sites are
+ignored by the model; see Table 4. Thus, we jointly estimate the exposure parameters θ = {β, ξ, ρ} over the
+time period that we denote as Scenario A for a given region, i.e., for a period of approximately two months
+until the end of the strict “lockdown” in either country. All three parameters can be deemed identifiable
+because the estimation windows span periods both before and during times of interventional measures. We
+downsample the population and sites by a factor K uniformly at random8 during estimation only as listed in
+Table 5.
+The estimation procedure is run for 100 steps for the computationally less demanding cities, i.e., Tübingen,
+Kaiserslautern, and Locarno, and for a total of 40 steps for the computationally more demanding city of
+Bern, the Canton of Jura, and the Landkreis of Rheingau-Taunus, each including 20 initial quasi-random
+settings. Each evaluation of the objective for a given setting of θ is the mean of J = 96 random realizations
+of our model over the time period. Simulations are randomized across realizations of the mobility traces and
+the selected individual infection seeds.
+The domain for β and ξ was empirically bounded to [0, 1.5] in all regional models, while keeping ρ ∈ [0, 1]
+as ρ is a probability. Maximization of the knowledge gradient acquisition function is done using the internal
+optimization procedures of BoTorch [43].
+
+E
+
+Parameter estimation using downscaled models might fail
+
+While we have found that using downscaled models for parameter estimation works well in most practical
+scenarios, there do exist settings where it can fail. More specifically, the full-scale model may not provide
+accurate predictions under the parameters θ = {β, ξ, ρ} estimated using the downscaled model. In the
+remainder, we analyze one such setting, the Landkreis of Tirschenreuth in Germany, a rural region with a
+high level of infections.
+With a case incidence of 1,575 cases per 100,000 inhabitants as of July 13, 2020 [45], the region is
+more affected than the other cities and regions we considered. During parameter estimation, 7.69% of the
+population in the downscaled model needs to get positively tested to match the COVID-19 case data in
+Eq. 8. In addition, sites are clustered into a number of villages, a major distinguishing factor compared to
+other regions with high infection levels we studied. Thus, removing a large proportion of sites at random
+can lead to local and isolated infection herds in which potentially large proportions of the population get
+infected. Considering that simulated infections might be even higher than positive test results, the proportion
+of susceptible people in local clusters could decrease significantly. Refer to Figure 14 for a visualization of
+the specific local circumstances in Tirschenreuth. To overcome the resulting reduction in infections, larger
+transmission rates βk will be estimated for the model to reach the target case incidence. In contrast, under
+8 Initial
+
+state variable seeds and the COVID-19 case counts are not downscaled.
+
+22
+
+Table 5: Estimated parameters for towns and regions studied in Germany and Switzerland. β denotes the
+individual transmission rate at public sites, ξ the individual transmission rate in households, and ρ the social
+distancing factor, estimated as described in Section 4 and Appendix D using downscaling factor K.
+Region
+Rheingau-Taunus
+Kanton Jura
+Kaiserslautern
+Bern
+Locarno
+Tübingen
+†
+
+GER
+CH
+GER
+CH
+CH
+GER
+
+Inference period†
+03/10 - 05/03
+03/09 - 05/10
+03/15 - 05/03
+03/06 - 05/10
+03/09 - 05/10
+03/12 - 05/03
+
+K
+10
+10
+10
+10
+2
+10
+
+β
+0.1875
+0.1406
+0.3004
+0.4688
+0.7607
+0.7450
+
+ξ
+0.9375
+0.7031
+0.4548
+0.2812
+0.5394
+1.0842
+
+ρ
+0.8750
+0.8438
+0.6327
+0.9375
+0.9181
+0.8116
+
+Chosen such that a given region had approximately five to ten confirmed COVID-19 cases,
+allowing for non-degenerate and comparable initial conditions. Dates are in 2020.
+
+the full-scale model, only 1.54% of the population would have to get positively tested to match the COVID-19
+case data, suggesting for the decrease in the number of susceptible individuals to have a smaller impact. As a
+consequence, in Landkreis Tirschenreuth, the predictions under the full-scale model are empirically found to
+be too pessimistic. Overall, we recommend choosing a conservative scaling factor during parameter estimation
+such that infection levels continue to be low enough to expect equal exposure dynamics at both scales.
+
+F
+
+Narrowcasting the empirical probability of exposure
+
+As recently noted by Chan et al. [63], health authorities may like to use contact tracing data of individuals who
+have been tested positive to narrowcast messages to the population, i.e., make public service announcements
+that are highly tailored to a location or to a subset of individuals who have been in a certain location during
+a specific period of time. For example, health authorities may like to inform the population about the risk
+of infection for individuals who visited a specific site in a certain period of time. While some individuals
+may be reluctant to adopt contact tracing technology due to privacy concerns, they may still be willing to
+follow public service announcements regarding quarantine or testing. For example, an individual may be
+willing to self-isolate or seek testing if they learn via narrowcasting that they recently visited a location with
+empirically high probability of exposure by other infected individuals.
+To implement narrowcasting of exposure risk at sites S, our model allows for the estimation of the empirical
+probability of exposure p̂k ([t0 , tf ]) of an individual during a time window [t0 , tf ], caused by positively tested
+individuals i that visited site k, i.e.,
+!
+Z tfZ t0
+Y
+−γ(t0 −τ )
+p̂k ([t0 , tf ]) ∝ 1 −
+exp −
+Pi,k (τ )e
+dτ dt0
+(15)
+i∈S
+Ti+ (t0 )=1
+
+t0
+
+t0 −δ
+
+Perhaps surprisingly, the above computation does not suffer from the “x2 adoption problem” of contact
+tracing [38, 62] because it only requires Pi,k (t) of positively tested individuals i, rather than both Pi,k (t) and
+Pj,k (t). For the same reason, it also requires data from location-based contact tracing systems where Pi,k (t)
+is observed. However, in principle, one could also resort to proximity-based tracing systems if Bluetooth
+beacons are in place, as noted by Langford [62].
+Figure 7 presents an example of narrowcasting of site-specific exposure probabilities during Scenario
+A with the estimated “lockdown” measures. Here, note that, as long as the level of adoption is uniformly
+distributed across visitors, the site ranking by exposure probability will be invariant to adoption levels in
+expectation. In this case, the absolute value of the probability of exposure can be corrected for the level of
+adoption. In practice, it would be important to correct for compliance disparities across sites and site types,
+which are likely to occur due to differences in demographics and visiting patterns at certain sites.
+
+23
+
+Algorithm 2 Sampling algorithm for model simulation9
+Input: Initial state variables at t = 0, location traces Pi,k (t), parameters γ, δ, αa , αb , αh , µ and βk , hazard functions λ_(t)
+1: tnow ← 0, Si ← 1, Q ← priority queue processing in temporal order of events
+2: for all i ∈ V s.t. Si = 0 do
+3:
+Push next state transition (0, _, i, ∅) to Q (see below)
+4: while Q not empty do
+. Q contains (time, transition, i, infector, site) events
+5:
+(tnow , e, i, j, k) ← pop earliest from Q
+6:
+if e is dE and Rj (tnow ) = 0 and Dj (tnow ) = 0 and Si = 1 then
+7:
+if Interventions(i, j, k, tnow ) then
+. Reject and re-sample?
+8:
+Call Algorithm 3 with (P, j, i, tnow , r = 1 − (1 − µ)Ija (tnow ))
+9:
+else
+. Person i exposed by infector j
+10:
+Ei ← 1, Si ← 0, ∆M ∼ Expo(λM (tnow )) , u ∼ Unif(0, 1)
+11:
+if u ≤ αa then
+12:
+Push (tnow + ∆M , dI a , i, ∅) event to Q
+13:
+else
+14:
+Push (tnow + ∆M , dI p , i, ∅) event to Q
+15:
+else if e is dI p then
+. Person i pre-symptomatic
+16:
+Iip ← 1, Ei ← 0, ∆Z ∼ Expo(λW (tnow ))
+17:
+Push (tnow + ∆W , dI s , i, ∅) event to Q
+18:
+for u such that Su = 1 do
+19:
+Call Algorithm 3 with arguments (P, i, u, tnow , r = 1)
+20:
+else if e is dI s then
+. Person i symptomatic
+21:
+Iis ← 1, Iip ← 0, u, v ∼ Unif(0, 1)
+22:
+if u ≤ αh then
+23:
+∆Y ∼ Expo(λY (tnow )), Push (tnow + ∆Y , dH, i, ∅) event to Q
+24:
+if v ≤ αb then
+25:
+∆Z ∼ Expo(λZ (tnow )), Push (tnow + ∆Z , dD, i, ∅) event to Q
+26:
+else
+27:
+∆R ∼ Expo(λRs (tnow )), Push (tnow + ∆R , dR, i, ∅) event to Q
+28:
+else if e is dI a then
+. Person i asymptomatic
+29:
+Iia ← 1, Ei ← 0, ∆R ∼ Expo(λRa (tnow ))
+30:
+Push (tnow + ∆R , dR, i, ∅) event to Q
+31:
+for u such that Su = 1 do
+32:
+Call Algorithm 3 with arguments (P, i, u, tnow , r = µ)
+33:
+else if e is dH then
+. Person i hospitalized
+34:
+Hi ← 1
+35:
+else if e is dR then
+. Person i resistant
+36:
+Ri ← 1, Iia ← 0, Iis ← 0, Hi ← 0
+37:
+else if e is dD then
+. Person i deceased
+38:
+Di ← 1, Iis ← 0, Hi ← 0
+
+9 For simplicity, we omit details about the procedure Interventions(i, j, k, t), which applies thinning as explained in Section
+3 due to interventional measures, and point the reader to our implementation at: https://github.com/covid19-model/
+
+24
+
+Algorithm 3 Pushes next event of individual i exposing individual j in time window [t, tmax ] by considering
+only the contribution λ∗i→j (t) in Eq. 6 and using thinning as described in Section 3.
+Input: P , i, j, t, r
+1: procedure InContact(u, v, τ )
+2:
+return I[∃k ∈ S s.t. Pu,k (τ ) = 1 and ∃τ 0 ∈ [τ − δ, τ ] s.t. Pv,k (τ 0 ) = 1]
+3: procedure ContactSite(u, v, τ )
+4:
+return k if ∃k ∈ S s.t. Pu,k (τ ) = 1 and ∃τ 0 ∈ [τ − δ, τ ] s.t. Pv,k (τ 0 ) = 1
+else return ∅
+5: procedure NextContact(u, v, τ )
+6:
+return minτ 0 >τ τ 0 s.t. InContact(u, v, τ 0 )
+7: procedure WillBeInContact(u, v, τ )
+8:
+return I[∃τ 0 ∈ [τ, tmax ] s.t. InContact(u, v, τ 0 )]
+9: τ ← t
+10: while WillBeInContact(j, i, τ ) do
+11:
+b ← InContact(j, i, τ )
+12:
+if not b then
+13:
+τ ← NextContact(j,
+i, τ )
+
+
+R
+14:
+∆Ej ∼ Expo maxk {βk } r ττ−δ e−γ(τ −v) dv
+15:
+τ ← τ + ∆ Ej
+16:
+if InContact(j, i, τ ) then
+17:
+k←
+ContactSite(j, i, τ )
+
+
+R
+R
+18:
+p ← βk ττ−δ e−γ(τ −v) Pi,k (v)dv
+maxk {βk } ττ−δ e−γ(τ −v) dv
+19:
+20:
+21:
+22:
+
+u ∼ Unif(0, 1)
+if u ≤ p then
+Push (τ, dE, j, i) event to Q
+break
+
+25
+
+. Below, indicator I[·] returns True/False
+
+ϵЈЈЈ
+
+ΘЈЈ
+
+΅ЈЈ
+
+Lockdown
+
+Ј
+
+Apr 28
+
+Κ
+
+ϵ
+
+ϯ
+
+ϵ
+
+φ
+
+Ј
+
+Apr 14
+
+(a) Tübingen
+
+Mar 24
+
+Apr 07
+
+People
+
+Interventions
+
+ΚЈЈ
+
+ϵЈЈЈ
+φЈЈЈ
+
+Κ
+
+Apr 21
+
+ϵ
+
+ϯ
+
+ϵ
+
+φ
+Apr 07
+
+(d) Bern
+
+Apr 21
+
+Ј
+
+Mar 24
+
+Apr 21
+
+ϵ
+
+φ
+
+Ј
+Mar 10 Mar 24
+
+Ј
+Κ
+
+ճՙ
+
+ϯ
+
+Mar 24
+
+Interv.
+
+Ј
+
+ճՙ
+
+May 05
+
+Interv.
+
+Apr 07
+
+ճՙ
+
+ϯ
+
+ϩЈЈ
+
+Lockdown
+
+ϵЈЈ
+
+Ј
+Mar 10
+Κ
+
+Apr 14
+
+ϯЈЈЈ
+
+Interv.
+
+ΘЈЈ
+
+Mar 31
+
+Lockdown
+
+People
+
+φЈЈЈ
+
+Mar 17
+
+(c) Rheingau-Taunus-Kreis
+
+φЈЈЈ
+
+Interventions
+
+People
+
+φΘЈЈ
+
+Ј
+
+Apr 21
+
+Lockdown
+
+΅ЈЈ
+
+Apr 28
+
+φ
+
+(b) Kaiserslautern
+
+ϵЈЈЈ
+
+Apr 14
+
+Interventions
+
+Mar 31
+
+Mar 31
+
+ϵ
+
+φ
+
+Ј
+Mar 17
+
+Mar 17
+
+Κ
+
+ճՙ
+
+ϯ
+
+ճՙ
+
+ϯ
+
+Ј
+
+Apr 21
+
+ճՙ
+
+Κ
+
+Mar 31
+
+Interv.
+
+Apr 14
+
+Interv.
+
+Mar 31
+
+ΚЈЈ
+ϵЈЈ
+
+φЈЈ
+Mar 17
+
+Interventions
+
+ϩЈЈ
+
+Interv.
+
+ϵЈЈ
+
+Lockdown
+
+People
+
+ϯЈЈ
+
+Interventions
+
+ΘЈЈ
+
+People
+
+φЈЈЈ
+
+Ј
+
+ΚЈЈ
+
+Interventions
+
+People
+
+φΘЈЈ
+
+Lockdown
+
+φ
+Mar 24
+
+Apr 07
+
+(e) Locarno
+
+Apr 21
+
+Ј
+
+Mar 24
+
+Apr 07
+
+Apr 21
+
+(f) Canton Jura
+
+Figure 8: Number of infected and effective reproduction number in the realistic scenario used
+for parameter estimation, i.e., when the lockdown measures are in place as estimated. For each
+region, the top panel shows the number of infected individuals, where the line represents the mean over 48
+random simulations and the shaded regions indicate to two times the standard deviation. The bottom panels
+show the corresponding effective reproduction number computed using the approach of Athreya et al. [9],
+which fit a Negative-Binomial (NB) distribution to the number of secondary cases. The line represents the
+most likely estimate and shading represents high density areas.
+
+26
+
+Ј
+
+Mar 17
+
+ϵ
+φ
+
+Mar 31
+
+Apr 14
+
+Ј
+Mar 17
+
+Apr 28
+
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 2.30 ± (0.14)
+𝑘𝑡 = 2.04 ± (0.50)
+
+0.2
+0.0
+
+0
+
+0.4
+
+𝑅𝑡 = 0.46 ± (0.04)
+𝑘𝑡 = 0.35 ± (0.05)
+
+0.2
+
+Number of Secondary Cases
+
+0.8
+
+NB
+Empirical
+
+0.6
+
+0.0
+
+10
+
+Apr 14
+
+Effective reproduction number
+(open after 4 weeks)
+
+0.8
+
+NB
+Empirical
+
+Probability
+
+Probability
+
+0.8
+
+Mar 31
+
+0
+
+Probability
+
+ΘЈЈ
+
+ϯ
+
+ճՙ
+
+φЈЈЈ
+
+Κ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+φΘЈЈ
+
+Interv.
+
+ϵЈЈЈ
+
+0.6
+0.4
+
+Number of Secondary Cases
+
+Pre-lockdown
+
+𝑅𝑡 = 1.27 ± (0.88)
+𝑘𝑡 = 0.33 ± (0.23)
+
+0.2
+0.0
+
+10
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+
+During lockdown
+
+Post-lockdown
+
+ΘЈЈ
+
+ϵ
+φ
+
+φЈЈ
+Ј
+
+ϯ
+
+Mar 31
+
+Ј
+
+Apr 21
+
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 1.29 ± (0.16)
+𝑘𝑡 = 1.81 ± (0.58)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+Pre-lockdown
+
+Probability
+
+Probability
+
+0.8
+
+Mar 24
+
+Apr 21
+
+0.8
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 0.33 ± (0.10)
+𝑘𝑡 = 0.48 ± (0.39)
+
+0.2
+0.0
+
+Apr 07
+
+Effective reproduction number
+(open after 4 weeks)
+
+0
+
+10
+
+Number of Secondary Cases
+During lockdown
+
+Probability
+
+ϵЈЈ
+
+Κ
+
+ճՙ
+
+ϯЈЈ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+ΚЈЈ
+
+Interv.
+
+(a) Tübingen
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 0.51 ± (0.53)
+𝑘𝑡 = 0.26 ± (0.14)
+
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+Post-lockdown
+
+(b) Kaiserslautern
+
+Figure 9: Early ending “lockdown” scenario. In each group of 5 panels for a given region, the first panel
+shows the number of infected individuals when the estimated lockdown measures are lifted early, with the blue
+“lockdown“ line being equivalent to Figure 8. The lines represent the mean number of infected over 48 random
+simulations and the shaded regions correspond to two standard deviations. The second panels depict the
+effective reproduction number Rt under the approach of Athreya et al. [9], again with lines representing the
+most likely estimate and shadings representing high density areas. The Negative-Binomial (NB) distributions
+fit to the number of secondary cases are shown in the bottom three panels at different stages of the lockdown.
+The Rt and kt panels are computed for the setting when measures are lifted after 4 weeks.
+27
+
+Ј
+
+Mar 17
+
+ϵ
+φ
+
+Mar 31
+
+Apr 14
+
+Ј
+
+Apr 28
+
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 1.74 ± (0.30)
+𝑘𝑡 = 2.84 ± (9.15)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+Probability
+
+Probability
+
+0.8
+
+0.4
+
+𝑅𝑡 = 0.21 ± (0.06)
+𝑘𝑡 = 0.16 ± (0.07)
+
+0.2
+
+Number of Secondary Cases
+
+Mar 31
+
+0
+
+0.4
+
+𝑅𝑡 = 0.38 ± (0.74)
+𝑘𝑡 = 0.67 ± (0.68)
+
+0.2
+0.0
+
+10
+
+NB
+Empirical
+
+0.6
+
+Number of Secondary Cases
+
+Pre-lockdown
+
+Apr 14
+
+0.8
+
+NB
+Empirical
+
+0.6
+
+0.0
+
+10
+
+Mar 17
+
+Effective reproduction number
+(open after 4 weeks)
+
+Probability
+
+ϵЈЈ
+
+ϯ
+
+ճՙ
+
+ΚЈЈ
+
+Κ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+ϩЈЈ
+
+Interv.
+
+΅ЈЈ
+
+0
+
+10
+
+Number of Secondary Cases
+
+During lockdown
+
+Post-lockdown
+
+ϵЈЈЈ
+
+Ј
+Mar 10
+
+ϵ
+φ
+
+Ј
+Mar 10 Mar 24
+
+May 05
+
+Apr 07
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 3.32 ± (0.75)
+𝑘𝑡 = 1.11 ± (0.38)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+Pre-lockdown
+
+Probability
+
+Probability
+
+0.8
+
+Apr 21
+
+0.8
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 0.52 ± (0.07)
+𝑘𝑡 = 0.69 ± (0.20)
+
+0.2
+0.0
+
+Apr 07
+
+Effective reproduction number
+(open after 4 weeks)
+
+0
+
+10
+
+Number of Secondary Cases
+During lockdown
+(d) Bern
+
+Figure 9
+
+28
+
+Probability
+
+ΘЈЈ
+
+ϯ
+
+ճՙ
+
+φЈЈЈ
+
+Κ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+φΘЈЈ
+
+Interv.
+
+(c) Rheingau-Taunus-Kreis
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 3.34 ± (1.85)
+𝑘𝑡 = 0.19 ± (0.06)
+
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+Post-lockdown
+
+ϵ
+φ
+
+ϵЈЈ
+Ј
+
+Mar 24
+
+Ј
+
+Apr 21
+
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 1.51 ± (0.24)
+𝑘𝑡 = 1.18 ± (0.74)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+Probability
+
+Probability
+
+0.8
+
+0.4
+
+𝑅𝑡 = 0.20 ± (0.08)
+𝑘𝑡 = 0.21 ± (0.07)
+
+0.2
+
+Number of Secondary Cases
+
+Apr 07
+
+0
+
+0.4
+
+𝑅𝑡 = 1.48 ± (1.73)
+𝑘𝑡 = 0.17 ± (0.04)
+
+0.2
+0.0
+
+10
+
+NB
+Empirical
+
+0.6
+
+Number of Secondary Cases
+
+Pre-lockdown
+
+Apr 21
+
+0.8
+
+NB
+Empirical
+
+0.6
+
+0.0
+
+10
+
+Mar 24
+
+Effective reproduction number
+(open after 4 weeks)
+
+Probability
+
+ΚЈЈ
+
+ϯ
+
+ճՙ
+
+ϩЈЈ
+
+Κ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+΅ЈЈ
+
+Interv.
+
+φЈЈЈ
+
+0
+
+10
+
+Number of Secondary Cases
+
+During lockdown
+
+Post-lockdown
+
+Ј
+
+ϵ
+φ
+
+Mar 24
+
+Ј
+
+Apr 21
+
+Infected people
+
+0.6
+0.4
+
+𝑅𝑡 = 1.68 ± (0.22)
+𝑘𝑡 = 0.99 ± (0.24)
+
+0.2
+0.0
+
+0.8
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+Pre-lockdown
+
+Probability
+
+Probability
+
+0.8
+
+Mar 24
+
+Apr 21
+
+0.8
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 0.26 ± (0.07)
+𝑘𝑡 = 0.21 ± (0.10)
+
+0.2
+0.0
+
+Apr 07
+
+Effective reproduction number
+(open after 4 weeks)
+
+0
+
+10
+
+Number of Secondary Cases
+During lockdown
+(f) Canton Jura
+
+Figure 9
+
+29
+
+Probability
+
+φЈЈЈ
+
+ϯ
+
+ճՙ
+
+ϵЈЈЈ
+
+Κ
+
+No interventions
+Lockdown
+Open after 2 weeks
+Open after 4 weeks
+
+Interventions
+
+People
+
+ϯЈЈЈ
+
+Interv.
+
+(e) Locarno
+
+NB
+Empirical
+
+0.6
+0.4
+
+𝑅𝑡 = 2.75 ± (1.90)
+𝑘𝑡 = 0.19 ± (0.06)
+
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+Post-lockdown
+
+ϵ
+
+Mar 31
+
+ΚЈЈ
+
+Mar 31
+
+Apr 14
+
+(c) Rheingau-Taunus-Kreis
+
+ϯЈЈЈ
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+People
+
+ϩЈЈ
+
+Interventions
+
+Ј
+Mar 17
+
+Apr 14
+
+ϵЈЈЈ
+φЈЈЈ
+
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+Κ
+
+Apr 21
+
+ϯ
+
+ϵ
+
+φ
+Apr 07
+
+(d) Bern
+
+Apr 21
+
+Ј
+
+Mar 24
+
+Apr 21
+
+ϵ
+
+φ
+Mar 24
+
+Ј
+Κ
+
+ճՙ
+
+ճՙ
+
+ϯ
+
+Mar 24
+
+Interv.
+
+Ј
+
+ճՙ
+
+May 05
+
+Interv.
+
+Apr 07
+
+ϵ
+
+Ј
+
+People
+
+Interventions
+
+People
+
+ϯ
+
+΅ЈЈ
+
+Apr 28
+
+ϵЈЈ
+
+Ј
+Mar 10
+Κ
+
+Mar 31
+
+φЈЈЈ
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+Apr 14
+
+φ
+
+(b) Kaiserslautern
+
+ϵЈЈЈ
+
+Mar 31
+
+ϵ
+
+Ј
+
+Apr 14
+
+(a) Tübingen
+
+ΘЈЈ
+
+ϯ
+
+φ
+
+Ј
+
+Mar 17
+
+Κ
+
+ϵ
+
+φ
+
+φЈЈЈ
+
+Ј
+
+Apr 21
+
+ճՙ
+
+ϯ
+
+ճՙ
+
+ϯ
+
+Κ
+
+Mar 31
+
+Interv.
+
+Ј
+
+Apr 28
+
+Interventions
+
+Apr 14
+
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+ճՙ
+
+Mar 31
+
+Interv.
+
+Mar 17
+
+ΚЈЈ
+ϵЈЈ
+
+φЈЈ
+
+Κ
+
+φΘЈЈ
+
+ϩЈЈ
+
+People
+
+People
+
+ϵЈЈ
+
+Interventions
+
+Ј
+
+ϯЈЈ
+
+΅ЈЈ
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+Interv.
+
+ΘЈЈ
+
+Interventions
+
+φЈЈЈ
+
+ΚЈЈ
+
+Interv.
+
+People
+
+φΘЈЈ
+
+ΘЈЈ
+No interventions
+Lockdown
+K=2
+K=3
+K=4
+
+Interventions
+
+ϵЈЈЈ
+
+φ
+Mar 24
+
+Apr 07
+
+(e) Locarno
+
+Apr 21
+
+Ј
+
+Mar 24
+
+Apr 07
+
+Apr 21
+
+(f) Canton Jura
+
+Figure 10: Alternating curfews. Counterfactual what-if scenario in which the population is divided into
+K groups and, on each day, only one group is allowed to follow their usual daily activities. For each region,
+the top panel shows the daily number of infected for different numbers of groups. Lines represent the mean
+number of infected over 48 random realizations of the model, and shaded regions correspond to two times the
+standard deviation. The respective bottom plots show the effective reproduction number for the scenario of
+K = 2 groups. Lines represent the most likely estimate and shadings represent high density areas, again
+computed using the approach of Athreya et al. [9].
+
+30
+
+Ј
+
+Ј
+
+Apr 21
+
+Mar 31
+
+Apr 07
+
+Mar 24
+
+Ј
+
+ΘЈЈ
+
+Interventions
+Interventions
+
+Rheingau-Taunus-Kreis
+
+Apr 21
+
+Canton Jura
+(a) Infected people
+
+ϵЈЈ
+Ј
+
+Mar 24
+
+φЈЈ
+ΘЈ
+Ј
+
+Apr 21
+
+May 05
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 24
+
+Apr 21
+
+Locarno
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 24
+
+Apr 07
+
+Bern
+No interventions
+Lockdown
+Vulnerable groups
+
+Interventions
+
+ΚЈЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Ј
+Mar 10
+
+May 05
+
+Locarno
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 24
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+Interventions
+
+ΘЈ
+Ј
+
+Apr 21
+
+People
+
+φЈЈЈ
+
+Ј
+
+People
+
+φЈЈ
+
+Interventions
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Interventions
+
+People
+
+ϵЈЈЈ
+
+φЈ
+
+Bern
+
+Locarno
+ϯЈЈЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Apr 07
+
+Apr 21
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Apr 21
+
+Canton Jura
+(b) Hospitalizations
+
+ΚЈЈ
+ϵЈЈ
+Ј
+
+Interventions
+
+Ј
+
+ϵЈ
+
+People
+
+ΘЈЈ
+
+Ј
+Mar 10
+
+May 05
+
+People
+
+Interventions
+
+People
+
+ΘЈЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+Bern
+φЈЈЈ
+
+Mar 31
+
+Kaiserslautern
+
+Rheingau-Taunus-Kreis
+
+People
+
+Interventions
+
+Ј
+Mar 10
+
+Ј
+
+Apr 21
+
+People
+
+φЈ
+Ј
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Interventions
+
+ϵЈ
+
+Interventions
+
+No interventions
+Lockdown
+Vulnerable groups
+
+People
+
+Interventions
+
+People
+People
+
+φЈЈЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Kaiserslautern
+
+Rheingau-Taunus-Kreis
+ϵЈЈЈ
+
+φЈ
+
+Interventions
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Kaiserslautern
+
+Ј
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+Tübingen
+
+People
+
+φЈ
+
+Interventions
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 31
+
+ΘЈЈ
+
+Ј
+
+People
+
+Ј
+
+ΘЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Tübingen
+
+People
+
+Interventions
+
+People
+
+ϵЈЈ
+
+φЈЈ
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+Tübingen
+
+ΚЈЈ
+
+Interventions
+
+ΘЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+People
+
+φЈЈ
+
+Mar 17 Mar 31 Apr 14 Apr 28
+
+φΘЈ
+
+Interventions
+
+No interventions
+Lockdown
+Vulnerable groups
+
+People
+
+φЈЈЈ
+
+Ј
+
+φΘЈ
+
+Interventions
+
+People
+
+ϵЈЈЈ
+
+No interventions
+Lockdown
+Vulnerable groups
+
+Mar 24
+
+Apr 21
+
+Canton Jura
+(c) Fatalities
+
+Figure 11: Social distancing of vulnerable groups. Counterfactual what-if scenario in which the
+same social distancing measures as in the “lockdown” setting are imposed on vulnerable groups only,
+here approximated by the group of individuals older than 60 years of age, who typically suffer more
+complications [45]. Panel (a) shows the daily number of infected, panel (b) and (c) the hospitalizations and
+fatalities, respectively. The lines represent the mean over 48 random realizations and the shaded regions
+correspond to two times the standard deviation.
+31
+
+ϵЈЈЈ
+
+ΘЈЈ
+No interventions
+Conditional measures
+
+ΚЈЈ
+
+φЈЈЈ
+ΘЈЈ
+Ј
+
+ΘЈ
+
+֏ [days]
+
+Ј
+
+φЈЈ
+
+Ј
+
+People
+
+ΘЈЈ
+Ј
+
+ΘЈ
+
+֏ [days]
+
+ϵЈЈ
+
+Ј
+
+֏ [days]
+
+φЈЈ
+
+No interventions
+Conditional measures
+
+ΚЈЈ
+
+֏ [days]
+
+Ј
+
+φЈЈ
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+(c) Rheingau-Taunus-Kreis
+
+ϯЈЈЈ
+No interventions
+Conditional measures
+
+΅ЈЈ
+
+No interventions
+Conditional measures
+
+ϩЈЈ
+
+People
+
+People
+
+ΚЈЈ
+
+ϵЈЈЈ
+φЈЈЈ
+
+ϵЈЈ
+Ј
+
+ΘЈ
+
+֏ [days]
+
+Ј
+
+φЈЈ
+
+ϵЈЈЈ
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+Ј
+
+φЈЈ
+
+φЈЈЈ
+No interventions
+Conditional measures
+
+φЈЈЈ
+ΘЈЈ
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+ϯЈЈЈ
+
+΅ЈЈ
+
+People
+
+φΘЈЈ
+
+Ј
+
+No interventions
+Conditional measures
+
+No interventions
+Conditional measures
+
+ϩЈЈ
+
+People
+
+People
+
+ΘЈ
+
+φЈЈЈ
+
+ΘЈЈ
+
+ΘЈ
+
+ϵЈЈ
+
+(b) Kaiserslautern
+
+φЈЈЈ
+
+Ј
+
+ϩЈЈ
+
+ϯЈЈ
+
+Ј
+
+φЈЈ
+
+No interventions
+Conditional measures
+
+φΘЈЈ
+
+People
+
+Ј
+
+φЈЈ
+
+φЈЈ
+
+ϵЈЈЈ
+
+Ј
+
+֏ [days]
+
+΅ЈЈ
+
+(a) Tübingen
+
+Ј
+
+ΘЈ
+
+No interventions
+Conditional measures
+
+ΚЈЈ
+
+φЈЈЈ
+
+ΚЈЈ
+ϵЈЈ
+
+ΘЈЈ
+No interventions
+Conditional measures
+
+φΘЈЈ
+
+People
+
+ϵЈЈ
+φЈЈ
+
+ϵЈЈЈ
+
+Ј
+
+ϯЈЈ
+
+People
+
+Ј
+
+No interventions
+Conditional measures
+
+ϩЈЈ
+
+People
+
+People
+
+People
+
+φΘЈЈ
+
+΅ЈЈ
+No interventions
+Conditional measures
+
+ΚЈЈ
+
+ϵЈЈЈ
+φЈЈЈ
+
+ϵЈЈ
+Ј
+
+ΘЈ
+
+֏ [days]
+
+(d) Bern
+
+φЈЈ
+
+Ј
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+(e) Locarno
+
+φЈЈ
+
+Ј
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+(f) Canton Jura
+
+Figure 12: Conditional “lockdowns” based on weekly incidence. The panels show the number of
+infected people for two single realizations of the simulation of Scenario B. Whenever the number of positive
+cases within 7 days exceeds the threshold of 50 per 100,000 inhabitants, the same restrictive measures as in
+place during the “lockdown” period in Scenario A are implemented. Dashed and solid vertical lines indicate
+beginning and ending of the conditional “lockdowns”, respectively.
+
+32
+
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+Κ
+
+0.8
+
+ϵЈЈ
+
+Probability
+
+ϯ
+
+ճՙ
+
+People
+
+ϯЈЈ
+
+ϵ
+
+φЈЈ
+Ј
+
+φ
+Ј
+
+ΘЈ
+
+Ј
+
+φЈЈ
+
+֏ [days]
+
+Ј
+
+Infected people
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+0.6
+
+𝑅𝑡 = 0.82 ± (0.27)
+𝑘𝑡 = 0.24 ± (0.11)
+
+0.4
+0.2
+0.0
+
+φϵΘ
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+
+Effective reproduction number
+(isolate & test)
+
+Distribution of secondary cases
+(isolate & test)
+
+ϵЈЈЈЈ
+No interventions
+25% compliance
+50% compliance
+65% compliance
+75% compliance
+100% compliance
+
+People
+
+φΘЈЈЈ
+φЈЈЈЈ
+ΘЈЈЈ
+Ј
+
+Ј
+
+ϵЈ
+
+ϩЈ
+
+ΚЈ
+
+֏ [days]
+
+΅Ј
+
+φЈЈ
+
+φϵЈ
+
+Robustness against compliance
+(isolate & test)
+(a) Tübingen
+ΘЈ
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+Κ
+
+Probability
+
+ϯ
+
+ϯЈ
+
+ϵ
+
+ϵЈ
+
+φ
+
+φЈ
+Ј
+
+0.8
+
+ճՙ
+
+People
+
+ΚЈ
+
+Ј
+
+ΘЈ
+
+Ј
+
+φЈЈ
+
+֏ [days]
+
+Ј
+
+Infected people
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+φϵΘ
+
+𝑅𝑡 = 0.51 ± (0.97)
+𝑘𝑡 = 0.51 ± (0.69)
+
+0.4
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+
+Effective reproduction number
+(isolate & test)
+
+Distribution of secondary cases
+(isolate & test)
+
+No interventions
+25% compliance
+50% compliance
+65% compliance
+75% compliance
+100% compliance
+
+ϯЈЈЈ
+
+People
+
+NB
+Empirical
+
+0.6
+
+ϵЈЈЈ
+
+φЈЈЈ
+
+Ј
+
+Ј
+
+ϵЈ
+
+ΚЈ
+
+ϩЈ
+
+֏ [days]
+
+΅Ј
+
+φЈЈ
+
+φϵЈ
+
+Robustness against compliance
+(isolate & test)
+(b) Locarno
+
+Figure 13: Contact tracing strategies. The three panels shown for all regions (a) - (f) show the efficacy
+of tracing strategies under full compliance when identified contacts are isolated and/or tested with different
+reporting lags. Lines and shading indicate the mean number of infected and two standard deviations over
+48 random roll-outs. The effective reproduction number Rt and the distribution of secondary infections are
+computed as done in Figure 9. For (a) Tübingen and (b) Locarno, the larger fourth panel illustrates the
+efficacy of tracing when varying proportions of the population comply with the system.
+
+φЈЈ
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+0.8
+
+Probability
+
+ϯ
+
+ϩЈ
+
+ϵ
+
+ΚЈ
+
+φ
+
+ϵЈ
+Ј
+
+Κ
+
+ճՙ
+
+People
+
+΅Ј
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+Ј
+
+Infected people
+
+Ј
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+𝑅𝑡 = 0.66 ± (0.28)
+𝑘𝑡 = 0.35 ± (0.21)
+
+0.4
+0.2
+0.0
+
+φϵΘ
+
+NB
+Empirical
+
+0.6
+
+0
+
+10
+
+Number of Secondary Cases
+
+Effective reproduction number
+(isolate & test)
+
+Distribution of secondary cases
+(isolate & test)
+
+(c) Kaiserslautern
+
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+φЈЈ
+
+Κ
+
+0.8
+
+Probability
+
+ϯ
+
+ճՙ
+
+People
+
+φΘЈ
+
+ϵ
+
+ΘЈ
+
+φ
+Ј
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+Ј
+
+Infected people
+
+Ј
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+0.6
+
+𝑅𝑡 = 0.63 ± (0.26)
+𝑘𝑡 = 0.34 ± (0.29)
+
+0.4
+0.2
+0.0
+
+φϵΘ
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+
+Effective reproduction number
+(isolate & test)
+
+Distribution of secondary cases
+(isolate & test)
+
+(d) Rheingau-Taunus-Kreis
+
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+ϵЈЈ
+
+Κ
+
+0.8
+
+Probability
+
+ϯ
+
+ճՙ
+
+People
+
+ϯЈЈ
+
+ϵ
+
+φЈЈ
+
+φ
+Ј
+
+Ј
+
+ΘЈ
+
+֏ [days]
+
+φЈЈ
+
+Ј
+
+Infected people
+
+Ј
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+0.6
+
+𝑅𝑡 = 0.80 ± (0.44)
+𝑘𝑡 = 0.16 ± (0.07)
+
+0.4
+0.2
+0.0
+
+φϵΘ
+
+NB
+Empirical
+
+0
+
+10
+
+Number of Secondary Cases
+
+Effective reproduction number
+(isolate & test)
+
+Distribution of secondary cases
+(isolate & test)
+
+(e) Bern
+ϵЈЈ
+Isolate & test all, 48h delay
+Isolate only, 48h delay
+Isolate only, 3h delay
+
+Κ
+
+0.8
+
+φЈЈ
+
+ϵ
+
+ΘЈ
+Ј
+
+Probability
+
+ϯ
+
+ճՙ
+
+People
+
+φΘЈ
+
+φ
+Ј
+
+ΘЈ
+
+֏ [days]
+
+Infected people
+
+φЈЈ
+
+Ј
+
+Ј
+
+ϵΘ
+
+ΘЈ
+
+ϨΘ
+
+֏ [days]
+
+φЈЈ
+
+Effective reproduction number
+(isolate & test)
+(f) Canton Jura
+
+Figure 13
+34
+
+φϵΘ
+
+NB
+Empirical
+
+0.6
+
+𝑅𝑡 = 0.82 ± (0.62)
+𝑘𝑡 = 0.23 ± (0.29)
+
+0.4
+0.2
+0.0
+
+0
+
+10
+
+Number of Secondary Cases
+Distribution of secondary cases
+(isolate & test)
+
+(a) Site locations
+(full scale)
+
+(b) Site locations
+(downsampled)
+
+(c) Population density
+
+Figure 14: Site locations and population density in Tirschenreuth, Germany. Panel (a) shows the
+spatial site distribution of the full scale model of Tirschenreuth, while panel (b) depicts a downsampled model
+in which the number of sites is reduced by a factor of 10. Colors represent site types as defined in Figure 1.
+Panel (c) shows the population density taken from Facebook Data for Good [54]. Purple and orange colors
+correspond to relative low and high density of homes in the region, respectively.
+35
+
+(a) Tübingen
+
+(b) Kaiserslautern
+
+(c) Rheingau-Taunus-Kreis
+
+Figure 15: Narrowcasting of exposure risk at sites during a time window of two weeks of the
+realistic “lockdown” scenario of Figure 8. Circles represent sites and the size of each circle is proportional
+to the site’s empirical probability of exposure of a visiting individual during the time period. Colors represent
+site types as defined in Figure 1.
+36
+
+(d) Bern
+
+(e) Locarno
+
+(f) Canton Jura
+
+Figure 15
+
+37
+
+

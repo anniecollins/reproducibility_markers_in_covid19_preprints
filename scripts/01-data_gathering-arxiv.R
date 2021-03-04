@@ -141,34 +141,14 @@ purrr::walk2(get_all_arxiv_results$link_pdf,
 
 
 
+#### Convert to text ####
+
+# Set up folders for download and txt conversion
+arxiv_pdf_folder = "/Volumes/Hansard/arxiv/"
+arxiv_txt_folder = paste(getwd(), "/outputs/data/text-arXiv", sep = "")
+
+# Convert PDFs to text and saves in new folder
+oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
+# install.packages('Rpoppler')
 
 
-
-# This is the old code for medarxiv - need to do equiv for arxiv:
-
-# 
-# # Sample from results
-# set.seed(100)
-# med_sample <- med_results[sample(nrow(med_results), 1200),]
-# med_sum <- med_sample %>% group_by(month=floor_date(date, "month")) %>% summarise(num=n())
-# write_csv(med_sample, "outputs/data/med_sample.csv")
-# 
-#   
-# #### Download relevant papers ####
-# # Set up folders for download and txt conversion
-# med_pdf_folder = paste(getwd(), "/outputs/data/pdf-medRxiv", sep = "")
-# med_txt_folder = paste(getwd(), "/outputs/data/text-medRxiv", sep = "")
-# 
-# # Download first 500 papers and latest 500 and save to computer
-# # head(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
-# # tail(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
-# 
-# # Download randomly sampled PDFs (will not)
-# med_sample %>% mx_download(directory = med_pdf_folder, create = FALSE)
-# 
-# # Convert PDFs to text and saves in new folder
-# pdf_convert(med_pdf_folder, med_txt_folder)
-# 
-# 
-# #### Clean up ####
-# rm()
