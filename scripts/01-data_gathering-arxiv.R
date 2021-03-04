@@ -1,7 +1,7 @@
 #### Preamble ####
-# Purpose: Download papers from arxiv that are related to COVID-19.
-# Author: Annie Collins and Rohan Alexander
-# Data: 20 February 2021
+# Purpose: Download papers from arXiv that are related to COVID-19.
+# Author: Rohan Alexander
+# Data: 4 March 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT
 # Pre-requisites: 
@@ -12,6 +12,9 @@
 #### Workspace setup ####
 library(aRxiv)
 library(tidyverse)
+library(lubridate)
+library(utils)
+library(purrr)
 # library(lubridate)
 # library(oddpub)
 citation('aRxiv')
@@ -41,7 +44,6 @@ arxiv_result_to_march_ii <-
                sort_by="submitted",
                limit = 3500,
                start = 100)
-
 
 arxiv_count('submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
 # There are 1830 to get
@@ -84,7 +86,7 @@ all_arxiv_results <-
 write_csv(all_arxiv_results, "outputs/data/arxiv_results.csv")
 
 
-
+#### Have a quick look ####
 all_arxiv_results <- 
   read_csv("outputs/data/arxiv_results.csv")
 
@@ -99,6 +101,50 @@ all_arxiv_results %>%
   ggplot() + 
   geom_col(aes(x=submitted, y=n))
 
+
+#### Download PDFs ####
+all_arxiv_results <- 
+  read_csv("outputs/data/arxiv_results.csv")
+
+# Write a function
+download_pdfs <- 
+  function(link_to_pdf_of_interest, save_name){
+    utils::download.file(link_to_pdf_of_interest, save_name, mode = "wb")
+    message <- paste0("Done with ", link_to_pdf_of_interest, " at ", Sys.time())
+    print(message)
+    Sys.sleep(sample(x = c(5:10), size = 1))
+    }
+
+# Use the function
+get_all_arxiv_results <- 
+  all_arxiv_results %>% 
+  # slice(1:2) %>% # Uncomment when testing 
+  select(id, link_pdf) %>% 
+  mutate(id = paste0(id, ".pdf"),
+         link_pdf = paste0(link_pdf, ".pdf")
+         ) %>% 
+  mutate(id = paste0("/Volumes/Hansard/arxiv/", id)) %>% 
+  mutate(order = sample(x = c(1:nrow(all_arxiv_results)),
+                        size = nrow(all_arxiv_results),
+                        replace = FALSE)) %>% 
+  arrange(order)
+
+safely_download_pdfs <- purrr::safely(download_pdfs)
+
+purrr::walk2(get_all_arxiv_results$link_pdf,
+             get_all_arxiv_results$id,
+             safely_download_pdfs)
+
+# Need to write a package that does this. Also that checks whether the file exists and then skips that.
+# Check if Annie has time - woudl be a nice companion package.
+
+
+
+
+
+
+
+# This is the old code for medarxiv - need to do equiv for arxiv:
 
 # 
 # # Sample from results
