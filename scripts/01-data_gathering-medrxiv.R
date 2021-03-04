@@ -1,6 +1,6 @@
 #### Preamble ####
 # Purpose: Download papers from medrxiv that are related to COVID-19.
-# Author: Annie Collins and Rohan Alexander
+# Author: Annie Collins
 # Data: 12 February 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT

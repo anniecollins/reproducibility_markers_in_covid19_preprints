@@ -1,6 +1,6 @@
 #### Preamble ####
 # Purpose: Download the txt files of the PDFs downloaded from medrxiv in 01-data_gathering_mexrxiv.R
-# Author: Annie Collins and Rohan Alexander
+# Author: Annie Collins
 # Data: 12 February 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT
