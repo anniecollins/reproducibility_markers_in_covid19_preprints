@@ -1,7 +1,7 @@
 #### Preamble ####
 # Purpose: Download papers from arXiv that are related to COVID-19.
 # Author: Rohan Alexander
-# Data: 4 March 2021
+# Data: 5 March 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT
 # Pre-requisites: 
@@ -131,13 +131,19 @@ get_all_arxiv_results <-
 
 safely_download_pdfs <- purrr::safely(download_pdfs)
 
+# Check what's already been downloaded
+already_got <- list.files(path = "/Volumes/Hansard/arxiv", full.names = TRUE)
+# Remove those rows
+get_all_arxiv_results <- 
+  get_all_arxiv_results %>% 
+  filter(!id %in% already_got)
+
 purrr::walk2(get_all_arxiv_results$link_pdf,
              get_all_arxiv_results$id,
              safely_download_pdfs)
 
-# Need to write a package that does this. Also that checks whether the file exists and then skips that.
-# Check if Annie has time - woudl be a nice companion package.
-
+# Need to write a package that does this.
+# Check if Annie has time - would be a nice companion package.
 
 
 

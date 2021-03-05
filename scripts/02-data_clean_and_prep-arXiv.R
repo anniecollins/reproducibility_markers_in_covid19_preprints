@@ -1,7 +1,7 @@
 #### Preamble ####
 # Purpose: Parse the txt files created from the PDFs downloaded from arxiv in 01-data_gathering_arxiv.R
 # Author: Rohan Alexander
-# Data: 4 March 2021
+# Data: 5 March 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT
 # Pre-requisites: 
@@ -27,7 +27,7 @@ all_arxiv_results <-
 arxiv_open_data_results <- 
   oddpub::open_data_search(arxiv_text_sentences)
 
-# Join med_sample to arxiv_open_data_results and save as arxiv_open_data_results
+# Join the dataset with the metadata with the dataset with the open markers
 arxiv_open_data_results <- 
   arxiv_open_data_results %>% 
   mutate(id = str_remove(article, "\\.txt"))
@@ -36,23 +36,15 @@ arxiv_open_data_results <-
   arxiv_open_data_results %>% 
   left_join(all_arxiv_results, by = "id")
   
-
 # Convert TRUE/FALSE in ODDPub output to 1/0
 arxiv_open_data_results$is_open_code <- as.integer(arxiv_open_data_results$is_open_code)
 arxiv_open_data_results$is_open_data <- as.integer(arxiv_open_data_results$is_open_data)
-
 
 # Save it 
 write_csv(arxiv_open_data_results, 'outputs/data/arxiv_open_data_results.csv')
 
 
-#### Summary statistics ####
-# Read in data
-# TODO
-
 # Counts
 arxiv_open_data_results %>% 
   count(is_open_data, is_open_code)
-
-
 

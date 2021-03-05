@@ -1,0 +1,762 @@
+arXiv:2004.00253v1 [cs.DB] 1 Apr 2020
+
+Leveraging Data Preparation,
+HBase NoSQL Storage, and HiveQL Querying for
+COVID-19 Big Data Analytics Projects
+Version 1.0 - Marsh 31, 2020
+Karim Baïna
+Alqualsadi research team (Innovation on Digital and Enterprise Architectures)
+ADMIR Laboratory, Rabat IT Center,
+ENSIAS, University Mohammed V in Rabat,
+BP 713 Agdal, Rabat, Morocco
+karim.baina@um5.ac.ma
+
+Abstract. Epidemiologist, Scientists, Statisticians, Historians, Data engineers and Data scientists are working on finding descriptive models and
+theories to explain COVID-19 expansion phenomena or on building analytics predictive models for learning the apex of COVID-19 confimed
+cases, recovered cases, and deaths evolution curves. In CRISP-DM life
+cycle, 75% of time is consumed only by data preparation phase causing lot of pressions and stress on scientists and data scientists building
+machine learning models. This paper aims to help reducing data preparation efforts by presenting detailed schemas design and data preparation
+technical scripts for formatting and storing Johns Hopkins University
+COVID-19 daily data in HBase NoSQL data store, and enabling HiveQL
+COVID-19 data querying in a relational Hive SQL-like style.
+Key words: Coronavirus, SARS-CoV-2, COVID-19, 2019-nCoV, Data Engineering,
+NoSQL, HBase, Hive.
+
+1
+
+Introduction
+
+Johns Hopkins University has provided a github repository with, among others, daily fresh data about COVID-19 pandemy confirmed cases, recovered cases,
+and deaths evolution [1]. Epidemiologist, Scientists, Statisticians, Historians,
+Data engineers and Data scientists are working on finding models and theories to explain and predict COVID-19 expansion phenomena. Our paper aims
+to help reducing data preparation efforts by presenting detailed schemas design
+and data preparation technical scripts for formatting and storing Johns Hopkins
+University COVID-19 daily data in HBase [2] NoSQL data store, and enabling
+HiveQL COVID-19 data querying in a relational Hive [3] SQL-like style. Our data
+
+integration and analytics approach for this paper, and for handling COVID-19
+crisis in general is building Minimum Viable Model, Platform, and Data Product
+through agile analytics [4].
+
+2
+
+Prerequisites
+
+(1) Hadoop or YARN [5] with HBase, Hive need to be installed1 . (3) A Linux/Unix environment is requeted for running the given shell scripts. (4) git tools
+are necessary for pulling data.
+Listing 1.1: Targeted Datalake Hadoop ecosystem starting
+1
+2
+3
+
+./start.sh hadoop
+./start.sh hbase
+./start.sh hive
+
+This step depends on the Hadoop/YARN environment specificities. Ambari [6]
+may be used to start those services.
+
+3
+
+COVID-19 Data Preparation
+
+3.1
+
+Data Collection
+
+COVID-19 Data can be collected each day from Johns Hopkins University
+Center for Systems Science and Engineering (JHU CCSE) github repository
+around 2.00 am GMT+1.
+Listing 1.2: Pulling COVID-19 Data
+1
+
+2
+
+#kbaina is my local home directory, change it to your home
+directory or another directory
+cd /home/kbaina/
+
+3
+4
+
+git clone https://github.com/CSSEGISandData/COVID-19.git
+COVID-19/
+
+5
+6
+
+cd ./COVID-19/
+
+7
+8
+
+1
+
+git pull
+
+In this paper, a minimal IBM BigInsights quick start VM is used as a DEV onpremises Big Data platform, however, scripts are compatible with every on-premises
+Hadoop Apache compliant Big Data distributions (like Cloudera/Hortonworks HDP,
+IBM Open Platform, MapR, etc.), or Hadoop Apache compliant Cloud Analytics Solutions (like Google Cloud Big Data Analytics Solutions, Microsoft Azure HDInsight,
+Amazon AWS EMR, IBM Analytics Engine on IBM Watson, etc.)
+
+3.2
+
+Data Formatting
+
+ingest_and_clean.sh data fomatting Shell script removes \”, ’∗’ characters,
+and replaces non separator ’,’ by ’-’ character (e.g. in "Korea, South"), formats
+column dates into "%m/%d/%Y" format (eg. 3/2/20 becomes 03/02/2020) enabling dates operations, keeps only not null values from the sparse matrix, and
+merges the two first columns to form a composite key separated by a ’~’ character.
+
+Listing 1.3: Data Fomatting Shell Script (ingest_and_clean.sh)
+1
+2
+
+#!/bin/sh
+specific=$1
+
+3
+4
+
+#$1 script parameter may be ’confimed’ or ’deaths’ or ’
+recovered’
+
+5
+6
+
+7
+8
+9
+10
+11
+12
+13
+14
+15
+
+sed "s/, /-/" ./COVID-19/csse_covid_19_data/
+csse_covid_19_time_series/
+time_series_covid19_${specific}_global.csv | sed "s/\"//g" |
+sed "s/\*//" | sed -E "s/\,(.)\//,0\1\//g" |
+sed -E "s/\/(.)\//\/0\1\//g" |
+sed -E "s/\/20([^/])/\/2020\1/g" |
+sed -E "s/\/20$/\/2020/g"| sed -E "s/,($)/,0\1/g" |
+sed "s/,0,/,,/g"| sed -E "s/([,]+)0,/\1,/g" |
+sed "s/,0$/,$/" | sed "s/^,/~/" |
+sed -E "s/([a-z A-Z]+),([a-z A-Z]+)/\1~\2/" >
+time_series_covid19_${specific}_global-sparse-with-formattedcolumn-names.csv
+
+16
+17
+
+18
+
+19
+
+# time_series_covid19_${specific}_global-sparse-withformatted-column-names.csv
+# contains date formatted columns useful for any further date
+arithmetics and manipulation
+# (e.g. duration calculations, D0 of COVID-19, D0 of n^th
+death manipulation, etc.)
+
+20
+21
+
+tail -n +2 time_series_covid19_${specific}_global-sparse-with
+-formatted-column-names.csv > time_series_covid19_${
+specific}_global-sparse.csv
+
+Listing 1.4: Calling Data Fomatting Shell Script (ingest_and_clean.sh)
+1
+
+cd /home/kbaina/
+
+2
+3
+
+chmod u+x ./ingest_and_clean.sh
+
+4
+5
+
+./ingest_and_clean.sh confirmed
+
+6
+7
+
+./ingest_and_clean.sh deaths
+
+8
+9
+
+10
+
+4
+
+#next command will succeed but you should adapt next section
+scripts for creating, feeding, and querying recovered
+tables.
+#./ingest_and_clean.sh recovered
+
+NoSQL HBase Storage and Hive SQL/pure NoSQL
+interoperability
+
+In this section present NoSQL and relational schema design and detailed
+technical scripts for storing JHU COVID-19 daily confimed cases and deaths
+data 2 . For a more conceptual background on NoSQL databases, and NoSQL
+design methodologies, here are are related author papers [7, 8]
+4.1
+
+NoSQL HBase schema Design
+
+Confirmed cases and deaths data will be stored respectively in HBase ’confirmed_covid19_cases’ table, and ’deaths_covid19_cases’ table. Mainly those tables are compliant to JHU CCSE files struture with the first two columns agregation for database unique key property3 . Each covid-19 row, either for confirmed
+cases or for deaths, in HBase will store a country data structured as a composite
+string primary key (rowid) constituted from its eventual province/state concatenated with its country name/region and separated with ’~’ character. The row
+then will store all columns values under the same column family ’a’ (e.g. ’a:lt’ represents latitude, ’a:lg’ represents longitude, while remaining dynamic daily dated
+columns values will be named by convention as ’a:d122’ meaning value at January 22nd, ’a:d327’ meaning confirmed cases value of confirmed_covid19_cases
+table (respectively number of deaths of deaths_covid19_cases table) at March
+27nd, etc.
+2
+
+3
+
+without loosing in generality, all scripts in this paper can be very
+easily adapted to take into account JHU CCSE recovered cases file
+(time_series_covid19_recovered_global.csv) from github repository.
+time_series_covid19_confirmed_global.csv and time_series_covid19_deaths_global.csv
+under ./COVID-19/csse_covid_19_data/csse_covid_19_time_series/ directory.
+
+The following HBase commands retrieve number of confirmed COVID-19
+cases, and deaths at March 31st for Morocco (suffix before ’ ’ is empty for all
+countries) and for British Columbia Canada (suffix before ’ ’ is not empty for all
+states) from’confirmed_covid19_cases’ and ’deaths_covid19_cases’ Hbase tables.
+Listing 1.5: HBase get query examples
+1
+
+get ’confirmed_covid19_cases’, ’~Morocco’, ’a:d331’
+
+2
+3
+
+get ’deaths_covid19_cases’, ’~Morocco’, ’a:d331’
+
+4
+5
+
+get ’confirmed_covid19_cases’, ’British Columbia~Canada’, ’a:
+d331’
+
+6
+7
+
+4.2
+
+get ’deaths_covid19_cases’, ’British Columbia~Canada’, ’a:
+d331’
+
+Relational Hive schema Design
+
+Confirmed cases and deaths data will be respectively represented by two external tables in Hive ’confirmed_covid19_cases’ table, and ’deaths_covid19_cases’.
+Those tables will be relational abstractions mapped (kind of shortcuts pointing)
+to their equivalent NoSQL tables in HBase (i.e. non managed Tables - stored
+physically only in Hbase).4,5,6 .
+Listing 1.6: Under HBase remove Confirmed cases Table
+1
+
+disable ’confirmed_covid19_cases’
+
+2
+3
+
+drop ’confirmed_covid19_cases’
+
+Listing 1.7: Under HBase remove Deaths Table
+1
+
+disable ’deaths_covid19_cases’
+
+2
+3
+
+4
+
+5
+
+6
+
+drop ’deaths_covid19_cases’
+
+In the NoSQL/SQL interoperability between HBase and Hive, the Hive’CREATE TABLE
+command will create two tables one in HBase and another table in Hive (the latest is
+implicitely external)
+You should add a new column to Hive/HBase confimed cases, deaths and recovered
+schemas each day after March 31st, 2020 manually or generate the new schema
+automatically !!.
+SQL Hive CREATE TABLE commands are may easily be adapted to other relational
+Big Data store compatible with HBase as Cloudera HDP Impala [9], IBM Db 2 Big
+SQL [10], etc.
+
+Listing 1.8: Hive/Hbase Confirmed Cases tables creation
+1
+
+DROP TABLE confirmed_covid19_cases;
+
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+
+CREATE TABLE confirmed_covid19_cases (
+key struct<Province_State : string,Country_Region : string>,
+Lat float,
+Long float,
+01_22_2020 int, 01_23_2020 int, 01_24_2020 int,
+01_25_2020 int, 01_26_2020 int, 01_27_2020 int,
+01_28_2020 int, 01_29_2020 int, 01_30_2020 int,
+01_31_2020 int, 02_01_2020 int, 02_02_2020 int,
+02_03_2020 int, 02_04_2020 int, 02_05_2020 int,
+02_06_2020 int, 02_07_2020 int, 02_08_2020 int,
+02_09_2020 int, 02_10_2020 int, 02_11_2020 int,
+02_12_2020 int, 02_13_2020 int, 02_14_2020 int,
+02_15_2020 int, 02_16_2020 int, 02_17_2020 int,
+02_18_2020 int, 02_19_2020 int, 02_20_2020 int,
+02_21_2020 int, 02_22_2020 int, 02_23_2020 int,
+02_24_2020 int, 02_25_2020 int, 02_26_2020 int,
+02_27_2020 int, 02_28_2020 int, 02_29_2020 int,
+03_01_2020 int, 03_02_2020 int, 03_03_2020 int,
+03_04_2020 int, 03_05_2020 int, 03_06_2020 int,
+03_07_2020 int, 03_08_2020 int, 03_09_2020 int,
+03_10_2020 int, 03_11_2020 int, 03_12_2020 int,
+03_13_2020 int, 03_14_2020 int, 03_15_2020 int,
+03_16_2020 int, 03_17_2020 int, 03_18_2020 int,
+03_19_2020 int, 03_20_2020 int, 03_21_2020 int,
+03_22_2020 int, 03_23_2020 int, 03_24_2020 int,
+03_25_2020 int, 03_26_2020 int, 03_27_2020 int,
+03_28_2020 int, 03_29_2020 int, 03_30_2020 int,
+03_31_2020 int
+)
+ROW FORMAT DELIMITED
+COLLECTION ITEMS TERMINATED BY ’\~’
+STORED BY ’org.apache.hadoop.hive.hbase.HBaseStorageHandler’
+WITH SERDEPROPERTIES (
+"hbase.table.name" = "confirmed_covid19_cases",
+"hbase.mapred.output.outputtable"="confirmed_covid19_cases",
+"hbase.columns.mapping" = ":key,a:lt,a:lg,a:d122,a:d123,
+a:d124,a:d125,a:d126,a:d127,a:d128,a:d129,a:d130,a:d131,
+a:d201,a:d202,a:d203,a:d204,a:d205,a:d206,a:d207,a:d208,
+a:d209,a:d210,a:d211,a:d212,a:d213,a:d214,a:d215,a:d216,
+a:d217,a:d218,a:d219,a:d220,a:d221,a:d222,a:d223,a:d224,
+a:d225,a:d226,a:d227,a:d228,a:d229,a:d301,a:d302,a:d303,
+a:d304,a:d305,a:d306,a:d307,a:d308,a:d309,a:d310,a:d311,
+a:d312,a:d313,a:d314,a:d315,a:d316,a:d317,a:d318,a:d319,
+a:d320,a:d321,a:d322,a:d323,a:d324,a:d325,a:d326,a:d327,
+a:d328,a:d329,a:d330,a:d331",
+"hbase.composite.key.factory"="org.apache.hadoop.hive.hbase.
+SampleHBaseKeyFactory2");
+
+49
+50
+
+DESCRIBE confirmed_covid19_cases;
+
+Listing 1.9: Hive/Hbase Deaths table creation
+1
+
+DROP TABLE deaths_covid19_cases;
+
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+
+CREATE TABLE deaths_covid19_cases (
+key struct<Province_State : string,Country_Region : string>,
+Lat float,
+Long float,
+01_22_2020 int, 01_23_2020 int, 01_24_2020 int,
+01_25_2020 int, 01_26_2020 int, 01_27_2020 int,
+01_28_2020 int, 01_29_2020 int, 01_30_2020 int,
+01_31_2020 int, 02_01_2020 int, 02_02_2020 int,
+02_03_2020 int, 02_04_2020 int, 02_05_2020 int,
+02_06_2020 int, 02_07_2020 int, 02_08_2020 int,
+02_09_2020 int, 02_10_2020 int, 02_11_2020 int,
+02_12_2020 int, 02_13_2020 int, 02_14_2020 int,
+02_15_2020 int, 02_16_2020 int, 02_17_2020 int,
+02_18_2020 int, 02_19_2020 int, 02_20_2020 int,
+02_21_2020 int, 02_22_2020 int, 02_23_2020 int,
+02_24_2020 int, 02_25_2020 int, 02_26_2020 int,
+02_27_2020 int, 02_28_2020 int, 02_29_2020 int,
+03_01_2020 int, 03_02_2020 int, 03_03_2020 int,
+03_04_2020 int, 03_05_2020 int, 03_06_2020 int,
+03_07_2020 int, 03_08_2020 int, 03_09_2020 int,
+03_10_2020 int, 03_11_2020 int, 03_12_2020 int,
+03_13_2020 int, 03_14_2020 int, 03_15_2020 int,
+03_16_2020 int, 03_17_2020 int, 03_18_2020 int,
+03_19_2020 int, 03_20_2020 int, 03_21_2020 int,
+03_22_2020 int, 03_23_2020 int, 03_24_2020 int,
+03_25_2020 int, 03_26_2020 int, 03_27_2020 int,
+03_28_2020 int, 03_29_2020 int, 03_30_2020 int,
+03_31_2020 int
+)
+ROW FORMAT DELIMITED
+COLLECTION ITEMS TERMINATED BY ’\~’
+STORED BY ’org.apache.hadoop.hive.hbase.HBaseStorageHandler’
+WITH SERDEPROPERTIES (
+"hbase.table.name" = "deaths_covid19_cases",
+"hbase.mapred.output.outputtable" = "deaths_covid19_cases",
+"hbase.columns.mapping" = ":key,a:lt,a:lg,a:d122,a:d123,
+a:d124,a:d125,a:d126,a:d127,a:d128,a:d129,a:d130,a:d131,
+a:d201,a:d202,a:d203,a:d204,a:d205,a:d206,a:d207,a:d208,
+a:d209,a:d210,a:d211,a:d212,a:d213,a:d214,a:d215,a:d216,
+a:d217,a:d218,a:d219,a:d220,a:d221,a:d222,a:d223,a:d224,
+a:d225,a:d226,a:d227,a:d228,a:d229,a:d301,a:d302,a:d303,
+a:d304,a:d305,a:d306,a:d307,a:d308,a:d309,a:d310,a:d311,
+a:d312,a:d313,a:d314,a:d315,a:d316,a:d317,a:d318,a:d319,
+a:d320,a:d321,a:d322,a:d323,a:d324,a:d325,a:d326,a:d327,
+a:d328,a:d329,a:d330,a:d331",
+"hbase.composite.key.factory"="org.apache.hadoop.hive.hbase.
+SampleHBaseKeyFactory2");
+
+49
+50
+
+DESCRIBE deaths_covid19_cases;
+
+4.3
+
+NoSQL HBase Data Loading
+
+Loading prepared COVID-19 data to HBase data store is achieved by (i)
+copying time_series_covid19_confirmed_global-sparse.csv and
+time_series_covid19_deaths_global-sparse.csv files generated by ingest_and_clean.sh
+script invokations into HDFS file system, and (ii) then performing bulk looding
+into HBase previously created schema.
+
+Listing 1.10: HBase Feeding with Confirmed Cases data
+1
+
+#here biadmin is my HDFS user name change it to yours
+
+2
+3
+
+hadoop fs -rm /user/biadmin/
+time_series_covid19_confirmed_global-sparse.csv
+
+4
+5
+
+hadoop fs -put /home/kbaina/
+time_series_covid19_confirmed_global-sparse.csv /user/
+biadmin/
+
+6
+7
+
+hadoop fs -ls
+
+8
+9
+
+#here /opt/ibm/biginsights/hbase/bin is my HBase binary
+directory change it to yours
+
+10
+11
+
+/opt/ibm/biginsights/hbase/bin/hbase org.apache.hadoop.hbase.
+mapreduce.ImportTsv -Dimporttsv.separator=’,’ -Dimporttsv
+.columns=HBASE_ROW_KEY,a:lt,a:lg,a:d122,a:d123,a:d124,a:
+d125,a:d126,a:d127,a:d128,a:d129,a:d130,a:d131,a:d201,a:
+d202,a:d203,a:d204,a:d205,a:d206,a:d207,a:d208,a:d209,a:
+d210,a:d211,a:d212,a:d213,a:d214,a:d215,a:d216,a:d217,a:
+d218,a:d219,a:d220,a:d221,a:d222,a:d223,a:d224,a:d225,a:
+d226,a:d227,a:d228,a:d229,a:d301,a:d302,a:d303,a:d304,a:
+d305,a:d306,a:d307,a:d308,a:d309,a:d310,a:d311,a:d312,a:
+d313,a:d314,a:d315,a:d316,a:d317,a:d318,a:d319,a:d320,a:
+d321,a:d322,a:d323,a:d324,a:d325,a:d326,a:d327,a:d328,a:
+d329,a:d330,a:d331 -Dimporttsv.skip.bad.lines=true Dimporttsv.skip.empty.columns=true
+confirmed_covid19_cases /user/biadmin/
+time_series_covid19_confirmed_global-sparse.csv
+
+Listing 1.11: HBase Feeding with Deaths data
+1
+
+#here biadmin is my HDFS user name change it to yours
+
+2
+3
+
+hadoop fs -rm /user/biadmin/
+time_series_covid19_deaths_global-sparse.csv
+
+4
+5
+
+hadoop fs -put /home/kbaina/time_series_covid19_deaths_global
+-sparse.csv /user/biadmin/
+
+6
+7
+
+hadoop fs -ls
+
+8
+9
+
+10
+
+5
+
+#here /opt/ibm/biginsights/hbase/bin is my HBase binary
+directory change it to yours
+/opt/ibm/biginsights/hbase/bin/hbase org.apache.hadoop.hbase.
+mapreduce.ImportTsv -Dimporttsv.separator=’,’ -Dimporttsv
+.columns=HBASE_ROW_KEY,a:lt,a:lg,a:d122,a:d123,a:d124,a:
+d125,a:d126,a:d127,a:d128,a:d129,a:d130,a:d131,a:d201,a:
+d202,a:d203,a:d204,a:d205,a:d206,a:d207,a:d208,a:d209,a:
+d210,a:d211,a:d212,a:d213,a:d214,a:d215,a:d216,a:d217,a:
+d218,a:d219,a:d220,a:d221,a:d222,a:d223,a:d224,a:d225,a:
+d226,a:d227,a:d228,a:d229,a:d301,a:d302,a:d303,a:d304,a:
+d305,a:d306,a:d307,a:d308,a:d309,a:d310,a:d311,a:d312,a:
+d313,a:d314,a:d315,a:d316,a:d317,a:d318,a:d319,a:d320,a:
+d321,a:d322,a:d323,a:d324,a:d325,a:d326,a:d327,a:d328,a:
+d329,a:d330,a:d331 -Dimporttsv.skip.bad.lines=true Dimporttsv.skip.empty.columns=true deaths_covid19_cases /
+user/biadmin/time_series_covid19_deaths_global-sparse.csv
+
+Hive SQL/pure NoSQL interoperability and Querying
+
+Instead of suffering from spreesheats limitations to exploit JHU COVID-19
+data with regards to columns number for sorting, or integration of more tables,
+or versioning different hard coded sheets and workbooks for business users, and
+instead of coding complex reporting scripts for simple queries for data engineers
+and data scientists, one may express simple queries both using HBase and Hive
+command line interfaces or through APIs.
+Listing 1.12: Visualise all confirmed cases and deaths directely from HBase
+1
+
+scan ’confirmed_covid19_cases’
+
+2
+3
+
+scan ’deaths_covid19_cases’
+
+Listing 1.13: HBase queries retrieving numbers concerning four countries on
+March 31st 2020
+1
+2
+
+get ’confirmed_covid19_cases’, ’~Morocco’, ’a:d331’
+get ’deaths_covid19_cases’, ’~Morocco’, ’a:d331’
+
+3
+4
+5
+
+get ’confirmed_covid19_cases’, ’~Spain’, ’a:d331’
+get ’deaths_covid19_cases’, ’~Spain’, ’a:d331’
+
+6
+7
+8
+
+get ’confirmed_covid19_cases’, ’~France’, ’a:d331’
+get ’deaths_covid19_cases’, ’~France’, ’a:d331’
+
+9
+10
+11
+
+get ’confirmed_covid19_cases’, ’~Germany’, ’a:d331’
+get ’deaths_covid19_cases’, ’~Germany’, ’a:d331’
+
+Listing 1.14: Hive query retrieving all confirmed cases data concerning Morocco
+1
+2
+3
+
+SELECT *
+FROM confirmed_covid19_cases
+where key.Country_Region=’Morocco’ ;
+
+Listing 1.15: Hive Join query retrieving confirmed cases and deaths concerning
+Morocco on March 31st 2020
+1
+2
+3
+4
+5
+6
+
+SELECT d.key.Country_Region, c.03_31_2020, d.03_31_2020
+FROM confirmed_covid19_cases c
+JOIN deaths_covid19_cases d
+ON
+c.key.Province_State = d.key.Province_State
+AND c.key.Country_Region=d.key.Country_Region
+WHERE c.key.Country_Region =’Morocco’ ;
+
+Listing 1.16: Hive Join query retrieving confirmed cases and deaths concerning
+four countries on March 31st 2020
+1
+
+2
+3
+4
+5
+6
+
+SELECT d.key.Province_State, d.key.Country_Region, c.03
+_31_2020, d.03_31_2020
+FROM confirmed_covid19_cases c
+JOIN deaths_covid19_cases d
+ON
+c.key.Province_State = d.key.Province_State
+AND c.key.Country_Region=d.key.Country_Region
+WHERE c.key.Country_Region in (’Morocco’, ’France’, ’Spain’,
+’Germany’) ;
+
+6
+
+Conclusion
+
+This paper presents detailed schemas design and data preparation technical HBase, Hive, shell and HDFS scripts for formatting and storing Johns Hopkins University COVID-19 daily data in HBase NoSQL data store, and enabling
+HiveQL COVID-19 data querying in a relational Hive SQL-like style. It aims to
+help scientists and data scientists shortening data preparation phase which is
+time consuming acording to CRISP-DM life cycle specialists. This work is to be
+taken as a leveraging bootstrap for specific data preparation phase in COVID-19
+analytics Big Data projects aiming for instance to integrate COVID-19 evolution
+time series with medical/biology best practices, COVID-19 mutations, scientific
+papers results, or to study correlations between COVID-19 curves with humidity data, people telco mobilty during countries lockdown phases, or to analyse
+recurrent COVID-19 contamination causality, or to study similarities with other
+historical pandemics evolution data like SARS-CoV, MERS-COV, or to compare evolution with spreading information from social networks, etc. The more
+integration you do on the schema with other data sets (e.g. continents, median
+age, population, testing numbers, virus contamination rates, etc.), the more features you will have and the more this work will leverage your COVID-19 data
+experience. Hurry Up, and share you experience for the world scientists.
+
+7
+
+Appendix : How to download scripts of this paper ?
+
+To download continuously data engineering models and scripts discussed in
+this paper, you can access, and clone the author gitlab repository at [11].
+
+Acknowledgment
+Acknowledgement must go to Johns Hopkins University Center for Systems
+Science and Engineering (JHU CCSE) for keeping up to date world wide COVID19 data available in a daily frequency.
+Acknowledgement must go to The Ministry of National Education, Higher
+Education, Staff Training, and Scientific Research, Morocco for accepting and
+supporting my sabbatical leave to do research, and return to ENSIAS refreshed.
+I also acknowledge my colleagues at ENSIAS maintaining the superb teaching
+and learning and e-learning culture in the school in my absence especially during
+COVID-19 crisis.
+
+References
+1. Johns-Hopkins, U.: Novel coronavirus (covid-19) cases, provided by jhu csse.
+https://github.com/CSSEGISandData/COVID-19 (2020)
+2. Apache-Software, F.: Apache HBase. https://hbase.apache.org (2020)
+3. Apache-Software, F.: Apache Hive. https://hive.apache.org (2020)
+
+4. Tran, D.:
+What is minimum viable (data) product ?
+https:
+//medium.com/idealo-tech-blog/\what-is-minimum-viable-dataproduct-49269e338d85 (2018)
+5. Apache-Software, F.: Apache Hadoop. https://hadoop.apache.org (2020)
+6. Apache-Software, F.: Apache Ambari. https://ambari.apache.org (2020)
+7. Asaad, C., Baïna, K.: NoSQL Databases–Seek for a Design Methodology. In:
+International Conference on Model and Data Engineering, Springer (2018) 25–40
+8. Asaad, C., Baïna, K., Ghogho, M.: NoSQL Databases: Yearning for Disambiguation. arXiv preprint https://arxiv.org/abs/2003.04074v2 (2020)
+9. Apache-Software, F.: Apache Impala. https://impala.apache.org (2020)
+10. Apache-Software, F.: IBM DB2 Big SQL. https://www.ibm.com/products/
+db2-big-sql (2020)
+11. Baïna, K.: Novel coronavirus (covid-19) data engineering. https://gitlab.com/
+kbaina/COVID-19 (2020)
+
+

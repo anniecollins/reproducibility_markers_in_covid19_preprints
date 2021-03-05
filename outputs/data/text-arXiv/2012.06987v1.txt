@@ -1,0 +1,1773 @@
+arXiv:2012.06987v1 [cs.SI] 13 Dec 2020
+
+Estimating Spread of Contact-Based Contagions in a Population
+Through Sub-Sampling
+Sepanta Zeighami
+
+Cyrus Shahabi
+
+John Krumm
+
+USC
+zeighami@usc.edu
+
+USC
+shahabi@usc.edu
+
+Microsoft Research
+jckrumm@microsoft.com
+
+ABSTRACT
+
+1
+
+Physical contacts result in the spread of various phenomena such as
+viruses, gossips, ideas, packages and marketing pamphlets across a
+population. The spread depends on how people move and co-locate
+with each other, or their mobility patterns. How far such phenomena spread has significance for both policy making and personal
+decision making, e.g., studying the spread of COVID-19 under different interventions strategies such as wearing a mask. In practice,
+mobility patterns of an entire population is never available, and we
+usually have access to location data of a subset of individuals. In this
+paper, we formalize and study the problem of estimating the spread
+of a phenomena in a population, given that we only have access to
+sub-samples of location visits of some individuals in the population.
+We show that simple solutions such as estimating the spread in the
+sub-sample and scaling it to the population, or more sophisticated
+solutions that rely on modeling location visits of individuals do
+not perform well in practice, the former because it ignores contacts between unobserved individuals and sampled ones and the
+latter because it yields inaccurate modeling of co-locations. Instead,
+we directly model the co-locations between the individuals. We
+introduce PollSpreader and PollSusceptible, two novel approaches
+that model the co-locations between individuals using a contact
+network, and infer the properties of the contact network using the
+subsample to estimate the spread of the phenomena in the entire
+population. We analytically show that our estimates provide an
+upper bound and a lower bound on the spread of the disease in expectation. Finally, using a large high-resolution real-world mobility
+dataset, we experimentally show that our estimates are accurate
+in practice, while other methods that do not correctly account for
+co-locations between individuals result in entirely wrong observations (e..g„ premature herd-immunity) as the error is amplified over
+time.
+
+Phenomena that Spread through Contact. Viruses spread
+across a population through contacts and so do news, gossips, ideas
+and habits. Packages are passed between individuals when they
+meet to reach a destination, and pamphlets are given to individuals with the hope of reaching a wide audience. Physical contacts
+are responsible for such phenomena passing from one individual
+to another. Their spread, defined as how many people in a given
+population the phenomenon reaches, impacts our day to day lives,
+with COVID-19 as an on-going exhibit. Since the spread of such
+phenomena happens through contacts, it primarily depends on
+people’s mobility patterns (e.g., how people move in a city and how
+often they are co-located with others), as well as the characteristics
+of the phenomenon which determine how it can be passed on from
+one person to another, or the diffusion model (e.g., the probability
+of transmission from one person to another given that they are colocated). The mobility pattern determines when and where contacts
+happen, while the diffusion model determines how a phenomenon
+spreads when there are contacts.
+Role of Mobility Patterns. Mobility patterns play a fundamental
+role in the spread of any phenomena in a population and its analysis.
+To shed more light on their role we consider two aspects of mobility.
+(1) Visits form the location sequence of an individual which contain
+the information about the locations an individual has been to. (2) Colocations between multiple individuals, a by-product of their visits,
+which contain the information on the contacts between individuals.
+The spread of a phenomena in a population depends on the second
+aspect, i.e., co-locations, since it determines which individuals were
+in contact and able to pass an item between them. This simple
+observation informs much of our later discussions.
+Benefits of Analyzing Spread. The spread of the phenomena
+discussed has significance for both policy making and personal
+decision making. Given access to the mobility pattern of all individuals in a population and a diffusion model, we can simulate how a
+phenomena spreads in the population. This can be used to identify
+hotspots, compute location and individual risk-scores [4, 15, 21]
+and study various interventions or what-if scenarios [3, 7, 8, 10, 14].
+For instance, in the case of COVID-19, we can model the impact of
+wearing a mask as a change in the diffusion model (e.g., by lowering
+the probability of a transmission during a contact), and see how
+the spread differs from not wearing a mask, as done in [5]. Having
+access to the mobility patterns for different cities at different times,
+allows us to perform these studies at a high resolution, e.g., for
+specific neighbourhoods and time periods.
+Mobility Patterns of a Population. The benefits discussed above
+can only be materialized if we have access to mobility patterns
+for an entire population. However, that is not feasible in practice.
+Location sequences can be collected through cell-phones, but it
+
+PVLDB Reference Format:
+Sepanta Zeighami, Cyrus Shahabi, and John Krumm. Estimating Spread of
+Contact-Based Contagions in a Population Through Sub-Sampling. PVLDB,
+14(1): XXX-XXX, 2020.
+doi:XX.XX/XXX.XX
+PVLDB Artifact Availability:
+The source code, data, and/or other artifacts have been made available at
+http://vldb.org/pvldb/format_vol14.html.
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 14, No. 1 ISSN 2150-8097.
+doi:XX.XX/XXX.XX
+
+INTRODUCTION
+
+is difficult, if not impossible, to convince every single individual
+to share their location with a single entity. Nevertheless, running
+simulations with millions of users and billions of locations is very
+computationally demanding.
+Meanwhile, location data of subsets of individuals, obtained
+through their cell-phones, has become available. For instance, Veraset [2], a data-as-a-service company, provides anonymized population movement data collected through GPS signals of cell-phones
+across the US. Such datasets provide high-resolution and detailed
+mobility patterns of parts of the population, but will likely never
+contain the entire population. It is important to be able to fully and
+correctly utilize such datasets to analyze the spread of a phenomenon over an entire population.
+Problem of Up-Sampling. In this paper, we formalize and study
+the problem of estimating the spread of a phenomena in a population, given access to sub-samples of location visits of individuals
+in the population. Our goal is to estimate how many people in the
+whole population a phenomenon will reach, given a diffusion model
+and sample visits of the population. For instance, by observing only
+a portion of the population in a city, solving this problem allows
+us to estimate how much COVID-19 will spread under different
+intervention strategies (e.g., if people wear or do not wear masks)
+for the entire population.
+Existing Solutions and Challenges. A simple solution to the
+problem is to consider the spread in the sub-sampled population,
+and then scale the estimation to the whole population. However, we
+observed that such an approach vastly underestimates the spread
+because it ignores the co-locations between the unobserved individuals and the sampled individuals. In fact, the main challenge in
+solving the problem is accurately modeling co-locations between
+unobserved individuals and sampled individuals. We observed in
+our experiments that when this is not done accurately, the estimation can provide wrong infection patterns, e.g., estimating that the
+spread is stopping when the spread is actually increasing. This is
+because the underestimation gets amplified over time. For instance,
+underestimating the number of people who are currently infected
+in a population leads to further underestimating how many people
+the disease can be transmitted to in the future.
+An alternative approach is to model the visits of the unobserved
+individuals using the visits of the sampled individuals, and use
+that model to infer co-locations between unobserved and sampled
+individuals. For instance, an approach can be to generate synthetic
+location trajectories, e.g., using [6, 18], based on the observed location sequences to create a larger dataset that contains both real
+and synthetic location sequences. However, we observed that this
+indirect formation of co-locations from synthetic location data has
+two limitations. First, the co-locations cannot be formed accurately
+because our model needs to generate extremely accurate synthetic
+locations, within a few meters (to generate correct co-locations),
+and for long periods of time (to be able to track infected individuals
+correctly). In addition, creating synthetic locations corresponding
+to real-world populations explodes the data size, rendering simulations at scale impractical. A detailed discussion of these methods
+is provided in Sec. 5 and we experimentally evaluated a representative of such approaches in Sec. 4 which confirmed the above
+observations.
+
+Effectively, due to lack of access to individual location data, agent
+based simulations that are used to assess various interventions for
+containing the spread of a disease [3, 7, 8, 10, 14], utilized across the
+world for the COVID-19 pandemic, use fixed contact matrices to
+generate co-locations between individuals. These contact matrices
+contain, at an aggregate level, the rate of contacts between different
+compartments in the population (e.g., the rate of contacts between
+people of age 10 with people of age 50 in a population), and are
+created through surveys and interviews in various parts of the world
+[17, 19, 20]. In the absence of individual location data, such contact
+matrices can be useful for studying the spread in a population at
+an aggregate level (e.g. for a country). However, since the contact
+matrices are static, i.e., do not change with time, and are created at
+an aggregate level, they do not take into account the spatiotemporal
+changes in mobility (e.g., change in mobility on a day-to-day basis,
+or for different neighbourhoods in a city). Thus, they cannot be
+used to provide accurate estimate of the spread at a particular
+point in time and space. We believe using real location data and
+an accurate method for estimating the spread can help empower
+the above-mentioned studies to better understand the impact of
+different interventions.
+Our Approach. We rigorously study the problem of up-sampling.
+Our approach is to statistically estimate the probability of a sampled
+individual getting infected. Such an estimate needs to take into
+account the probability of a sampled individual getting infected
+by unobserved individuals. Rather than modeling location visits of
+an individuals, from which co-locations can be indirectly inferred,
+we directly model co-locations between individuals. This follows
+our observation that the extra information associated with location
+visits (e.g., their exact Geo-coordinates and their entire sequence) is
+unnecessary for modeling co-locations, while modeling such extra
+information makes the model less accurate.
+Our methods use a time-varying contact network [22] to model
+the co-location between individuals. The general approach is to
+use some statistics of the contact network, that can be estimated
+from sub-sampled individuals, to estimate the spread. We discuss
+two different ways this can be done. Our first approach, called
+Polling the Spreader, or PollSpreader, does this from the spreaders
+view: by modeling how many individuals a person can transmit the
+phenomena to. We observe that estimating statistics for this kind of
+modeling is difficult over long periods. Thus, we discuss our second
+approach, called Polling the Susceptible, or PollSusceptible, where
+we estimate the spread from a different perspective: we model
+different ways the phenomena can be transmitted to a particular
+individual. Using this approach, we provide lower and upper bounds
+on the spread of the phenomena in the whole population from the
+sub-sample. We experimentally observed that our estimates follow
+closely the spread in the whole population. Furthermore, our results
+show that the pattern of spread can be completely misjudged (e.g.,
+showing early herd-immunity by mistake) if the co-locations are
+not estimated accurately.
+Contributions and Organization. In this paper, we
+• Define the problem of estimating spread through subsampled visits (Sec. 2);
+• Present two novel methods, PollSpreader and PollSusceptible,
+that solve the problem accurately (Sec. 3);
+2
+
+sampled from some distribution Θ𝐼𝑆 , 𝑢 becomes IS. Furthermore,
+at time 𝑡 + 𝑡𝑅 , where 𝑡𝑅 is a positive number larger than 𝑡𝐼𝑆 and
+sampled from some distribution Θ𝑅 , 𝑢 becomes R.
+Consider a Susceptible individual, 𝑢, and an Infected and Spreading individual, 𝑣, and their corresponding visit sequences 𝑙𝑢 and
+𝑙 𝑣 . At any time, 𝑡, with probability 𝑝 = 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡), 𝑢 contracts the
+disease from 𝑣, where 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) is an application-dependent and
+user-defined function. The function 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) determines the probability of transmission of the disease from one person to another
+depending on the location of the individuals. Intuitively, there can
+be a non-zero probability of transmission when two individuals are
+close enough spatially for a long enough period of time.
+Finally, individuals are initially infected based on some probability distribution. Specifically, at time zero, a vector 𝑐 is sampled from
+a distribution Θ𝑖𝑛𝑖𝑡 , where 𝑐 ∈ {0, 1}𝑛 and the 𝑖-th element of 𝑐
+determines whether the 𝑖-th individual in the population is initially
+infected or not. If a user is initially infected, the user becomes an
+INS user and they transition to IS and R states following the same
+procedure discussed above.
+Problem Statement. Our goal is to estimate the extent of the
+spread over the population from just observing the visit sequences
+of a sub-sample of the population. Specifically, consider a population
+U of 𝑛 individuals and a set S ⊆ U, where S is sampled from U
+uniformly at random. Each individual is sampled independently
+and with probability 𝑝𝑠 . We use the term sub-sampled population
+to refer to the set S and whole population to refer to U. We refer to
+individuals in U \ S as unobserved individuals.
+
+Figure 1: Diffusion Model
+• Theoretically study the problem and provide lower and upper
+bound estimates of the number of infected people in the
+population over time using PollSusceptible; and
+• Experimentally show that our estimations are accurate in
+practice. (Sec. 4)
+Furthermore, Secs. 5 and 6 discuss the related work and our
+conclusion, respectively.
+
+2
+
+PROBLEM DEFINITION
+
+We study the problem of the spread of a phenomenon across a
+population, where the phenomenon is passed from one person to
+another through their co-location. We assume only a sub-sample
+of the population can be observed, and our goal is to estimate the
+number of individuals in the true population who become subjected
+to the phenomenon. We next define the terminology used. We have
+summarized our terminology in Table 1.
+Mobility Pattern. We consider a population consisting of 𝑛 individuals. For each individual, a visit provides the location of the
+individual at a particular point in time. Associated with each individual, 𝑢, is a visit sequence or location sequence, which is a sequence
+of the location of their visits at different times. For two consecutive
+visits, 𝑐 and 𝑐 ′ of an individual at times 𝑡 and 𝑡 ′ , we assume the
+individual is at the location specified by 𝑐 from time 𝑡 to 𝑡 ′ . As a
+result, given the visit sequence of 𝑢, we define 𝑙𝑢 to be a function
+returning the location of 𝑢 at every point in time. That is, for any 𝑡,
+𝑙𝑢 (𝑡) = (𝑥𝑡𝑢 , 𝑦𝑡𝑢 ) where 𝑥𝑡𝑢 and 𝑦𝑡𝑢 are the coordinates of the location
+of 𝑢 at time 𝑡. We abuse the notation and also refer to 𝑙𝑢 as 𝑢’s visit
+sequence.
+Diffusion Model. Here we discuss how diffusion occurs over the
+population. For ease of discussion, and without loss of generality,
+we adopt a terminology commonly used when a disease spreads
+in a population and in particular the SIR model [13] which is commonly used in epidemiology. The model is shown in Fig. 1. Each
+individual is in either the Susceptible (S), Infected (I) or Recovered
+(R) compartment. We refer to the compartment an individual belongs to as their status. Recovered individuals are assumed to be
+immune to the disease (or deceased), and thus will not contract the
+disease anymore. Infected individuals are either able to spread the
+disease (called Infected and Spreading, or IS) or they are not (called
+Infected and not Spreading, or INS). Susceptible individuals can
+contract the disease from Infected and Spreading individuals. After
+an S individual, 𝑢, contracts the disease at time 𝑡, 𝑢 immediately
+become INS. Then, at time 𝑡 + 𝑡𝐼𝑆 , where 𝑡𝐼𝑆 is a positive number
+
+Definition 2.1 (Up-Sampling Infected Count Problem). Give a subsampled population, S, and the parameters of the diffusion model,
+for any given time 𝑡, the Up-Sampling Infected Count Problem
+is to return the expected number of individuals who have gotten
+infected in the whole population, U, until time 𝑡.
+We use 𝐸𝐼𝑡 to denote any estimation of the answer to the UpSampling Infected Count Problem. We can analogously define the
+problem for other compartments in the population (e.g., Susceptible
+or Recovered), but the general methodology towards solving the
+problem remains the same and thus we focus only on estimating
+the number of Infected individuals.
+
+3
+
+ESTIMATING THE SPREAD
+
+Our goal is to estimate how many people in the whole population
+are infected at a point in time, 𝑡, by just observing the location of a
+sub-sample population. The problem would have been trivial had
+we had access to the true status of the sub-sampled population at
+time 𝑡. That is, at time 𝑡, if we knew exactly 𝑘𝑡 of the sub-sampled
+population are infected (or knew their exact probability of being
+infected), then an unbiased estimate of the number of infected individuals in the population would have been 𝑝𝑘𝑡𝑠 . However, except for
+𝑡 = 0, obtaining the correct value of 𝑘𝑡 is difficult, since a sampled
+individual may get infected by individuals who were not sampled
+(i.e., unobserved individuals). In this section, we first discuss a concrete diffusion model and introduce the necessary terminology
+(Sec. 3.1) and illustrate the difficulty of obtaining such an estimate
+with two naive solutions (Secs. 3.2 and 3.3). We then present our
+methodology (Sec. 3.4) and discuss how our solution can be applied
+to other diffusion models (Sec. 3.5).
+3
+
+Notation
+𝑝𝑠
+𝜃 𝐼𝑆
+𝜃𝑅
+𝜃𝑖𝑛𝑖𝑡
+𝜇𝐼𝑆
+𝜇𝑅
+𝑑𝑚𝑎𝑥
+𝑡𝑚𝑖𝑛
+𝑝𝑖𝑛𝑖𝑡
+𝑆𝑢
+𝑋𝑢𝑡
+𝑝ˆ𝑢𝑡
+𝑁 (𝑢, 𝐺𝑠,𝑡 )
+𝑁𝑢
+𝑁𝑢𝐴
+𝐸𝐼𝑡
+
+3.1
+
+Meaning
+Probability of an individual begin sampled
+Distribution of time it takes to become IS
+Distribution of time it takes to become R
+Distribution of initial infections
+Time it takes to become IS for Sec. 3
+Time it takes to become R for Sec. 3
+Maximum distance for transmission for Sec. 3
+Minimum duration for transmission for Sec. 3
+Probability of an initial infection for Sec. 3
+Indicator r. v. equal to one if 𝑢 is sampled
+Indicator r. v. equal to one if 𝑢 gets infected until time 𝑡
+Estimate of 𝑃 (𝑋𝑢𝑡 = 1) from sub-sampled population
+Neighbourhood of 𝑢 in 𝐺𝑠,𝑡
+𝑁 (𝑢, 𝐺𝑠,𝑡 ), Neighbourhood of 𝑢 in 𝐺𝑠,𝑡
+𝑁 (𝑢, 𝐺𝑠,𝑡 ) \ 𝐴, Neighbourhood of 𝑢 in 𝐺𝑠,𝑡 excluding A
+An estimate for the Up-Sampling Infected Count Problem
+Table 1: Table of Notations
+
+Terminology and Diffusion Model
+
+Diffusion Model. For ease of discussion and concreteness, we
+present our methodology on a diffusion model with the following
+parameter setting. The parameters Θ𝐼𝑆 (time to spreading) and
+Θ𝐼𝑅 (time to recovery) are set to a distribution that returns 𝜇𝐼𝑆
+and 𝜇𝑅 respectively with probability 1, i.e. they are deterministic
+(e.g., in Fig. 1 𝑡𝐼𝑆 = 𝜇𝐼𝑆 and 𝑡𝑅 = 𝜇𝑅 ). Furthermore, Θ𝑖𝑛𝑖𝑡 (initial
+infections) is set such that every individual is initially infected
+independently with probability 𝑝𝑖𝑛𝑖𝑡 . Finally, 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) is defined
+as follows. Intuitively, if an IS and an S individual are within 𝑑𝑚𝑎𝑥
+of each other for at least 𝑡𝑚𝑖𝑛 , then the IS individual will infect the S
+individual with probability 𝑝𝑖𝑛𝑓 , for user-defined parameters 𝑝𝑖𝑛𝑓 ,
+𝑑𝑚𝑎𝑥 and 𝑡𝑚𝑖𝑛 . More formally, consider the time 𝑡 1 when the colocation between 𝑢 and 𝑣 starts. That is, 𝑑 (𝑙𝑢 (𝑡 1 ), 𝑙 𝑣 (𝑡 1 )) is at most
+the parameter 𝑑𝑚𝑎𝑥 and that right before 𝑡 1 , 𝑑 (𝑙𝑢 (𝑡), 𝑙 𝑣 (𝑡)) > 𝑑𝑚𝑎𝑥 .
+Let 𝑡 2 be the timestamp when the co-location between 𝑢 and 𝑣 ends.
+That is, 𝑡 2 is the first timestamp after 𝑡 1 such that 𝑑 (𝑙𝑢 (𝑡 2 ), 𝑙 𝑣 (𝑡 2 )) >
+𝑑𝑚𝑎𝑥 . If the duration of the co-location, i.e., the time difference from
+𝑡 2 to 𝑡 1 , is at least a parameter 𝑡𝑚𝑖𝑛 , then 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡 1 ) = 𝑝𝑖𝑛𝑓 , for the
+parameter 𝑝𝑖𝑛𝑓 denoting the probability of infection. 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) = 0
+for all other timestamps. We use the term contact to refer to colocations within a distance 𝑑𝑚𝑎𝑥 that last for at least 𝑡𝑚𝑖𝑛 units of
+time. We discuss how our methodology applies to more general
+diffusion models in Sec. 3.5.
+Terminology. For an individual 𝑢, the indicator random variable
+𝑆𝑢 is equal to 1 if 𝑢 is sampled. Furthermore, the indicator random
+variable 𝑋𝑢𝑡 is equal to 1 if 𝑢 gets infected at a time less than or
+equal to 𝑡, and zero otherwise.
+We refer to infections that were caused by transmission through
+𝑘 individuals starting from an initial infections as 𝑘-hop infections.
+That is, for a sequence of individual < 𝑣 0, 𝑣 1, 𝑣 2, ..., 𝑣𝑘 >, we call
+an infection a 𝑘-hop infection if the individual 𝑣𝑘 was infected by
+𝑣𝑘−1 , 𝑣𝑘−1 was infected by 𝑣𝑘−2 and so on, and that 𝑣 0 was an initial
+infection (patient zero). That is, 𝑣 0 was infected at time 0.
+
+3.2
+
+Methodology. Given a sub-sample, the randomness in the spread is
+due to the randomness of the initial infections and the stochasticity
+of transmissions. To simulate the spread, a number of individuals are
+initially infected according to Θ𝑖𝑛𝑖𝑡 . Then, the visit sequences of the
+individuals are used to determine contacts between IS individuals
+and S individuals, and for every such contact the S individuals
+gets infected with probability 𝑝𝑖𝑛𝑓 . In such a simulation, at time
+𝑡, define 𝑘𝑡 to be the number of people that are infected. We run
+the simulation 𝑟 times, obtaining the estimate 𝑘𝑡𝑖 for time 𝑡 from
+the 𝑖-th run. Then we return 𝑝1𝑠
+
+Í
+
+𝑖
+
+𝑟
+
+𝑘𝑡𝑖
+
+as our estimate of expected
+
+number of infections at time 𝑡. Here 𝑟1 is for taking the mean of
+the 𝑟 simulations, and 𝑝1𝑠 is for scaling up from the sub-sampled
+population to the full population.
+Analysis. Such an estimate provides a biased estimate of the expected number of infections that occur after the initial infections.
+It specifically underestimates the number of infections for any time
+𝑡 > 0. To analyze the accuracy, for a specific run of the simulation,
+let 𝑋ˆ𝑢𝑡 be a random variable denoting if an individual 𝑢 gets infected
+by other sampled individuals until time 𝑡. Then, the estimate, 𝐸𝐼𝑡 ,
+at time 𝑡 is
+
+𝐸𝐼𝑡 =
+
+1 ∑︁ ˆ 𝑡
+𝑆𝑢 𝑋𝑢
+𝑝𝑠 𝑢
+
+(1)
+
+First, note that at time 𝑡 = 0, the estimate is unbiased. That is,
+taking the expected value of Eq. 1 for 𝑡 = 0, we obtain 𝐸 [𝑆𝑢 𝑋ˆ𝑢0 ] =
+𝐸 [𝑆𝑢 ]𝐸 [𝑋ˆ𝑢0 ] = 𝑝𝑠 × 𝑝𝑖𝑛𝑖𝑡 and the expected number of infections in
+Í
+the whole population is 𝑛 × 𝑝𝑖𝑛𝑖𝑡 . Thus, the estimate 𝑝1𝑠 𝑢 𝑆𝑢 𝑋ˆ𝑢0
+is an unbiased estimate of the number of infections at time 𝑡 = 0.
+However, consider 𝑋ˆ𝑢𝑡 for 𝑡 > 0. Observe that 𝑃 (𝑋ˆ𝑢𝑡 = 1) can
+be less than 𝑃 (𝑋𝑢𝑡 = 1). This is because, with some probability,
+individuals with whom 𝑢 has contacts may not be sampled, reducing
+the probability of 𝑢 getting infected from the sampled individuals.
+In terms of the Monte Carlo simulation, this can be seen as the
+case of false negatives in the simulation. That is, even assuming
+initial infections and the transmission are deterministic, 𝑢 may get
+infected from someone in the whole population, but may not get
+infected from anyone in the sub-sample population, because the
+transmission of the disease to 𝑢 in the whole population is through
+unobserved individuals.
+Observations. Our experiments show that this underestimation
+is significant in practice, amplified because it cascades through
+multi-hop infections (e.g., second-hop infections are underestimated, which in turn makes the estimate of third-hop infections
+worse). Simply scaling up to the full population does not work,
+which we show in the experiments in Sec. 4. This observation suggests that we need to account for the visit sequence that were lost
+when sub-sampling.
+
+3.3
+
+Second Attempt: Location Modeling
+
+3.3.1 Framework
+Sec. 3.2 illustrates the need for accounting for the unobserved individuals. Our general framework is to try to estimate 𝑃 (𝑋𝑢𝑡 = 1).
+We denote by 𝑝ˆ𝑢𝑡 an estimate of 𝑃 (𝑋𝑢𝑡 = 1). To solve the issues arising in Sec. 3.2, we need to account for the unobserved individuals
+when calculating 𝑝ˆ𝑢𝑡 . This algorithm differs from our first attempt
+
+First Attempt: Scaling
+
+Our first simple solution is to use Monte Carlo simulation to estimate the spread of the disease in the sub-sampled population.
+4
+
+Location of u
+
+Visit of u
+
+are already in the cell 𝑔 = (𝑡, 𝑖, 𝑗) when 𝑢 enters the cell, to avoid
+the scenarios where no new check-ins are observed but infections
+happened through individuals already in the cell (that is, if the
+beginning time of the cell is 𝑎 and the observed individual 𝑣 is
+already in the cell 𝑔 at time 𝑎, we increment 𝑛𝑡,𝑖,𝑗 by one). Fig. 2
+shows the grid used for modeling for an individual 𝑢, where 𝑛𝑡,𝑖,𝑗
+is calculated by counting the number of blue circles. Note that for
+different individuals, we will have different horizontal partitioning
+in the figure. We define
+
+Visit of others
+
+𝑝𝑡,𝑖,𝑗 = Í
+
+𝑛𝑡,𝑖,𝑗
+𝑛𝑡,𝑖 ′,𝑗 ′
+
+(3)
+
+𝑖 ′,𝑗 ′
+
+to model the probability of a visit falling into the cell (𝑡, 𝑖, 𝑗). Furthermore, we assume visits inside a cell are distributed uniformly
+in space. In this step, we do not model the amount of time that an
+observed individual 𝑣 (blue dot in Figure 2) is in the cell.
+Step (2), Prob. of Infection from a Single Visit: Consider a visit 𝑐,
+corresponding to a grid cell 𝑔 = (𝑡, 𝑖, 𝑗) of a sampled susceptible
+individual, 𝑢. Assume we know that a particular visit 𝑐 ′ by some
+unobserved infected individual happens when 𝑢 is in 𝑔. We need to
+calculate the probability of 𝑐 ′ being within 𝑑𝑚𝑎𝑥 of 𝑐 and lasting for
+at least 𝑡𝑚𝑖𝑛 . Let 𝑝𝑐 ′ be the probability that 𝑐 ′ causes 𝑢 to get infected.
+Moreover, let 𝑝𝑙𝑜𝑛𝑔_𝑒𝑛𝑜𝑢𝑔ℎ be the probability of a co-location lasting
+at least 𝑡𝑚𝑖𝑛 .
+
+dmax
+
+Figure 2: Modeling distribution of visits for an individual 𝑢.
+The horizonal axis is longitude, and the vertical axis is time.
+For ease of display, we do not show latitude. A red vertical
+line represents a visit over time by an individual u, and a
+blue dot represents the presence of another individual
+in how we model the unobserved individuals to calculate 𝑝ˆ𝑢𝑡 . After
+we obtain 𝑝ˆ𝑢𝑡 for all sub-sampled individuals, our final estimate is
+1 ∑︁
+𝐸𝐼𝑡 =
+𝑆𝑢 𝑝ˆ𝑢𝑡
+(2)
+𝑝𝑠 𝑢
+
+𝑝𝑐 = 𝑝𝑡,𝑖,𝑗 ×
+
+Comparing Eq. 2 with Eq. 1, the main difference in this approach is
+the flexibility it allows in estimating 𝑃 (𝑋𝑢𝑡 = 1).
+
+2
+𝜋𝑑𝑚𝑎𝑥
+× 𝑝𝑙𝑜𝑛𝑔_𝑒𝑛𝑜𝑢𝑔ℎ
+cell area
+
+(4)
+
+𝜋𝑑 2
+
+where cell𝑚𝑎𝑥
+area is the probability of co-location given that the visits
+are in the same cell (ignoring the edge cases where co-locations
+
+3.3.2 Second Attempt: Density-Based Estimation
+Our second attempt models the distribution of the visits of the unobserved individuals. It uses the model to calculate the probability of
+a sub-sampled individual being infected by unobserved individuals.
+This is subsequently used in calculating 𝑝ˆ𝑢𝑡 .
+Methodology. Our approach follows four steps: (1) Modeling the
+probability distribution of the visits of the unobserved population,
+(2) calculating the probability of 𝑢 getting infected by a single
+visit of an unobserved individual when 𝑢 is in a particular cell, (3)
+estimating probability of 𝑢 getting infected when it’s in a particular
+cell, and (4) estimating 𝑃 (𝑋𝑢𝑡 = 1) by taking into account past visits
+of 𝑢.
+Step (1), Modeling Visit Distribution: We discretize time and space
+using a grid. We use a uniform grid across space, but a per user grid
+across time. That is, for each user, we model the visit distribution
+with a different histogram, but all the histograms model the same
+distribution, i.e., the distribution of the check-ins of all the individuals. The grid across time uses event-based discretization for each
+individual. In particular, for an individual 𝑢, let 𝐶 =< 𝑡 0, 𝑡 1, ... > be
+the sequence of times we have observed a visit. According to the
+discussion in Sec. 2, 𝑢 is in the same location during time 𝑡𝑖 to 𝑡𝑖+1
+for all 𝑖. Thus, for user 𝑢, we discretize time based on 𝐶. The choice
+of griding for time simplifies our analysis as every visit now corresponds to a cell, but other griding strategies can be similarly applied.
+For each grid cell (𝑡, 𝑖, 𝑗), let 𝑛𝑡,𝑖,𝑗 be the number of observed visits
+that fall into that cell, where we also count the individuals who
+
+𝜋𝑑 2
+
+happen from two different cells). In Fig. 2, 𝑝𝑡,𝑖,𝑗 × cell𝑚𝑎𝑥
+area is analogous to calculating the probability of a new blue circle (i.e., visit
+by others) falling within the dashed line of the red rectangle (i.e.,
+within 𝑑𝑚𝑎𝑥 of location of 𝑢) for a particular time. We model the duration an individual stays at a location with an exponential random
+variable, so 𝑝𝑙𝑜𝑛𝑔_𝑒𝑛𝑜𝑢𝑔ℎ is the probability of the random variable
+being more than 𝑡𝑚𝑖𝑛 .
+Step (3), Prob. of Infection in a Cell: If there are 𝑁𝑐 visits by
+unobserved infected users for the duration that 𝑢 is in the cell,
+probability of the user getting infected during that time period is
+𝑝𝑡 = 1 − (1 − 𝑝𝑐 ) 𝑁𝑐
+
+(5)
+
+To estimate 𝑁𝑐 , we estimate (a) the number of unobserved IS
+individuals, 𝑁𝐼𝑆 and (b) the average number of visits per IS individual 𝑁𝑐 per IS . Then we estimate 𝑁𝑐 = 𝑁𝐼𝑆 × 𝑁𝑐 per IS . For (a),
+assume that the current time is 𝑡. An IS individual must have been
+infected some time between 𝑡 − 𝜇𝐼𝑆 and 𝑡 − 𝜇𝑅 . We use our estimate of the number of infected individuals for times 𝑡 − 𝜇𝐼𝑆 and
+𝑡 − 𝜇𝑅 to calculate Í
+the number of current IS individuals. For (b),
+Í
+𝑛𝑡,𝑖,𝑗
+we use 𝑁𝑐 per IS = 𝑖,𝑗𝑝𝑠 , where 𝑖,𝑗 𝑛𝑡,𝑖,𝑗 is the total number
+of observed visits during the time 𝑢 is in cell 𝑔, and we scale it
+by 𝑝1𝑠 to get to the whole population (here we have assumed that
+the average number of visits per IS individuals is the same as the
+average number of visits for all individuals).
+5
+
+A
+B
+
+A
+
+F
+D
+G
+
+D
+
+B
+
+G
+
+B
+
+G0, 1
+
+C
+
+A
+
+F
+D
+
+B
+
+G
+E
+
+E
+
+E
+C
+
+A
+
+F
+
+G0, 2
+
+C
+
+𝑁𝑡
+Ö
+
+(1 − 𝑝𝑖 )
+
+G
+
+B
+
+A
+
+F
+D
+G
+
+B
+
+G0, 1
+
+D
+G
+E
+
+E
+C
+
+F
+
+G0, 2
+
+C
+
+G0,, 3
+
+Figure 4: A cut on the network (Red: Initial infections,
+White: Rest of the individuals)
+3.4.1 Dynamic Contact Network
+We use a dynamic weighted directed graph to model contacts between individuals. Specifically, for the contacts from time 𝑠 until
+time 𝑡, we build a graph 𝐺𝑠,𝑡 = (𝑉 , 𝐸𝑠,𝑡 ), where 𝑉 contains a node
+for every individual and 𝐸𝑠,𝑡 contain edges between users that are
+in contact during the time period [s, t]. Specifically, there is an
+edge from node 𝑢 to node 𝑣 if there exists a co-location between
+them. Furthermore, the weight on the edge (𝑢, 𝑣), denoted by 𝑤𝑢,𝑣 ,
+is the probability that 𝑣 gets infected from 𝑢 given that 𝑢 is infected
+at time 𝑠. Fig. 3 shows an example of a contact network. We use
+ˆ ) to refer to a contact network that is built from a
+𝐺ˆ𝑠,𝑡 = (𝑉ˆ , 𝐸𝑠,𝑡
+sub-sample of the population. 𝐺ˆ𝑠,𝑡 will have fewer nodes than 𝐺𝑠,𝑡 .
+
+(6)
+
+𝑖=0
+
+Observations. We experimentally observed that this approach
+still leads to underestimation (see Sec. 4). This happens for two
+reasons. First, on one hand, there are inevitable inaccuracies in
+modeling the visits spatially due to modeling assumptions. For
+instance, the use of a grid assumes locations that are spatially close
+have similar visit density. This may not be true in practice, because
+for instance a church may exist in a residential area. Although
+this may be possible to address by increasing the granularity of
+the grid cells, doing so will require a large set of sampled users to
+avoid over-fitting (as otherwise a visit will have zero probability of
+falling into most gird cells). On the other hand, to accurately model
+co-locations, a model that is accurate to within a few meters is
+needed. Second, the temporal correlations between the visits needs
+to be modeled. For instance assume that an infection happens in
+a particular grid-cell, 𝑔 at time 𝑡. It means that an unobserved IS
+user, 𝑣, was in 𝑔 at time 𝑡. This changes the probability distribution
+of the locations where 𝑣 can be at time 𝑡 + 1. Overall, both points
+imply that an approach that aims to up-sample the infection data by
+modeling the location sequences requires a very precise modeling
+of the location sequences both spatially and temporally. We present
+accuracy results from this model in Sec. 4.
+An interesting observation is that our end-goal is to use the
+model of the location sequences to find possible co-locations between individuals. That is, the spatial information associated with
+a location sequence is only a means to an end, but is not necessary.
+Instead, we can directly model the possible co-locations.
+
+3.4
+
+D
+E
+
+C
+
+G0,, 3
+
+Figure 3: A contact network
+Step (4), Prob. of Infection until current time: Finally, if 𝑢 enters
+𝑁𝑡 grid cells until time 𝑡, the probability of 𝑢 getting infected until
+time 𝑡 is estimated as
+
+𝑝ˆ𝑢𝑡 = 1 −
+
+A
+
+F
+
+3.4.2 PollSpreader: Up-Sampling using Spreaders’ View
+We study how many first-hop infections can occur based on an
+initial number of infections. Our approach follows the framework
+of Sec. 3.3.1, and we aim at calculating 𝑝ˆ𝑢𝑡 . We first explain how
+the contact network can be used to do this if we have access to
+the entire population. Then, we discuss how the approach can be
+adjusted when we only observe a sub-sample of the population.
+Finally, we discuss the difficulty in extending the approach to multihop infections. We refer to this method as Polling the Spreader or
+PollSpreader.
+Calculating 𝑝ˆ𝑢𝑡 from the Whole Population . Consider the case
+where we have access to the whole population. Our approach works
+as follows. (1) We calculate the total number of contacts between
+initial infections and the susceptible population. Then, (2) we use
+that to estimate the probability of a susceptible individual getting
+infected.
+Step (1), Calculate Number of Infectious Contacts: Here, we estimate the number of infection events, informally defined as when an
+initially infected user, 𝑣, has contact with an individual 𝑣 who was
+not initially infected. More formally, define the infection random
+𝑡 as an indicator random variable which is equal to one
+variable 𝐼𝑢,𝑣
+if 𝑢 is an initially infected person and 𝑢 infects 𝑣 until time 𝑡 given
+that no other individual infects 𝑣. We call it an infection event when
+𝑡 = 1. Our goal is to estimate how many infection events occur in
+𝐼𝑢,𝑣
+Í
+𝑡 ].
+total in the whole population by calculating 𝐸 [ 𝑢,𝑣 𝐼𝑢,𝑣
+Í
+𝑡
+Calculating 𝐸 [ 𝑢,𝑣 𝐼𝑢,𝑣 ] can be formulated as estimating the
+expected total weight of the edges crossing a random graph cut on
+the graph 𝐺 0,𝑡 . Fig. 4 shows how this is done for a specific realization
+of initial infections, where Fig. 4 is obtained by a random selection
+of initial infections from Fig. 3, that is, the red nodes are randomly
+selected initial infections. Any such random selection defines a
+cut on the graph for every timestamp. The goal is to estimate the
+expected number of edges crossing such a cut. Specifically, consider
+the following random cut, where a node is in the set 𝐼 if it is initially
+infected, and in the set 𝑆 if it’s not. Every cut corresponds to an
+
+Third attempt: Co-location Modeling
+
+Motivated by the above observations, we aim at directly modeling
+the contacts between the individuals. We present two approaches
+that provide bounds on the expected spread of the disease in the
+population. Our first approach, PollSpreader, models the problem
+from the spreaders’ view, i.e., aims at calculating how many people will get infected given a number of spreaders (Sec. 3.4.2). We
+observed that, although this approach works well when modeling
+first-hop infections, up-sampling for multi-hops becomes difficult.
+Therefore, we present our second, PollSusceptible, approach which
+looks at the problem from the susceptible view, e.g., directly calculates the probability of a susceptible individual getting infected
+(Sec. 3.4.3). Both approaches use a time-dependent contact network
+which we first describe in Sec. 3.4.1.
+6
+
+Algorithm 1 Calculating Prob. of Transmission Through a Path,
+𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑡𝑟𝑎𝑛𝑠𝑚𝑖𝑠𝑖𝑜𝑛(𝑠, 𝑡)
+
+initialization of the infections. Given a cut, the expected number
+of infection events until time 𝑡 is equal to the total weight of the
+edges crossing the cut from 𝐼 to 𝑆 (for each different 𝑡, we consider
+the cut on a different graph, as 𝐺 0,𝑡 changes with time). Thus, the
+expected number of infection events is equal to the expected total
+weight of the edges crossing the cut from 𝐼 to 𝑆. For every edge
+(𝑢, 𝑣), assign the random variable 𝑍𝑢,𝑣 to be equal to 𝑤𝑢,𝑣 if 𝑢 ∈ 𝐼
+and 𝑣 ∈ 𝑆, and zero otherwise. We have that
+
+Require: Sequence of 𝑘 + 1 individuals, 𝑠, 𝑠 =< 𝑣 0, 𝑣 1, ..., 𝑣𝑘 > and
+infection time of 𝑣𝑘 , 𝑡𝐼
+Ensure: 𝑃 (𝑇𝑠𝑡 = 1|𝑣𝑘 gets infected at 𝑡𝑖 )
+1: if 𝑘 == 0 then
+2:
+return 1
+3: 𝑡𝐼𝑆 ← 𝑡𝐼 + 𝜇𝐼𝑆
+4: 𝑡𝑅 ← 𝑡𝐼 + 𝜇𝑅
+5: 𝑐 𝑣𝑘 ,𝑣𝑘−1 ← list of contacts between 𝑣𝑘 and 𝑣𝑘−1 from 𝑡𝐼𝑆 to 𝑡𝑅
+ordered by time
+6: 𝑝 ← 0
+7: for 𝑐𝑖 in 𝑐 𝑣𝑘 ,𝑣𝑘−1 do
+8:
+𝑡𝑐 ← time 𝑐𝑖 occurs
+9:
+𝑝𝑖𝑛𝑓 _𝑏𝑦_𝑐 ← 𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑡𝑟𝑎𝑛𝑠𝑚𝑖𝑠𝑖𝑜𝑛(< 𝑣 0, ..., 𝑣𝑘−1 >, 𝑡𝑐 )
+10:
+𝑝 ← 𝑝 + 𝑝𝑖𝑛𝑓 _𝑏𝑦_𝑐 × 𝑝𝑖𝑛𝑓 × (1 − 𝑝𝑖𝑛𝑓 )𝑖−1
+11: return 𝑝
+
+𝐸 [𝑍𝑢,𝑣 ] = 𝑝𝑖𝑛𝑖𝑡 × (1 − 𝑝𝑖𝑛𝑖𝑡 ) × 𝑤𝑢,𝑣
+(7)
+and the expected total weight of the edges crossing the cut is
+𝐸[
+
+∑︁
+𝑢,𝑣
+
+𝑡
+𝐼𝑢,𝑣
+] = 𝑒𝑐𝑡 =
+
+∑︁
+
+𝑝𝑖𝑛𝑖𝑡 × (1 − 𝑝𝑖𝑛𝑖𝑡 ) × 𝑤𝑢,𝑣
+
+(8)
+
+(𝑢,𝑣) ∈𝐸 0,𝑡
+
+Step (2), Estimating 𝑝ˆ𝑢𝑡 from Infection Events: We assume the infection events occur uniformly at random across the susceptible
+population, or in other words, the edges from 𝐼 fall uniformly at random over the nodes in 𝑆. Although more sophisticated modelling
+approaches may be possible, we observed that this assumption
+works well in practice. Thus, given 𝑍𝑢,𝑣 for all 𝑢 and 𝑣, the probability of a node
+in 𝑆 having at least one edge incident on them is
+Í
+𝑡
+1 − (1 − |𝑆1 | ) 𝑍𝑢,𝑣 . We estimate this quantity by 1 − (1 − 𝐸 [ 1|𝑆 |] )𝑒𝑐 .
+Finally, an individual either gets infected initially (with probability
+𝑝𝑖𝑛𝑖𝑡 ), or does not get infected initially but gets infected through its
+contact with 𝑢. Hence, we estimate probability of getting infected
+as
+
+Algorithm 2 Calculating Prob. of Infection by a Path,
+𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑖𝑛𝑓 (𝑠, 𝑡𝐼 )
+Require: Sequence of 𝑘 + 1 individuals, 𝑠, 𝑠 =< 𝑣 0, 𝑣 1, ..., 𝑣𝑘 > and
+current time 𝑡
+Ensure: Lower and upper bounds estimates of 𝑃 (𝑇𝑠𝑡 = 1)
+1: 𝑝𝑛𝑜𝑡 _𝑙 ← 1
+2: 𝑝𝑛𝑜𝑡 _𝑢 ← 1
+3: for 𝑣 ′ in 𝑁 (𝑣𝑘 , 𝐺ˆ 0,𝑡 ) \ {𝑣 0 , ..., 𝑣𝑘 } do
+4:
+𝑝 𝑣′ _𝑙 , 𝑝 𝑣′ _𝑢 ← 𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑖𝑛𝑓 (< 𝑣 0, ..., 𝑣𝑘 , 𝑣 ′ >)
+5:
+𝑝𝑛𝑜𝑡 _𝑙 ← 𝑝𝑛𝑜𝑡 _𝑙 × (1 − 𝑝 𝑣′ _𝑢 )
+6:
+𝑝𝑛𝑜𝑡 _𝑢 ← 𝑝𝑛𝑜𝑡 _𝑢 × (1 − 𝑝 𝑣′ _𝑙 )
+7: 𝑝𝑠𝑡𝑎𝑟𝑡𝑠_𝑎𝑡 _𝑣𝑘 ← 𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑡𝑟𝑎𝑛𝑠𝑚𝑖𝑠𝑖𝑜𝑛(𝑠, 0)
+8: 𝑝ˆ𝑙 ← 𝑝𝑠𝑡𝑎𝑟𝑡𝑠_𝑎𝑡 _𝑣𝑘 + (1 − 𝑝𝑠𝑡𝑎𝑟𝑡𝑠_𝑎𝑡 _𝑣𝑘 ) × (1 − (𝑝𝑛𝑜𝑡 _𝑢 )𝑐𝑢 )
+9: 𝑝ˆ𝑢 ← 𝑝𝑠𝑡𝑎𝑟𝑡𝑠_𝑎𝑡 _𝑣𝑘 + (1 − 𝑝𝑠𝑡𝑎𝑟𝑡𝑠_𝑎𝑡 _𝑣𝑘 ) × (1 − (𝑝𝑛𝑜𝑡 _𝑙 )𝑐𝑙 )
+10: return 𝑝ˆ𝑙 , 𝑝ˆ𝑢
+
+1 𝑒𝑐𝑡
+) )
+(9)
+𝐸 [|𝑆 |]
+𝑡
+Calculating 𝑝ˆ𝑢 from the Sub-Sampled Population . An interesting advantage of this modelling is how easily it can be adjusted
+when we only have access to a sub-sample of the population. In
+Eq. 9, we only need to be able to estimate 𝐸 [𝑒𝑐 ]. To do so we need
+to slightly modify our graph cut formulation. Specifically, let 𝐼ˆ be
+the set of nodes that are sampled and initially infected, and let
+𝑆ˆ be the set of nodes that are sampled and not initially infected.
+ˆ and zero
+Furthermore, let 𝑍ˆ𝑢,𝑣 be equal to 𝑤𝑢,𝑣 if 𝑢 ∈ 𝐼ˆ and 𝑣 ∈ 𝑆,
+otherwise. We have that
+𝑝ˆ𝑢𝑡 = 𝑝𝑖𝑛𝑖𝑡 + (1 − 𝑝𝑖𝑛𝑖𝑡 )(1 − (1 −
+
+not only direct contacts). However, the main challenge is taking
+the sampling into account, because the probability of an edge being sampled now depends on which of the intermediary nodes are
+sampled, and how many different 𝑘-hop paths from 𝑢 to 𝑣 exist in
+the population. Thus, we need a method that accounts for the paths
+in a multi-hop infection between initial infections and unobserved
+secondary infections.
+
+𝐸 [𝑍ˆ𝑢,𝑣 ] = 𝑝𝑠2 × 𝑝𝑖𝑛𝑖𝑡 × (1 − 𝑝𝑖𝑛𝑖𝑡 ) × 𝑝𝑢,𝑣
+(10)
+Comparing Eq. 10 with Eq. 7, we observe that adjusting for sampling can now be done just by scaling. Thus, an unbiased estimate
+
+3.4.3 PollSusceptible: Up-Sampling using Susceptibles’ View
+To account for unobserved secondary infections, here, we aim at
+directly modeling the probability of a susceptible person getting
+infected. This is our second graph-based approach, which proved
+to be the most accurate in our experiments. By making some independence assumptions, this allows us to naturally model multi-hop
+infections. We refer to this method as Polling the Susceptible or
+PollSusceptible.
+Calculating 𝑝ˆ𝑢𝑡 from the Whole Population. We again start by
+assuming we have access to the entire population and use the same
+contact network discussed before. The general idea is to observe
+that an individual, 𝑢, who got infected was either initially infected,
+or got infected through some of its contacts that are modeled by
+the contact network. If 𝑢 got infected through a contact, 𝑣, the same
+logic recursively applies. That is, 𝑣 was either initially infected or got
+
+Í
+
+of the total expected number of edges crossing the cut is
+So
+𝐸[
+
+∑︁
+1
+𝑡
+𝐼𝑢,𝑣
+] = 𝑒ˆ𝑐𝑡 = 2
+𝑝𝑖𝑛𝑖𝑡 × (1 − 𝑝𝑖𝑛𝑖𝑡 ) × 𝑤𝑢,𝑣
+𝑝𝑠
+𝑢,𝑣
+(𝑢,𝑣) ∈𝐸ˆ0,𝑡
+
+∑︁
+
+ˆ
+𝑢,𝑣 𝑍𝑢,𝑣
+.
+𝑝𝑠2
+
+(11)
+
+Putting everything together, our final estimate replaces 𝑒𝑐𝑡 in
+Eq. 9 with 𝑒ˆ𝑐𝑡 .
+Challenge for Multi-Hop Infections. The main challenge associated with this method is generalizing it to more than one-hop
+neighbours. The contact network can be generalized to a reachability network [22], such that there is an edge from a node 𝑢 to
+another node 𝑣 if 𝑢 can infect 𝑣 through multi-hop infections (and
+7
+
+infected through a contact. To state this formally, we first introduce
+more terminology, then discuss the case of getting infected through
+neighbours and finally detail the recursion step.
+Neighbourhood Terminology and Notation. Recall that the contact
+network represents, for each individual, 𝑢, if they are infected,
+whom they can infect and with what probability. Consider 𝑣 ∈
+𝑁 (𝑢, 𝐺𝑠,𝑡 ), where 𝑁 (𝑢, 𝐺𝑠,𝑡 ) is the set of neighbours of 𝑢, that is
+the set of nodes, 𝑣, in 𝐺𝑠,𝑡 such that there is an edge from 𝑢 to 𝑣 in
+𝐺𝑠,𝑡 . 𝑁 (𝑢, 𝐺𝑠,𝑡 ) represents the set of possible first-hop infections
+caused by 𝑢, given that 𝑢 starts spreading the disease at time 𝑠 and
+recovers at time 𝑡. We use the shorthand notation 𝑁𝑢 to refer to
+𝑁 (𝑢, 𝐺𝑠,𝑡 ) when the contact network in question is clear from the
+context, and we use the notation 𝑁𝑢𝐴 , for some set 𝐴, to denote
+𝑁 (𝑢, 𝐺𝑠,𝑡 ) \ 𝐴.
+Calculating 𝑝ˆ𝑡𝑣0 through first-hop neighbours. Our goal is as before,
+calculating 𝑝ˆ𝑡𝑣0 for all users 𝑣 0 following the framework of Sec. 3.3.1.
+To do so, for individuals 𝑣 0 and 𝑣 1 , let 𝑇𝑣𝑡0 ,𝑣1 be the indicator random
+variable equal to one if the disease is transmitted from 𝑣 1 to 𝑣 0 until
+time 𝑡. Now, the event that 𝑣 0 does not get infected until time 𝑡,
+𝑋 𝑣𝑡0 = 0, can be decomposed as the intersection of two events: one
+that 𝑣 0 does not get infected initially, 𝑋 𝑣𝑡0 = 0, and that 𝑣 0 does not
+get infected by any of its contacts until time 𝑡, written as 𝑇𝑣𝑡0 ,𝑣1 = 0
+for all 𝑣 1 ∈ 𝑁 𝑣0 . The idea can be illustrated using Fig. 3. For instance,
+for 𝐸 to get infected until time 3, it either has to be initially infected,
+or not initially infected but get infected from 𝐵, 𝐶 or 𝐷
+Using this formulation, the probability that 𝑣 0 gets infected until
+time 𝑡 is
+𝑝ˆ𝑡𝑣0 = 𝑝𝑖𝑛𝑖𝑡 + (1 − 𝑝𝑖𝑛𝑖𝑡 )(1 − 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0, ∀𝑣 1 ∈ 𝑁 𝑣0 )
+|
+{z
+}
+
+𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 1) = 𝑝𝑖𝑛𝑖𝑡 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 1|𝑋 𝑣01 = 1)+
+Ö
+(1 − 𝑝𝑖𝑛𝑖𝑡 )(1 −
+𝑃 (𝑇𝑣𝑡0 ,𝑣1 ,𝑣2 = 0))
+
+More generally, 𝑃 (𝑇𝑠𝑡 = 1), when 𝑠 =< 𝑣 0, ..., 𝑣𝑘 > can always be
+recursively calculated as
+𝑃 (𝑇𝑠𝑡 = 1) = 𝑝𝑖𝑛𝑖𝑡 𝑃 (𝑇𝑠𝑡 = 1|𝑋 𝑣0𝑘 = 1) +
+|
+{z
+}
+full-path transmission
+
+(1 − 𝑝𝑖𝑛𝑖𝑡 )(1 −
+
+𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0)
+
+𝑡
+𝑃 (𝑇𝑠,𝑣
+= 0))
+𝑘+1
+| {z }
+
+(15)
+
+recursion
+
+where 𝑠, 𝑣𝑘+1 denotes the concatenation of 𝑣𝑘+1 to 𝑠. A simple basecase for the recursion is when all the neighbours of 𝑣𝑘 are already
+on the path from 𝑣 0 to 𝑣𝑘 (in practice when estimating the spread
+until time 𝑡, we are generally able to stop the recursion based on
+the number of hops. This is because we know the time it takes for
+a given disease to be transmitted during each hop, and thus the
+number of hops that can happen until time 𝑡 can be estimated).
+The term labeled recursion in Eq. 15 shows the recursive calculation. The term labeled full-path transmission is the probability of
+transmission happening given a complete path, e.g., the path starts
+with a patient zero, 𝑣𝑘 , who was initially infected and continues
+until 𝑣 0 . The probability of a full-path transmission can be calculated by considering the contacts between every pair of individuals,
+𝑣𝑖 and 𝑣𝑖−1 , on the path as explained below. Before moving on to
+the details of this calculation, we note that using Eqs. 15 and 13, we
+can exactly calculate Eq. 12, which provides our estimate of 𝑝 𝑡𝑣0 .
+Calculating Probability of Full-path Transmissions. Algorithm 1
+shows how this is done. The general idea is to divide the event
+𝑇𝑠𝑡 = 1, for 𝑠 =< 𝑣 0, ..., 𝑣𝑘 >, into a set of mutually exclusive events
+and sum up the probabilities of each event to calculate the final
+probability. Particularly, let 𝑐𝑢,𝑣 be the list of contacts between
+𝑢 and 𝑣 ordered by time, let 𝑊 (𝑢, 𝑣, 𝑐, 𝑡𝑖 ), for 𝑐 ∈ 𝑐𝑢,𝑣 denote the
+event that 𝑢 infects 𝑣 through contact 𝑐 given that 𝑢 was infected
+at time 𝑡𝑖 . Observe that the event 𝐸 = 𝑇𝑠𝑡 = 1|𝑋 𝑣0𝑘 = 1 is the same as
+𝑡
+𝐸 = ∪𝑐𝑖 ∈𝑐 𝑣𝑘 ,𝑣𝑘−1 (𝑇𝑠\𝑣
+= 1 ∧ 𝑊 (𝑣𝑘 , 𝑣𝑘−1, 𝑐𝑖 , 0)) and that each event
+𝑘
+is mutually exclusive (because an individual can get infected at
+most once), where 𝑠 \ 𝑣𝑘 is the sequence of elements in 𝑠 excluding
+𝑣𝑘 .
+Note that
+
+(12)
+
+where the two events of 𝑣 0 either gets initially infected (first term),
+or it does not get initially infected but gets infected through transmission (second term) are accounted for. Denote 𝑝 𝑣𝑁0 = 𝑃 (𝑇𝑣𝑡0 ,𝑣1 =
+0, ∀𝑣 1 ∈ 𝑁 𝑣0 ) for ease of reference. Here, we make the modeling
+assumption that the random variables 𝑋 𝑣𝑡0 ,𝑣1 are independent for
+all 𝑣 ∈ 𝑁 𝑣0 . Using the assumption,
+Ö
+
+Ö
+𝑣𝑘+1 ∈𝑁 𝑣𝑠𝑘
+
+𝑝 𝑣𝑁0
+
+𝑝 𝑣𝑁0 =
+
+(14)
+
+{𝑣 }
+
+𝑣2 ∈𝑁 𝑣1 0
+
+(13)
+
+𝑣1 ∈𝑁 𝑣0
+
+we acknowledge that this may not be necessary true for multi-hop
+infections, but we observed that the introduced error is negligible
+in practice per our experiments (see Sec. 4).
+Combining Eqs. 12 and 13, the problem of calculating 𝑝ˆ𝑡𝑣0 is now
+reduced to calculating 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0) for each 𝑣 1 .
+Recursion for Multiple Hops. To calculate 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0), a similar
+logic can be recursively applied. That is, 𝑇𝑣𝑡0 ,𝑣1 = 0 can occur only
+if 𝑣 1 is initially infected, or if it is infected by another one of its
+neighbours. Continuing with our example, in Fig. 3, for 𝐸 to be
+infected by 𝐷 until time 3, 𝐷 must have either been infected initially
+or gotten infected from 𝐴, 𝐹 or 𝐺. Also note that for 𝐸 to be infected
+by 𝐵 until time 2, 𝐵 must have gotten infected initially.
+Specifically, let 𝑇𝑣𝑡0 ,𝑣1 ,𝑣2 be the random variable equal to one if 𝑣 0
+
+𝑃 (𝑇𝑠𝑡 = 1 ∧ 𝑊 (𝑣𝑘 , 𝑣𝑘−1, 𝑐𝑖 , 0)) =
+𝑡
+𝑃 (𝑇𝑠\𝑣
+= 1|𝑊 (𝑣𝑘 , 𝑣𝑘−1, 𝑐, 0)) × 𝑃 (𝑊 (𝑣𝑘 , 𝑣𝑘−1, 𝑐𝑖 , 0) )
+𝑘
+{z
+}
+|
+{z
+} |
+recursion
+
+(1−𝑝𝑖𝑛𝑓 ) 𝑖−1 ×𝑝𝑖𝑛𝑓
+
+The first term is calculated recursively. To calculate the second
+term, recall that 𝑐𝑖 is the 𝑖-th contact between 𝑣𝑘 and 𝑣𝑘−1 since 𝑣𝑘−1
+became IS. Thus, for 𝑣𝑘−1 to become infected through 𝑐𝑖 , it has to be
+true that none of the previous 𝑖 − 1 contacts caused infection, and
+that 𝑐𝑖 did. Since each of the events are independent, the probability
+of this happening can be calculated as (1 − 𝑝𝑖𝑛𝑓 )𝑖−1 × 𝑝𝑖𝑛𝑓 .
+
+{𝑣 }
+
+gets infected until time 𝑡 by 𝑣 1 who gets infected by 𝑣 2 , 𝑣 2 ∈ 𝑁 𝑣1 0 .
+Thus, we can write
+8
+
+Calculating 𝑝ˆ𝑢𝑡 from the Sub-Sample Population. Now assume
+we only have access to a sub-set of the population. Calculating fullpath transmission probabilities can be done in the same way as
+before (Alg. 1). However, not all the neighbours of a user 𝑣 0 are
+sampled. That is, in Eq. 12, we do not have access to 𝑁 (𝑣 0, 𝐺 0,𝑡 ), but
+only its sub-sample 𝑁 (𝑣 0, 𝐺ˆ 0,𝑡 ). Thus, we need to adjust Eq. 13 to
+estimate 𝑝 𝑣𝑁0 from our sub-samples. We denote by 𝑝ˆ𝑣𝑁0 = 𝑃 (𝑇𝑣𝑡0 ,𝑣1 =
+0, ∀𝑣 1 ∈ 𝑁 (𝑣 0, 𝐺ˆ 0,𝑡 )), i.e., 𝑝ˆ𝑣𝑁0 this is our estimate of 𝑝 𝑣𝑁0 from the
+sub-sampled population. The challenge in making such an estimate
+is that we are estimating the product across a population using
+a sub-sample. Providing unbiased estimates of summations using
+sub-samples can be easily achieved by merely scaling the sample
+statistic, but such an approach does not work for estimating products. This is because there is no simple relationship between 𝐸 [𝑝ˆ𝑣𝑁0 ]
+and 𝑝 𝑣𝑁0 . Instead, to be able to compute reliable estimates, we provide lower and upper bounds on 𝑝 𝑣𝑁0 as discussed in the following
+theorem. The theorem makes use of the quantity 𝑝𝑚𝑖𝑛 , which is
+𝑡 = 0), and is a bound
+the largest number such that 𝑝𝑚𝑖𝑛 ≤ 𝑃 (𝑇𝑢,𝑣
+on the probability of transmission.
+
+Parameter Value
+𝑑𝑚𝑎𝑥
+∼ 11𝑚
+Dataset
+No. loc. signals
+𝑡𝑚𝑖𝑛
+15 min.
+San Francisco
+48,699,847
+𝑝
+0.01
+Manhattan
+53,147812
+𝑝𝑖𝑛𝑖𝑡
+0.1
+Cook
+130,236,901
+𝜇𝐼𝑆
+5 days
+Table 3: No. location signals
+𝜇𝑅
+12 days
+for Dec.
+𝑝𝑠
+0.1
+Table 2: Parameter Setting
+
+Figure 5: No. location signals per day for Manhattan
+dataset
+
+3.5
+
+1 . We have that
+Theorem 3.1. Let 𝑐𝑙 = 𝑝𝑠
+Ö
+𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0)𝑆 𝑣1 )𝑐𝑙 ] ≤ 𝑝 𝑣𝑁0
+𝐸 [(
+
+𝑐 2 log(𝑝
+
+)
+
+= 1. If
+
+𝑣1 ∈𝑁 (𝑣0 ,𝐺 0,𝑡 )
+
+Î
+Proof Sketch. We take the log of 𝑝 𝑣𝑁0 = 𝑣1 ∈𝑁 (𝑣0 ,𝐺 0,𝑡 ) 𝑃 (𝑇𝑣𝑡0 ,𝑣1 =
+0) and use Jensen’s inequality and Hoeffding’s lemma to bound
+it.1
+□
+Theorem 3.1 gives us estimates that bound 𝑝 𝑣𝑁0 from above and
+below on expectation. However, due to sub-sampling we do not
+have access to 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0) exactly. Thus, we recursively apply
+Theorem 3.1 to obtain lower and upper bounds on 𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0),
+and then use those in the statement of the theorem. Thus, when
+modeling multi-hop infections, Theorem 3.1 is recursively applied.
+Furthermore, in practice, we estimate 𝑝𝑚𝑖𝑛 from our observations
+(we estimate the maximum number of co-locations, 𝑛𝑚𝑎𝑥 , between
+two individuals from the sub-sample, then estimate 𝑝𝑚𝑖𝑛 as (1 −
+𝑝𝑖𝑛𝑓 )𝑛𝑚𝑎𝑥 ).
+Final Algorithm. Alg. 2 depicts our final algorithm to find lower
+and upper bounds on 𝑝ˆ𝑢𝑡 , for an individual. This is obtained by
+calling 𝑐𝑎𝑙𝑐_𝑝𝑟𝑜𝑏_𝑖𝑛𝑓 (< 𝑢 >, 𝑡). The base case for Alg. 2 is when 𝑠
+contains all the nodes (the algorithm will not enter the for loop in
+that case), although a more efficient base case is to also consider
+the time 𝑡 and check whether there is a non-zero probability that
+adding another hop (i.e., line 4) will be able to spread the disease
+to 𝑣 0 until time 𝑡. This is possible because it takes 𝜇𝐼𝑆 for every
+infected individual to spread the disease, and thus, if there are 𝑘
+hops on the sequence < 𝑣 0, ..., 𝑣𝑘 >, it takes at least 𝑘 × 𝜇𝐼𝑆 for the
+disease to spread from 𝑣𝑘 to 𝑣 0 .
+1 Proof
+
+Generalizing the Diffusion Model
+
+There are multiple underlying assumptions in Secs. 3.4.2 and 3.4.3
+that a diffusion model needs to satisfy for our methods to be applicable. First, initial infections need to be independent. That is, each
+individual needs to be infected independently with some initial
+probability. Although we have assumed this probability to be the
+same and 𝑝𝑖𝑛𝑖𝑡 for all individuals, the method can be easily modified to use probability 𝑝𝑖𝑛𝑖𝑡,𝑢 for each individual 𝑢, i.e., the initial
+probabilities do not have to be the same for all individuals.
+Second, consider the function 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) that defines probability
+of transmission for two location sequences. For our algorithm in
+Sec. 3.4.2, 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) is only used to calculate the edge weights of
+the contact network. Thus, the only requirement is for it to be
+possible to calculate the probability of transmission from time 𝑠 to
+time 𝑡 from 𝑓 (𝑙𝑢 , 𝑙 𝑣 , 𝑡) if 𝑢 is infected at time 𝑠. For the algorithm in
+Sec. 3.4.3, observe that the formulation in Alg. 2 does not depend on
+the function 𝑓 , but Alg. 1 is dependent on the specific transmission
+model. Here, 𝑓 needs to be a function that can be replaced with an
+algorithm that returns 𝑃 (𝑇𝑣𝑡0 ,𝑣1 ,...,𝑣𝑘 = 1|𝑣𝑘 gets infected at 𝑡𝑖 ). This
+is also the case for Θ𝐼𝑆 and Θ𝐼𝑅 .
+We note that although our framework is general enough to be
+able to handle different diffusion models, the efficiency of the calculation can be an obstacle for complex distributions. For instance,
+Alg. 1 in line 5 takes advantage of the fact that only certain contacts
+between time 𝑡𝐼𝑆 and 𝑡𝑅 can cause transmission, which is in turn
+because 𝑡𝐼𝑆 and 𝑡𝑅 are deterministically calculated (in lines 3 and 4).
+However, modifying Θ𝐼𝑆 and Θ𝐼𝑅 will require checking the list of
+all contacts between 𝑣𝑘 and 𝑣𝑘−1 during which there a is non-zero
+probability that 𝑣𝑘 is 𝐼𝑆 (as it is, the probability that 𝑣𝑘 becomes IS
+before 𝑡𝐼 + 𝜇𝐼𝑆 is zero).
+
+𝑣1 ∈𝑁 (𝑣0 ,𝐺 0,𝑡 )
+
+Furthermore, let 𝑐𝑢 be the solution to 𝑐𝑢 𝑝𝑠 + 𝑢 8 𝑚𝑖𝑛
+√︃
+−𝑙𝑜𝑔 (𝑝𝑚𝑖𝑛 )
+𝑝𝑠 ≥
+, we have that
+2
+Ö
+𝑝 𝑣𝑁0 ≤ 𝐸 [(
+𝑃 (𝑇𝑣𝑡0 ,𝑣1 = 0)𝑆 𝑣1 )𝑐𝑢 ]
+
+Figure 6: Distribution of location signals for Manhattan dataset
+
+4 PERFORMANCE EVALUATION
+4.1 Experimental Methodology
+We ran our experiments on a machine running Ubuntu 18.04 LTS
+equipped with an Intel i9-9980XE CPU (3GHz) and 128GB RAM.
+
+available in our technical report [27].
+9
+
+Figure 7: Bias on San Francisco
+dataset.
+
+Figure 8: Error on San Francisco
+dataset.
+
+Figure 9: San Francisco infections
+with 𝑝𝑖𝑛𝑓 = 0.1
+
+Figure 10: Cook County infections
+
+Figure 11: Manhattan infections
+
+Figure 12: San Francisco infections
+
+Manhattan in Dec 2019. A point (𝑥, 𝑦) in Fig. 6 means that 𝑥 percent of the individuals have at least 𝑦 location signals in the month
+of Dec. in Manhattan. The Veraset dataset represents a realistic
+scenario where our methods can be applied, i.e., where accurate
+visits of a portion of the population of a city are collected and the
+goal is to estimate the spread over the entire population.
+We use three subsets of this dataset corresponding to 20,000
+individuals in San Francisco County, Manhattan County and Cook
+County (which contains Chicago). In the experiments, we consider
+this 20,000 individuals to be the entire population, based on which
+the ground-truth spread is calculated (Our algorithms are given
+access to the visits of a subset of these individuals to perform their
+estimation of this ground-truth spread). We used these three areas
+as they corresponded to different co-location patterns, which lead
+to differences in the spread of the disease with the same diffusion
+model. Specifically, for each dataset, we measured average number
+of daily co-locations per individual, calculated by counting the total
+number of co-locations in a day and dividing it by the total number
+of individuals. San Francisco, Manhattan and Cook counties had
+2.95, 1.72 and 0.23 average number of daily co-locations per person,
+respectively.
+Furthermore, we use Gowalla [1], a publicly available dataset
+to allow for reproducability of our results. Gowalla contains visits
+of the users obtained from a social network over several months
+across the US. Since the data is very sparse, we select a 20 day
+period with the largest number of visits and 20,000 individuals. It
+contains 6, 760, 928 visits.
+Algorithms. We compare the performance of the algorithms
+discussed in Sec. 3.1. Scale is the algorithm discussed in Sec. 3.2,
+Density was discussed in Sec. 3.3.2, PollSpreader in Sec. 3.4.2 and
+PollSus_L and PollSus_U are the lower and upper bounds, respectively, from the method PollSusceptible discussed in Sec. 3.4.3. We
+
+Figure 13: Bias on Gowalla
+Figure 14: Error on
+dataset.
+Gowalla dataset.
+Our experiments are designed to evaluate how close to the groundtruth our estimate is for different datasets and diffusion model
+parameters.
+Datasets. We consider two datasets. Our first dataset is the
+Veraset dataset. Veraset [2] is a data-as-a-service company that
+provides anonymized population movement data collected through
+location measurement signals of cell-phones across the US. We
+were provided access to this dataset for December 2019. The dataset
+consists of location signals of cell-phone devices, where each
+location signal is considered to be a visit, as defined in Sec. 2.
+Each record in the dataset consists of anonymized_device_id,
+latitude, longitude, timestamp and horizontal_accuracy. We
+assume each anonymized _device_id corresponds to a unique individual. We discard any location signal with horizontal_accuracy
+of worse than 25 meters. For a single day in December, there are
+2,630,669,304 location signals across the US. Each location signal
+corresponds to an anonymized_device_id and there are 28,264,106
+distinct anonymized _device_ids across the US in that day. Fig. 5
+shows the number of daily location signals recorded in the month
+of Dec. 2019 in the area of Manhattan, New York. Furthermore, Fig.
+6 shows the distribution of location signals across individuals in
+
+10
+
+use Density as a surrogate for approaches that generate synthetic
+trajectories, e.g. [6, 18], where they model the probability distribution of location sequences of the individuals. However, in contrast
+to [6, 18], Density allows for directly calculating the probability of
+co-locations, while [6, 18] rely on sampling to be able to find possible co-locations. For Density, we use a grid of 100×100 to discretize
+the space (this leads to the width of each cell for Manhattan and
+San Francisco to be about 100m and for Cook county about 500m).
+Metrics and Evaluation. For each dataset, we calculate the
+ground-truth using Monte-Carlo simulation. This is done by simulating the spread of the disease in the entire population for whom
+we have data, i.e., for Veraset dataset, the 20,000 individuals. We run
+the simulation 10 times and take the average. To evaluate each algorithm, we sample each individual independently and with probability 𝑝𝑠 , for 𝑝𝑠 ∈ {0.025, 0.05, 0.1, 0.2} to create random sub-samples
+of the population. For each algorithm, we measure mean absolute
+error (MAE) in the estimation from the ground truth. This is done
+by, for each set of samples, measuring the difference between the
+ground truth and the estimation. We also measure the bias in each
+estimation. The bias is calculated by taking the average of 10 runs
+for each algorithm and calculating its difference with the ground
+truth.
+Parameter Setting. We use the diffusion model discussed in
+Sec. 3.1, and unless otherwise stated, the parameter setting is as
+shown in Table 2. We set the parameters of the diffusion model to
+mimic the spread of COVID-19. We set 𝜇𝐼𝑆 to 5 days similar to the
+mean incubation period reported in [16]. The work in [11] reports
+“Infectiousness was estimated to decline quickly within 7 days”, so
+we set 𝜇𝑅 to 𝜇𝐼𝑆 + 7. We set 𝑡𝑚𝑖𝑛 to 15 min as mentioned by [24].
+We vary 𝑝𝑖𝑛𝑓 ∈ 0.1, 0.01 to see how it impacts the spread, where
+low values of 𝑝𝑖𝑛𝑓 can be seen as the case when people are wearing
+a mask and the larger value as when people aren’t.
+
+4.2
+
+Overall, the spread of the disease is correlated with the average
+number of daily co-locations per individuals, where the spread of
+the disease ends after the initial infections in Cook county, but it
+lasts longer in Manhattan and in San Francisco. We observe the idea
+of herd-immunity in Fig. 10, where the virus stops spreading well
+before all the people in the population are infected. The pattern is
+different for Manhattan and San Francisco, with the number of cases
+in Manhattan remaining at a steady level, while increasing in San
+Francisco (this is interesting from an epidemiology perspective, because it shows that herd immunity is dependent on the co-location
+pattern for a population, given the same disease). We also see that
+PollSus_L and PollSus_U follow the ground-truth closely in all the
+datasets and throughout the studied period. PollSpreader follows
+ground-truth but mainly up-to day 10, as after that an adjustment
+for multi-hop infections is required which PollSpreader does not
+take into account. Scale accurately estimates the initial infections,
+as discussed in Sec. 3.2, but does not account for its false negatives,
+which gradually deteriorate its performance.
+We note that, in our experiments, we have assumed the 20,000
+individuals to be the true population. However, the real-world population of each of the counties is larger (20,000 is about 0.4% of the
+real-world population of Cook county and about 2.5% of the realworld population of San Francisco). As a result the spread shown
+does not necessarily follow the real-world number of infections.
+Furthermore, since the real-world population of the counties differ,
+a relative comparison across the counties for the real-world number
+of infections is also not justified, as the up-sampling procedures
+would be different. Thus, we make no statement on the real-world
+spread of the disease. However, our method can, in fact, be used
+to calculate the real-world spread for each of the counties by considering the 20,000 individuals as the sub-sample of the real-world
+mobility pattern. We did not consider this scenario in our experiments since we did not have access to an accurate ground truth
+(because, first, the number of reported cases in the real-world is
+inaccurate [23] and, second, our data is for Dec. 2019).
+Daily Infected Numbers varying 𝑝𝑖𝑛𝑓 . Fig. 9 shows the impact
+of increasing 𝑝𝑖𝑛𝑓 . Comparing Figs. 12 and 9 shows how increasing
+the probability of transmission increases the spread of the disease.
+Overall, the general trends are the same as before, with PollSus_L
+and PollSus_U closely following Ground-Truth. Moreover, in Fig. 9,
+pollSpreader shows a herd immunity pattern, where the infections
+initially increase and then start decreasing after a certain point in
+time, while the true number of infections is, in fact, increasing. This
+is also true for Scale, where the underestimation is amplified over
+time, i.e., underestimating the number of current infections leads to
+further underestimating the people who get infected in the future.
+This shows the importance of an accurate estimation method, as
+otherwise we may observe an estimation with an entirely incorrect
+pattern.
+
+Results
+
+4.2.1 Veraset Data
+Error and Bias. Figs. 7 and 8 show the performance of the algorithms on the San Francisco dataset. First, we observe that PollSus_L
+provides very low error and bias, even when only 2.5% of the population is sampled, and thus can be used to estimate the spread
+accurately. PollSus_U performs well for higher sampling rates while
+Scale and Density perform poorly as they fail to adjust for infections
+that happen from unobserved individuals. We note that Scale also
+has a higher variance compared with the other methods, which is a
+result of the randomness of the Monte-Carlo simulation (the other
+algorithms are deterministic given a sub-sample).
+Daily Infected Numbers across Counties. Figs. 10, 11 and 12
+show the number of infected people per day for Cook, Manhattan
+and San Francisco counties respectively (for clarity, we excluded
+Density from this experiment due to its poor performance, as shown
+in previous experiments) and the shaded area shows one standard
+deviation above and below the mean. The goal of this experiment
+is to examine, for different spread patterns, how closely the estimations follow the ground truth. We note that the drop in the number
+of infections on day 13 for all the figures is due to our choice of
+𝜇𝑅 = 12, since all the 200 hundred initial infections recover by then.
+
+4.2.2 Gowalla Data
+For our experiments on Gowalla, we set 𝑑𝑚𝑎𝑥 to about 110m and
+𝑝𝑖𝑛𝑓 = 0.1, since otherwise we observed very few colocations and
+hence infections. Figs. 13 and 14 show the results on the Gowalla
+dataset. The trends are similar to the Veraset dataset with PollSus_L
+and PollSus_U performing the best.
+11
+
+5
+
+RELATED WORK
+
+patterns. Such simulations currently rely on fixed contact matrices,
+which as discussed above, limit their focus and accuracy and do not
+allow for study of the spread at a specific time and for a particular
+area. Our approach, on the other hand, can be readily used to
+address such inaccuracies using real data.
+
+Studies related to our work fall into three categories: work on (1)
+synthetic trajectory creation, (2) contact matrices and synthetic
+co-location creation and (3) agent-based simulation modeling the
+spread of a disease.
+Synthetic Trajectory Generation. Various methods have been
+proposed to generate location trajectories of people [6, 12, 18, 25].
+Recent work [6, 18] use GANs [9, 26] to model the distribution of
+the trajectories, which is learned from the available samples. This
+method can be applied to our problem setting by sampling new
+trajectories from the learned model and then simulating the spread
+of the disease in the new population (which contains synthetic
+users). The simulation of [6] follows this approach, but the space
+is discretized. An extra contact factor is introduced (set to a fixed
+value) to model the rate of co-locations between people within the
+same cell. This is similar to our baseline, Density (see Sec. 3.3.2),
+
+6
+
+CONCLUSION
+
+We studied the problem of estimating the spread of a virus, or other
+phenomena that can be transmitted through physical contact, in a
+population by having access only to a subsample of the population.
+We observed that modeling co-locations of the individuals, and not
+their locations, allows for accurate estimations. To that end, we provided two methods, PollSpreader and PollSusceptible, that estimate
+properties of a contact network to calculate the spread in the original population. We theoretically showed that our estimates provide
+lower and upper bounds on the spread in the original population,
+and experimentally showed that they are close to the ground-truth
+in practice. Future work includes using our estimates to study different intervention strategies and studying the problem by relaxing
+the assumption that the samples are collected independently and
+uniformly at random.
+
+𝜋𝑑 2
+
+which discretizes the space (the contact factor in our case is cell𝑚𝑎𝑥
+area ),
+and such discretization is also done in [18].
+Overall, there are multiple problems with these approaches. (1)
+Locations need to be modeled accurately to within a few meters and
+for long periods of time. This is a challenging task, and discretizing
+space, done to improve the quality of the location trajectory, makes
+the quality of the co-locations worse, as we observed in our experiments. (2) Mobility patterns change over time and in different
+cities, and the approaches need to learn different models for each of
+them. (3) They need large number of samples for training a neural
+network and they provide no theoretical guarantees on their estimation. (4) Synthetic trajectories increase the data size, which in turn
+requires larger computational power to estimate the spread. Our
+approach circumvents issue (1) by directly looking at co-locations,
+(2) can be directly applied to any time and location, (3) provides
+theoretical guarantees on its estimates and (4) performs estimation
+on the sub-sampled population which requires less computational
+power.
+Synthetic Contact Generation. Contact matrices [17, 19, 20] are
+commonly used to simulate contact between individuals in a population. They provide aggregate level (e.g., for an entire country)
+contact information between different compartments in the population (e.g., rate of contacts between people of different ages) and
+they are estimated through surveys and diaries. However, they do
+not change with time and are not available for specific cities or
+areas, which limits their usefulness for studying the spread at a
+particular time and in a specific area. They furthermore do not take
+into account the differences in individual mobility patterns, and
+consider the population as multiple monoliths. Our work addresses
+the above issue by using location sequences of the individuals for
+specific periods of time and in a specific area. Finally, although
+more sophisticated synthetic graph generation methods, e.g., [28],
+exist, we are unaware of any that do this for physical contacts. That
+is, there is an extra constraint that the generated graph should
+correspond to physical co-locations, and be accurate for multiple
+weeks. We also note that such an approach would still not solve
+issues (2) and (3) mentioned in the previous paragraph.
+Agent-Based Simulations. Agent-based simulations [3, 7, 8, 10,
+14] exhibit a use-case of our methodology, where spread of a disease
+is studied under different diffusion models and for different mobility
+
+REFERENCES
+[1] 2020. Gowalla Dataset. https://snap.stanford.edu/data/loc-gowalla.html. Accessed: 2020-11-14.
+[2] 2020. Veraset Website. https://www.veraset.com/about-veraset. Accessed:
+2020-10-25.
+[3] Sheryl L Chang, Nathan Harding, Cameron Zachreson, Oliver M Cliff, and Mikhail
+Prokopenko. 2020. Modelling transmission and control of the COVID-19 pandemic in Australia. arXiv preprint arXiv:2003.10218 (2020).
+[4] Wen-Hao Chiang, Xueying Liu, and George Mohler. 2020. Hawkes process modeling of COVID-19 with mobility leading indicators and spatial
+covariates. medRxiv (2020).
+https://doi.org/10.1101/2020.06.06.20124149
+arXiv:https://www.medrxiv.org/content/early/2020/06/08/2020.06.06.20124149.full.pdf
+[5] Steffen E Eikenberry, Marina Mancuso, Enahoro Iboi, Tin Phan, Keenan Eikenberry, Yang Kuang, Eric Kostelich, and Abba B Gumel. 2020. To mask or not to
+mask: Modeling the potential for face mask use by the general public to curtail
+the COVID-19 pandemic. Infectious Disease Modelling (2020).
+[6] Jie Feng, Zeyu Yang, Fengli Xu, Haisu Yu, Mudan Wang, and Yong Li. 2020.
+Learning to Simulate Human Mobility. In Proceedings of the 26th ACM SIGKDD
+International Conference on Knowledge Discovery & Data Mining. 3426–3433.
+[7] Neil Ferguson, Daniel Laydon, Gemma Nedjati Gilani, Natsuko Imai, Kylie Ainslie,
+Marc Baguelin, Sangeeta Bhatia, Adhiratha Boonyasiri, ZULMA Cucunuba Perez,
+Gina Cuomo-Dannenburg, et al. 2020. Report 9: Impact of non-pharmaceutical interventions (NPIs) to reduce COVID19 mortality and healthcare demand. (2020).
+[8] Neil M Ferguson, Derek AT Cummings, Christophe Fraser, James C Cajka, Philip C
+Cooley, and Donald S Burke. 2006. Strategies for mitigating an influenza pandemic.
+Nature 442, 7101 (2006), 448–452.
+[9] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley,
+Sherjil Ozair, Aaron Courville, and Yoshua Bengio. 2014. Generative adversarial
+nets. In Advances in neural information processing systems. 2672–2680.
+[10] M Elizabeth Halloran, Neil M Ferguson, Stephen Eubank, Ira M Longini, Derek AT
+Cummings, Bryan Lewis, Shufu Xu, Christophe Fraser, Anil Vullikanti, Timothy C
+Germann, et al. 2008. Modeling targeted layered containment of an influenza
+pandemic in the United States. Proceedings of the National Academy of Sciences
+105, 12 (2008), 4639–4644.
+[11] Xi He, Eric HY Lau, Peng Wu, Xilong Deng, Jian Wang, Xinxin Hao, Yiu Chung
+Lau, Jessica Y Wong, Yujuan Guan, Xinghua Tan, et al. 2020. Temporal dynamics
+in viral shedding and transmissibility of COVID-19. Nature medicine 26, 5 (2020),
+672–675.
+[12] Shan Jiang, Yingxiang Yang, Siddharth Gupta, Daniele Veneziano, Shounak
+Athavale, and Marta C González. 2016. The TimeGeo modeling framework
+for urban mobility without travel surveys. Proceedings of the National Academy
+of Sciences 113, 37 (2016), E5370–E5378.
+[13] William Ogilvy Kermack and Anderson G McKendrick. 1927. A contribution to
+the mathematical theory of epidemics. Proceedings of the royal society of london.
+Series A, Containing papers of a mathematical and physical character 115, 772
+(1927), 700–721.
+12
+
+[14] Cliff C Kerr, Robyn M Stuart, Dina Mistry, Romesh G Abeysuriya, Gregory Hart,
+Katherine Rosenfeld, Prashanth Selvaraj, Rafael C Nunez, Brittany Hagedorn, Lauren George, et al. 2020. Covasim: an agent-based model of COVID-19 dynamics
+and interventions. medRxiv (2020).
+[15] Mehrdad Kiamari, Gowri Ramachandran, Quynh Nguyen, Eva Pereira, Jeanne
+Holm, and Bhaskar Krishnamachari. 2020. COVID-19 Risk Estimation using
+a Time-varying SIR-model. 1st ACM SIGSPATIAL International Workshop on
+Modeling and Understanding the Spread of COVID-19 (2020).
+[16] Qun Li, Xuhua Guan, Peng Wu, Xiaoye Wang, Lei Zhou, Yeqing Tong, Ruiqi Ren,
+Kathy SM Leung, Eric HY Lau, Jessica Y Wong, et al. 2020. Early transmission
+dynamics in Wuhan, China, of novel coronavirus–infected pneumonia. New
+England Journal of Medicine (2020).
+[17] Joël Mossong, Niel Hens, Mark Jit, Philippe Beutels, Kari Auranen, Rafael Mikolajczyk, Marco Massari, Stefania Salmaso, Gianpaolo Scalia Tomba, Jacco Wallinga,
+et al. 2008. Social contacts and mixing patterns relevant to the spread of infectious
+diseases. PLoS Med 5, 3 (2008), e74.
+[18] Kun Ouyang, Reza Shokri, David S Rosenblum, and Wenzhuo Yang. 2018. A
+Non-Parametric Generative Model for Human Trajectories.. In IJCAI. 3812–3817.
+[19] Kiesha Prem, Alex R Cook, and Mark Jit. 2017. Projecting social contact matrices
+in 152 countries using contact surveys and demographic data. PLoS computational
+biology 13, 9 (2017), e1005697.
+[20] Kiesha Prem, Kevin van Zandvoort, Petra Klepac, Rosalind M Eggo, Nicholas G
+Davies, Alex R Cook, Mark Jit, et al. 2020. Projecting contact matrices in 177
+geographical regions: an update and comparison with empirical data for the
+COVID-19 era. medRxiv (2020).
+[21] Sirisha Rambhatla, Sepanta Zeighami, Kameron Shahabi, Cyrus Shahabi, and Yan
+Liu. 2020. Towards Accurate Spatiotemporal COVID-19 Risk Scoresusing High
+Resolution Real-World Mobility Data. Under reviw at TSAS (2020).
+[22] Houtan Shirani-Mehr, Farnoush Banaei Kashani, and Cyrus Shahabi. 2012. Efficient Reachability Query Evaluation in Large Spatiotemporal Contact Datasets.
+Proc. VLDB Endow. 5, 9 (2012), 848–859. https://doi.org/10.14778/2311906.2311912
+[23] New York Times. 2020. Actual Coronavirus Infections Vastly Under counted,
+C.D.C. Data Shows. https://www.nytimes.com/2020/06/27/health/coronavirusantibodies-asymptomatic.html. Accessed: 2020-10-27.
+[24] W Joost Wiersinga, Andrew Rhodes, Allen C Cheng, Sharon J Peacock, and
+Hallie C Prescott. 2020. Pathophysiology, transmission, diagnosis, and treatment
+of coronavirus disease 2019 (COVID-19): a review. Jama 324, 8 (2020), 782–793.
+[25] Mogeng Yin, Madeleine Sheehan, Sidney Feygin, Jean-François Paiement, and
+Alexei Pozdnoukhov. 2017. A generative model of urban activities from cellular
+data. IEEE Transactions on Intelligent Transportation Systems 19, 6 (2017), 1682–
+1696.
+[26] Lantao Yu, Weinan Zhang, Jun Wang, and Yong Yu. 2017. Seqgan: Sequence
+generative adversarial nets with policy gradient. In Thirty-first AAAI conference
+on artificial intelligence.
+[27] Sepanta Zeighami, Cyrus Shahabi, and John Krumm. 2020. Estimating Spread
+of Contact-Based Contagions in a Population Through Sub-Sampling. https:
+// infolab.usc.edu/ DocsDemos/ SpreadEstimation.pdf (2020).
+[28] Dawei Zhou, Lecheng Zheng, Jiawei Han, and Jingrui He. 2020. A Data-Driven
+Graph Generative Model for Temporal Interaction Networks. In Proceedings of
+the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data
+Mining. 401–411.
+
+13
+
+A
+
+PROOFS
+
+Which proves the lower bound.
+Í
+¯𝑡
+To show the upper bound, similarly consider 𝐸 [𝑒 𝑣 𝑐𝑢 𝑆 𝑣 log 𝑃 (𝑇𝑢,𝑣 ) ].
+By Hoeffding’s lemma, we have
+
+Proof of Theorem 3.1. Observe that
+𝑡
+𝑡
+Π 𝑣 ∈𝑁 (𝑢,𝐺 0,𝑡 ) 𝑃 (𝑇𝑢,𝑣
+= 0)𝑆 𝑣 = Π 𝑣 ∈𝑁 (𝑢,𝐺ˆ ) 𝑃 (𝑇𝑢,𝑣
+= 0)
+0,𝑡
+And is the probability of 𝑢 not getting infected from just its
+𝑡 the event 𝑇 𝑡 = 0
+neighbours that were sampled. Denote by 𝑇¯𝑢,𝑣
+𝑢,𝑣
+for simplicity. To show the lower bound, we rewrite
+
+𝐸 [𝑒
+
+=𝑒
+
+Í
+
+𝑒
+
+¯𝑡
+𝑣 𝑐𝑢 𝑆 𝑣 log 𝑃 (𝑇𝑢,𝑣 )
+
+Í
+
+𝑣 𝑐𝑢 𝑆 𝑣
+
+𝑡 )
+log 𝑃 (𝑇¯𝑢,𝑣
+
+] ≥𝑒
+
+Í
+
+𝑣
+
+𝑡 )
+𝐸 [𝑆 𝑣 ]𝑐𝑢 log 𝑃 (𝑇¯𝑢,𝑣
+
+=𝑒
+
+Í
+
+𝑣
+
+Í
+
+𝑆𝑣
+𝑣 𝑝𝑠
+
+𝑡 )
+log 𝑃 (𝑇¯𝑢,𝑣
+
+] ≥𝑒
+
+Í
+
+𝑣
+
+𝑡 )
+log 𝑃 (𝑇¯𝑢,𝑣
+
+] ≤𝑒
+
+Í
+
+𝑣 (𝑐𝑢 𝑝𝑠
+
+𝑡 )+
+log 𝑃 (𝑇¯𝑢,𝑣
+
+2 log2 𝑃 (𝑇¯ 𝑡 )
+𝑐𝑢
+𝑢,𝑣
+8
+
+)
+
+𝑣 (𝑐𝑢 𝑝𝑠
+
+𝑡 )+
+log 𝑃 (𝑇¯𝑢,𝑣
+
+2 log2 𝑃 (𝑇¯ 𝑡 )
+𝑐𝑢
+𝑢,𝑣
+8
+
+)
+
+≤𝑒
+
+Í
+
+𝑣
+
+𝑡 ) (𝑐 𝑝 +
+log 𝑃 (𝑇¯𝑢,𝑣
+𝑢 𝑠
+
+2 log(𝑝
+𝑐𝑢
+𝑚𝑖𝑛 )
+8
+
+log(𝑝
+
+)
+
+)
+
+𝑚𝑖𝑛
+Let 𝑐𝑢 be the solution to the equation 𝑐𝑢 𝑝𝑠 +
+= 1,
+8
+which is the solution to a quadratic equation. For such a solution,
+𝑡 ) as
+we have the right hand side above equal to Π 𝑣 ∈𝑁 (𝑢,𝐺 0,𝑡 ) 𝑃 (𝑇¯𝑢,𝑣
+√︃
+−𝑙𝑜𝑔 (𝑝𝑚𝑖𝑛 )
+desired and a real solution exists when 𝑝𝑠 ≥
+.
+2
+□
+
+𝑡 )
+𝑝𝑠 𝑐𝑢 log 𝑃 (𝑇¯𝑢,𝑣
+
+Setting 𝑐𝑙 = 𝑝1𝑠 we get
+𝐸 [𝑒
+
+𝑡 )
+log 𝑃 (𝑇¯𝑢,𝑣
+
+𝑐𝑢2
+
+By Jensen’s inequality
+𝐸 [𝑒
+
+𝑣 𝑐𝑢 𝑆 𝑣
+
+𝑡 ) ≤ 1. Thus, log2 (𝑃 (𝑇¯ 𝑡 )) ≤
+Furthermore, assume 𝑝𝑚𝑖𝑛 ≤ 𝑃 (𝑇¯𝑢,𝑣
+𝑢,𝑣
+𝑡
+¯
+log 𝑃 (𝑇𝑢,𝑣 ) log(𝑝𝑚𝑖𝑛 ). So,
+
+¯ 𝑡 𝑆 𝑣 𝑐𝑢
+𝑡 𝑆 𝑣 𝑐𝑢
+(Π 𝑣 ∈𝑁 (𝑢,𝐺 0,𝑡 ) 𝑃 (𝑇¯𝑢,𝑣
+) ) = 𝑒 log(Π 𝑣∈𝑁 (𝑢,𝐺0,𝑡 ) 𝑃 (𝑇𝑢,𝑣 ) )
+Í
+
+Í
+
+𝑡
+= Π 𝑣 ∈𝑁 (𝑢,𝐺 0,𝑡 ) 𝑃 (𝑇¯𝑢,𝑣
+)
+
+14
+
+

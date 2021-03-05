@@ -1,0 +1,998 @@
+1–14
+
+Bridging Physics-based and Data-driven modeling for
+Learning Dynamical Systems
+Rui Wang
+
+RUW 020@ UCSD . EDU
+
+UC San Diego
+
+Danielle Maddix
+
+DMMADDIX @ AMAZON . COM
+
+arXiv:2011.10616v1 [cs.LG] 20 Nov 2020
+
+Amazon Research
+
+Christos Faloutsos
+
+FALOUTSO @ AMAZON . COM
+
+Amazon and Carnegie Mellon University
+
+Yuyang Wang
+
+YUYAWANG @ AMAZON . COM
+
+Amazon Research
+
+Rose Yu
+
+ROSEYU @ ENG . UCSD . EDU
+
+UC San Diego
+
+Abstract
+How can we learn a dynamical system to make forecasts, when some variables are unobserved?
+For instance, in COVID-19, we want to forecast the number of infected and death cases but we
+do not know the count of susceptible and exposed people. While mechanics compartment models
+are widely-used in epidemic modeling, data-driven models are emerging for disease forecasting.
+As a case study, we compare these two types of models for COVID-19 forecasting and notice
+that physics-based models significantly outperform deep learning models. We present a hybrid approach, AutoODE-COVID, which combines a novel compartmental model with automatic differentiation. Our method obtains a 57.4% reduction in mean absolute errors for 7-day ahead COVID19 forecasting compared with the best deep learning competitor. To understand the inferior performance of deep learning, we investigate the generalization problem in forecasting. Through systematic experiments, we found that deep learning models fail to forecast under shifted distributions
+either in the data domain or the parameter domain. This calls attention to rethink generalization
+especially for learning dynamical systems.
+Keywords: Dynamical system, deep learning, generalization, COVID-19 forecasting.
+
+1. Introduction
+Dynamical systems (Strogatz, 2018) describe the evolution of phenomena occurring in nature, in
+which a differential equation, dy/dt = fθ (y, t), models the dynamics of a d-dimensional state
+y ∈ Rd . Here fθ is a non-linear operator parameterized by parameters θ. Learning dynamical
+systems is to search a good model for a dynamical system in the hypothesis space guided by some
+criterion for performance. In this work, we study the forecasting problem of predicting an sequence
+of future states (yk , ..., yk+q−1 ) given an sequence of historic states (y0 , ..., yk−1 ).
+A plethora of work has been devoted to learning dynamical systems. When fθ is known,
+physics-based methods based on numerical integration are commonly used for parameter estimation (Houska et al., 2012). Raissi and Karniadakis (2018); Al-Aradi et al. (2018); Sirignano and
+Spiliopoulos (2018) propose to directly solve y by approximating f with neural networks that take
+the coordinates and time as input. When fθ is unknown and the data is abundant, data-driven methods are preferred. For example, deep learning (DL), especially deep sequence models (Benidis
+© R. Wang, D. Maddix, C. Faloutsos, Y. Wang & R. Yu.
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+et al., 2020; Sezer et al., 2019; Flunkert et al., 2017; Rangapuram et al., 2018) have demonstrated
+success in time series forecasting. In addition, Wang et al. (2020b); Ayed et al. (2019b); Wang et al.
+(2020c); Chen et al. (2018) have developed hybrid DL models based on differential equations for
+spatiotemporal dynamics forecasting.
+Our study was initially motivated by the need to forecast COVID-19 dynamics. Since the actual
+dynamics of COVID-19 is unknown, we perform a comprehensive benchmark study of various
+methods to forecast the cumulative number of confirmed, removed and death cases.1 To our surprise,
+we found that physics-based models significantly outperform deep learning methods for COVID19 forecasting. We adopt automatic differentiation for parameter estimation. Specifically, we use
+numerical integration to generate state estimate and minimize the difference between estimate and
+the ground truth with automatic differentiation (Baydin et al., 2017; Paszke et al., 2017). This leads
+to a novel hybrid method for COVID-19 forecasting, AutoODE-COVID, which obtains a 57.4%
+reduction in mean absolute errors for 7-days ahead prediction.
+To understand the inferior performance of DL in forecasting COVID-19 dynamics, we experiment with several other dynamical systems: Sine, SEIR, Lotka-Volterra and FitzHugh–Nagumo. We
+observe that DL models cannot cope with two distribution shift scenarios that may naturally occur
+in dynamical system learning: non-stationary dynamics and dynamics with different parameters.
+Our findings highlight the unique challenge of using DL models for learning dynamical systems
+and call for more robust methods that can generalize well for the forecasting task. To summarize,
+our contributions are the following:
+1. We study the learning of dynamical systems for forecasting, even with unobserved variables.
+We perform a benchmark study of both physics-based and data-driven models for predicting
+the COVID-19 dynamics among the cumulative confirmed, removed and death cases.
+2. We propose a hybrid model, AutoODE-COVID, with a novel compartmental model and
+automatic differentiation for forecasting COVID-19. Our method obtains a 57.4% reduction
+in mean absolute errors for 7-days ahead prediction compared with the best DL competitor.
+3. We provide empirical evidence to explain the inferior performance of DL by learning LotkaVolterra, FitzHugh–Nagumo and SEIR dynamics. We found that widely-used DL models fail
+to learn the correct dynamics when there is distribution shift either in the data space or the
+parameters of the dynamical system.
+
+2. Related Work
+Learning Dynamical System The seminal work by Steven L. Brunton (2015) proposed to solve
+ODEs by creating a dictionary of possible terms and applying sparse regression to select appropriate terms. But it assumes that the chosen library is sufficient. Physics-informed deep learning
+directly solves differential equations with neural nets given space x and time t as input (Raissi and
+Karniadakis, 2018; Al-Aradi et al., 2018; Sirignano and Spiliopoulos, 2018). This type of methods
+cannot be used for forecasting since future t would always lie outside of the training domain and
+neural nets cannot extrapolate to unseen domain (Kouw and Loog, 2018; Amodei et al., 2019). Local methods, such as ARIMA and Gaussian SSMs (Salinas et al., 2019; Rasmussen and Williams.,
+2006; Du et al., 2016) learn the parameters individually for each time series. Hybrid DL models,
+1. Reproducibility: We open-source our code https://github.com/Rose-STL-Lab/AutoODE-DSL; the COVID-19 data
+we use is from John Hopkins Dataset https://github.com/CSSEGISandData/COVID-19.
+
+2
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+e.g. Ayed et al. (2019b); Wang et al. (2020c); Chen et al. (2018); Ayed et al. (2019a) integrate
+differential equations in DL for temporal dynamics forecasting.
+Deep Sequence Models Since accurate numerical computation requires lots of manual engineering and theoretical properties may have not been well understood, deep sequence models have been
+widely used for learning dynamical systems. Sequence to sequence models and the Transformer,
+have an encoder-decoder structure that can directly map input sequences to output sequences with
+different lengths (Vaswani et al., 2017; Wu et al., 2020; Li et al., 2020; Rangapuram et al., 2018;
+Flunkert et al., 2017). Fully connected neural networks can also be used autoregressively to produce
+multiple time-step forecasts (Benidis et al., 2020; Lim and Zohren, 2020). Neural ODE (Chen et al.,
+2018) is based on the assumption that the data is governed by an ODE system and able to generate
+continuous predictions. When the data is spatially correlated, deep graph models, such as graph
+convolution networks and graph attention networks (Velickovic et al., 2017), have also been used.
+Epidemic Forecasting Compartmental models are commonly used for modeling epidemics. Chen
+et al. (2020) proposes a time-dependent SIR model that uses ridge regression to predict the transmission and recovery rates over time. A potential limitation with this method is that it does not
+consider the incubation period and unreported cases. Pei and Shaman (2020) modified the compartments in the SEIR model into the subpopulation commuting among different places, and estimated
+the model parameters using iterated filtering methods. Wang et al. (2020a) proposes a populationlevel survival-convolution method to model the number of infectious people as a convolution of
+newly infected cases and the proportion of individuals remaining infectious over time. Zou et al.
+(2020) proposes the SuEIR model that incorporates the unreported cases, and the effect of the exposed group on susceptibles. Davis et al. (2020) shows the importance of simultaneously modeling
+the transmission rate among the fifty U.S. states since transmission between states is significant.
+
+3. Learning Dynamical Systems
+3.1. Problem Formulation
+Denote y ∈ Rd as observed variables and u ∈ Rp as the unobserved variables, we aim to learn a
+dynamical system given as
+ dy
+
+= fθ (t, y, u)
+
+
+
+dt
+
+
+ du
+= gθ (t, y, u)
+(3.1)
+dt
+
+
+
+
+y(t0 ) = y0
+
+
+
+u(t0 ) = u0 .
+In practice, we have observations (y0 , y1 , ..., yk−1 ) as inputs. The task of learning dynamical systems is to learn fθ and gθ , and produce accurate forecasts (yk , ..., yk+q−1 ), where q is called the
+forecasting horizon.
+3.2. Data-Driven Modeling
+For data-driven models, we assume both f and g are unknown. We are given training and test
+samples either as sliced sub-sequences from a long sequence (same parameters, different initial
+conditions) or independent samples from the system (different parameters, same initial conditions).
+3
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+In particular, let pS be the training data distribution and pT be the test data distribution. DL seeks a
+hypothesis h ∈ H : Rd×k 7→ Rd×q that maps a sequence of past values to future values:
+(i)
+
+(i)
+
+(i)
+
+(i)
+
+h(y0 , ..., yk−1 ) = ŷk , ..., ŷk+q−1
+
+(3.2)
+
+where (i) denotes individual sample, k is the input length and q is the output length.
+Following the standard statistical learning setting, a deep sequence model minimizes the training
+P
+(i)
+(i)
+loss Lˆ1 (h) = n1 ni=1 l(y (i) , h), where y (i) = (y0 , ..., yk+q−1 ) ∼ pS is the ith training sample, l
+is a loss function. For example, for square loss, we have
+(i)
+
+(i)
+
+(i)
+
+(i)
+
+l(y (i) , h) = ||h(y0 , ..., yk−1 ) − (yk , ..., yk+q−1 )||22
+The test error is given as L1 (h) = Ey∼pT [l(y, h)]. The goal is to achieve small test error L1 (h) and
+small |Lˆ1 (h) − L1 (h)| indicates good generalization ability.
+A fundamental difficulty of forecasting in dynamical system is the distributional shift that naturally occur in learning dynamical systems (Kouw and Loog, 2018; Amodei et al., 2019). In forecasting, the data in the future pT often lie outside the training domain pS , and requires methods to
+extrapolate to the unseen domain. This is in contrast to classical machine learning theory, where
+generalization refers to model adapting to unseen data drawn from the same distribution (Hastie
+et al., 2009; Poggio et al., 2012).
+3.3. Physics-Based Modeling
+Physics-based modeling assumes we already have an appropriate system of ODEs to describe the
+underlying dynamics. We know the function f and g, but not the parameters. We can use automatic
+differentiation to estimate the unknown parameters θ and the initial values u0 . We coin this procedure as AutoODE. Similar approaches have been used in other papers (Rackauckas et al., 2020; Zou
+et al., 2020) but have not been well formalized. The main procedure is described in the algorithm 1.
+In the meanwhile, we need to ensure u and y have enough correlation that AutoODE can correctly
+learn all the parameters based on the observable y only. If u and y are not correlated or loosely
+correlated, we may be not able to estimate u solely based on the observations of y.
+Algorithm 1: AutoODE
+Initialize the unknown parameters θ, u0 in Eqn. 3.1 randomly.
+Discretize Eqn. 3.1 and apply 4-th order Runge Kutta (RK4) Method.
+Generate estimation for y: (ŷ0 , ..., ŷk )
+Minimize the forecasting loss with the Adam optimizer,
+P
+2
+L2 (θ, u0 ) = k1 k−1
+i=0 ||ŷi (θ, u, t) − yi (θ, u, t)|| .
+4: After convergence, use estimated θ̂, uˆ0 and 4-th order Runge Kutta Method to
+generate final prediction, (yk , ..., yt+q−1 ).
+
+0:
+1:
+2:
+3:
+
+NeuralODE (Chen et al., 2018) uses the adjoint method to differentiate through the numerical
+solver. Adjoint methods are more efficient in higher dimensional neural network models which require complex numerical integration. In our case, since we are dealing with low dimension ordinary
+differential equations and the RK4 is sufficient to generate accurate predictions. We can directly
+implement the RK4 in Pytorch and make it fully differentiable.
+4
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+4. Case study: COVID-19 Forecasting
+We benchmark different methods for predicting the COVID-19 dynamics among the cumulative
+confirmed, removed and death cases. We instantiate a special instance of AutoODE, with a novel
+SuEIR compartmental model, called AutoODE-COVID.
+P
+
+dSi /dt = −[ j βi (t)Aij (Ij + Ej )Si ]/Ni ,
+
+
+
+P
+
+
+dEi /dt = [ j βi (t)Aij (Ij + Ej )Si ]/Ni − σi Ei ,
+
+
+
+
+
+
+ dUi /dt = (1 − µi )σi Ei ,
+(4.1)
+dIi /dt = µi σi Ei − γi Ii ,
+
+
+
+
+dRi /dt = γi Ii ,
+
+
+
+
+
+dDi /dt = ri (t)dRi /dt.
+
+
+
+Ni = Si + Ei + Ui + Ii + Ri
+4.1. AutoODE-COVID
+We present the AutoODE-COVID model given in Eqn. (4.1) and details are listed as below. We
+estimate the unknown parameters βi , σi , µi , and γi , which correspond to the transmission, incubation, discovery, and recovery rates, respectively. We also need to estimate unknown variables,
+the cumulative numbers of susceptibles (S), exposed (E) and unreported (U ) cases, and predict
+the cumulative numbers of infected (I), removed (R) and death (D) cases. The total population
+Ni = Si + Ei + Ui + Ii + Ri is assumed to be constant for each U.S. states i.
+Low Rank Approximation to the Sparse Transmission Matrix Aij We introduce a sparse transmission matrix A to model the transmission rate among the 50 U.S. states. A is the element-wise
+product of the U.S. states adjacency matrix M and the transmission matrix C, that is, A = C M ∈
+R50×50 . M is a sparse 1-0 matrix that indicates whether two states are adjacent to each other. C
+learns the transmission rates among the all 50 states from the data. A = C M means that we omit
+the transmission between the states that are not adjacent to each other. We make C sparse with M as
+C contains too many parameters and we want to avoid overfitting. To further reduce the number of
+parameters and improve the computational efficiency to O(kn), we use a low rank approximation
+to generate the correlation matrix C = B T D, where B, D ∈ Rk×n for k << n.
+Piece-wise Linear Transmission Rate βi (t) Most compartmental models assume the transmission rate βi is constant. For COVID-19, the transmission rate of COVID-19 changes over time due
+to government regulations, such as school closures and social distancing. Even though we focus on
+short-term forecasting (7 days ahead), it is possible that the transmission rate may change during
+the training period. Instead of a constant approximation to βi , we use a piece-wise linear function
+over time βi (t), and set the breakpoints, slopes and biases as trainable parameters.
+Death Rate Modeling: ri (t) The relationship between the numbers of accumulated removed and
+death cases can be close to linear, exponential or concave in different states. We assume the death
+rate ri (t) as a linear combination of ai t + bi to cover both the convex and concave functions, where
+ai and bi are set as learnable parameters.
+
+5
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+07/13 ∼ 07/19
+
+MAE
+
+08/23 ∼ 08/29
+
+09/06 ∼ 09/12
+
+I
+
+R
+
+D
+
+I
+
+R
+
+D
+
+I
+
+R
+
+D
+
+FC
+
+8379
+
+5330
+
+257
+
+559
+
+701
+
+30
+
+775
+
+654
+
+33
+
+Seq2Seq
+
+5172
+
+2790
+
+99
+
+781
+
+700
+
+40
+
+728
+
+787
+
+35
+
+Transformer
+
+8225
+
+2937
+
+2546
+
+1282
+
+1308
+
+46
+
+1301
+
+1253
+
+41
+
+NeuralODE
+
+7283
+
+5371
+
+173
+
+682
+
+661
+
+43
+
+858
+
+791
+
+35
+
+GCN
+
+6843
+
+3107
+
+266
+
+1066
+
+923
+
+55
+
+1605
+
+984
+
+44
+
+GAN
+
+4155
+
+2067
+
+153
+
+1003
+
+898
+
+51
+
+1065
+
+833
+
+40
+
+SuEIR
+
+1746
+
+1984
+
+136
+
+639
+
+778
+
+39
+
+888
+
+637
+
+47
+
+AutoODE
+
+818
+
+1079
+
+109
+
+514
+
+538
+
+41
+
+600
+
+599
+
+39
+
+Table 1: Proposed AutoODE-COVID wins in predicting I and R: 7-day ahead prediction MAEs
+on COVID-19 trajectories of accumulated number of infectious, removed and death cases.
+
+Figure 1: Proposed AutoODE-COVID wins: I, R and D predictions for week 08/23 ∼ 08/29 in
+Massachusetts by our proposed AutoODE model and the best performing DL model FC.
+
+Weighted Loss Function We set the unknown parameters in Eqn. (4.1) as trainable, and apply
+AutoODE to minimize the following weighted loss function:
+
+
+k−1
+1X
+w(t) l(Iˆt , It ) + α1 l(R̂t , Rt ) + α2 l(D̂t , Dt ) ,
+L(A, β, σ, µ, γ, r) =
+k
+t=0
+
+with weights α1 , α2 and loss function l(·, ·) which we will specify in the following section. We
+utilize these weights to balance the loss of the three states due to scaling differences, and also
+reweigh√
+the loss at different time steps. We give larger weights to more recent data points by setting
+w(t) = t. The constants, α1 , α2 and k are tuned on the validation set.
+
+6
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+4.2. Experiments on forecasting COVID-19 Dynamics
+We use the COVID-19 data from Apr 14 to Sept 12 provided by Johns Hopkins University (Dong
+et al., 2020). It contains the cumulative numbers of infected (I), recovered (R) and death (D) cases.
+We investigate six DL models on forecasting COVID-19 trajectories: sequence to sequence with
+LSTMs (Seq2Seq), Transformer, autoregressive fully connected neural nets (FC), NeuralODE,
+graph convolution networks (GCN) and graph attention networks (GAN). We standardize I, R and D
+time series of each state individually to avoid one set of features dominating another. We use sliding
+windows to generate samples of sequences before the target week and split them into training and
+validation sets. We perform exhaustive search to tune the hyperparameters on the validation set.
+We also compare SuEIR (Zou et al., 2020) and AutoODE-COVID. We rescale the trajectories
+of the number of cumulative cases of each state by the population of that state. We use the quantile
+regression loss (Wen et al., 2018) for all models. All the DL models are trained to predict the number
+of daily new cases instead of the number of cumulative cases because we want to detread the time
+series, and put the training and test samples in the same approximate range. All experiments were
+conducted on Amazon Sagemaker (Liberty et al., 2020).
+Table 1 shows the 7-day ahead forecasting mean absolute errors of three features I, R and D
+for the weeks of July 13, Aug 23 and Sept 6. We can see that AutoODE-COVID overall performs
+better than SuEIR and all the DL models. FC and Seq2Seq have better prediction accuracy
+of death counts but all DL models have much bigger errors on the prediction of week July 13.
+Figure 1 visualizes the 7-day ahead COVID-19 predictions of I, R and D in Massachusetts by
+AutoODE-COVID and the best performing DL model, FC. The prediction by AutoODE-COVID
+is closer to the target and has smaller confidence intervals. This demonstrates the effectiveness of
+our hybrid model, as well as the benefits of our novel compartmental model design.
+
+5. Generalization in Learning Dynamical Systems
+We explore the potential reasons behind inadequate performance of DL models on COVID-19 forecasting by studying their generalization ability. We experimentally explore the two cases, distribution shift in the data where the observations range changes; and parameter domains where the
+parameter range of the system in training and test differs.
+5.1. Dynamical Systems
+Apart from COVID-19 trajectories, we also investigate the following three non-linear dynamics.
+Lotka-Volterra (LV) system (Ahmad, 1993) of Eqn.(5.1) describes the dynamics of biological
+systems in which predators and preys interact, where d denotes the number of species interacting
+and pi denotes the population size of species i at time t. The unknown parameters ri ≥ 0, ki ≥ 0 and
+Aij denote the intrinsic growth rate of species i, the carrying capacity of species i when the other
+species are absent, and the interspecies competition between two different species, respectively.
+FitzHugh–Nagumo (FHN) FitzHugh (1961) and, independently, Nagumo et al. (1962) derived
+the Eqn.(5.2) to qualitatively describe the behaviour of spike potentials in the giant axon of squid
+neurons. The system describes the reciprocal dependencies of the voltage x across an axon membrane and a recovery variable y summarizing outward currents. The unknown parameters a, b, and
+c are dimensionless and positive, and c determines how fast y changes relative to x.
+
+7
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+SEIR system of Eqn.(5.3) models the spread of infectious diseases (HE, 1992). It has four compartments: Susceptible (S) denotes those who potentially have the disease, Exposed (E) models
+the incubation period, Infected (I) denotes the infectious who currently have the disease, and Removed/Recovered (R) denotes those who have recovered from the disease or have died. The total
+population N is assumed to be constant and the sum of these four states. The unknown parameters
+β, σ and γ denote the transmission, incubation, and recovery rates, respectively.
+Pd
+
+
+dpi
+j=1 Aij pj
+,
+=ri pi 1 −
+dt
+ki
+i =1, 2, . . . , d.
+(5.1)
+
+
+
+
+
+
+
+dx
+x3
+= c(x + y − ),
+dt
+3
+dy
+1
+= − (x + by − a).
+dt
+c
+(5.2)
+
+
+dS/dt = −βSI/N,
+
+
+
+
+
+
+ dE/dt = βSI/N − σE,
+dI/dt = σE − γI,
+
+
+
+dR/dt = γI,
+
+
+
+
+N = S + E + I + R.
+(5.3)
+
+5.2. Interpolation vs. Extrapolation
+We define pS and pT as the training and the test data distributions. And the θS and θT denote
+parameter distributions of training and test sets, where the parameter here refers to the coefficients
+and the initial values of dynamical systems. A distribution is a function that map a sample space
+to the interval [0,1] if it a continuous distribution, or a subset of that interval if it is a discrete
+distribution. The domain of a distribution p, i.e. Dom(p), refers to the set of values (sample space)
+for which that distribution is defined.
+We define two types of interpolation and extrapolation tasks. Regarding the data domain, we define a task as an interpolation task when the data domain of the test data is a subset of the domain of
+the training data, i.e., Dom(pT ) ⊆ Dom(pS ), and then extrapolation occurs Dom(pT ) 6⊆ Dom(pS ).
+Regarding the parameter domain, an interpolation task indicates that Dom(θT ) ⊆ Dom(θS ), and
+an extrapolation task indicates that Dom(θT ) 6⊆ Dom(θS ).
+5.3. Generalization in dynamical systems: unseen data in the different data domain
+Through a simple experiment on learning the Sine curves, we show deep sequence models have
+poor generalization on extrapolation tasks regarding the data domain, i.e. Dom(pT ) 6⊆ Dom(pS ).
+Specifically, we generate 2k Sine samples of length 60 with different frequencies and phases, and
+randomly split them into training, validation and interpolation-test sets. The extrapolation-test set is
+the interpolation-test set shifted up by 1. We investigate four models, including Seq2Seq (sequence
+to sequence with LSTMs), Transformer, FC (autoregressive fully connected neural nets) and
+NeuralODE. All models are trained to make 30 steps ahead prediction given the previous 30 steps.
+Table 2 shows that all models have substantially larger errors on the extrapolation test set. Figure
+2 shows Seq2Seq predictions on an interpolation (left) and an extrapolation (right) test samples.
+We can see that Seq2Seq makes accurate predictions on the interpolation-test sample, while it fails
+to generalize when the same samples are shifted up only by 1.
+5.4. Generalization in dynamical systems: unseen data with different system parameters
+Even when Dom(pT ) ⊆ Dom(pS ), deep sequence models can still fail to learn the correct dynamics
+if there is a distributional shift in the parameter domain, i.e., Dom(θT ) 6⊆ Dom(θS ).
+8
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+RMSE
+
+Inter Extra
+
+Seq2Seq
+
+0.012
+
+1.242
+
+Auto-FC
+
+0.009
+
+1.554
+
+Transformer 0.016
+
+1.088
+
+0.012
+
+1.214
+
+NeuralODE
+
+Figure 2: Seq2Seq predictions on an interpolation (left) and Table 2: RMSEs of the interpoan extrapolation (right) test samples of Sine dynamics,
+lation and extrapolation
+the vertical black line in the plots separates the input
+tasks of Sine dynamics.
+and forecasting period.
+
+For each of the three dynamics in section 5.1, we generate 6k synthetic time series samples
+with different system parameters and initial values. The training/validation/interpolation-test sets
+for each dataset have the same range of system parameters while the extrapolation-test set contains
+samples from a different range. Table 3 shows the parameter distribution of test sets. For each
+dynamics, we perform two experiments to evaluate the models’ extrapolation generalization ability
+on initial values and system parameters. All samples are normalized so that Dom(pT ) = Dom(pS ).
+System Parameters
+Interpolation
+
+Initial Values
+
+Extrapolation
+4
+
+Interpolation
+4
+
+Extrapolation
+4
+
+LV
+
+k ∼ U (0, 250)
+
+k ∼ U (250, 300)
+
+p0 ∼ U (30, 200)
+
+p0 ∼ U (0, 30)4
+
+FHN
+
+c ∼ U (1.5, 5)
+
+c ∼ U (0.5, 1.5)
+
+x0 ∼ U (2, 10)
+
+x0 ∼ U (0, 2)
+
+SEIR
+
+β ∼ U (0.45, 0.9)
+
+β ∼ U (0.3, 0.45)
+
+I0 ∼ U (30, 100)
+
+I0 ∼ U (10, 30)
+
+Table 3: The initial values and system parameters ranges of interpolation and extrapolation test sets.
+
+Table 4 shows the prediction RMSEs of the models on initial values and system parameter interpolation and extrapolation test sets. We observe that the models’ prediction errors on extrapolation
+test sets are much larger than the error on interpolation test sets. Figures 3-4 show that Seq2Seq
+and FC fail to make accurate prediction when tested outside of the parameter distribution even
+though they make accurate predictions for parameter interpolation test samples.
+Our AutoODE always obtains the lowest errors as it would be not affected by the range of
+parameters or the initial values. However, it is a local method and we need to train one model for
+each sample. In contrast, DL models can only mimic the behaviors of SEIR, LV and FHN dynamics
+rather than understanding the underlying mechanisms.
+We are still at the early or middle stage of the COVID-19 epidemic. The recovery rate γ may
+increase as we gain more treatment experience. If the situation is not getting better, the government
+regulation would become stricter, leading to smaller contact rate β. Thus, there is a great chance
+
+9
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+LV
+RMSE
+
+FHN
+
+k
+Int
+
+p0
+Ext
+
+Int
+
+SEIR
+
+c
+Ext
+
+Int
+
+x0
+Ext
+
+Int
+
+β
+Ext
+
+I0
+
+Int
+
+Ext
+
+Int
+
+Ext
+
+Seq2Seq
+
+0.050 0.215 0.028 0.119
+
+0.093 0.738 0.079 0.152
+
+1.12
+
+4.14
+
+2.58
+
+7.89
+
+FC
+
+0.078 0.227 0.044 0.131
+
+0.057 0.402 0.057 0.120
+
+1.04
+
+3.20
+
+1.82
+
+5.85
+
+Transformer
+
+0.074 0.231 0.067 0.142
+
+0.102 0.548 0.111 0.208
+
+1.09
+
+4.23
+
+2.01
+
+6.13
+
+NeuralODE
+
+0.091 0.196 0.050 0.127
+
+0.163 0.689 0.124 0.371
+
+1.25
+
+3.27
+
+2.01
+
+5.82
+
+AutoODE
+
+0.057 0.054 0.018 0.028
+
+0.059 0.058 0.066 0.069
+
+0.89
+
+0.91
+
+0.96
+
+1.02
+
+Table 4: RMSEs on initial values and system parameter interpolation and extrapolation test sets.
+
+Figure 3: Seq2Seq predictions on a k- Figure 4:
+interpolation and a k-extrapolation
+test samples of LV dynamics, the
+vertical black line separates the input
+and forecasting period.
+
+FC predictions on a c-interpolation
+and a c-extrapolation test samples of
+FHN dynamics, the vertical black line
+in the plots separates the input and
+forecasting period.
+
+that new test samples are outside of the parameter domain of training data. In that case, the DL
+models would not make accurate prediction for COVID-19.
+
+6. Conclusion
+We study the problem of forecasting non-linear dynamical systems and propose a hybrid method
+AutoODE-COVID for forecasting COVID-19 dynamics. From a benchmark study of DL and
+physics-based models, we find that FC and Seq2Seq have better prediction accuracy on the number of deaths, while the DL methods generally much worse than the physics-based models on the
+number of infected and removed cases. This is mainly due to the distribution shift in the COVID-19
+dynamics. On several other non-linear dynamical systems, we experimentally show that four DL
+models fail to generalize under shifted distributions in both the data and the parameter domains.
+Even though these models are powerful enough to memorize the training data, and perform well
+on the interpolation tasks. Our study provides important insights on learning real world dynamical
+systems: to achieve accurate forecasts with DL, we need to ensure that both the data and dynamical system parameters in the training set are sufficient enough to cover the domains of the test set.
+Future works include incorporating compartmental models into deep learning models and derive
+theoretical generalization bounds of dynamics forecasting for deep learning models.
+
+10
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+References
+S. Ahmad. On the nonautonomous volterra-lotka competition equations. 1993.
+Ali Al-Aradi, Adolfo Correia, Danilo Naiff, Gabriel Jardim, and Yuri Saporito. Solving nonlinear and high-dimensional partial differential equations via deep learning. arXiv preprint
+arXiv:1811.08782, 2018.
+Dario Amodei, Chris Olah, Jacob Steinhardt, Paul Christiano, John Schulman, and Dan Mané.
+Concrete problems in ai safety. arXiv preprint arXiv:1606.06565, 2019.
+I. Ayed, Emmanuel de Bézenac, A. Pajot, J. Brajard, and P. Gallinari. Learning dynamical systems
+from partial observations. ArXiv, abs/1902.11136, 2019a.
+Ibrahim Ayed, Emmanuel De Bézenac, Arthur Pajot, and Patrick Gallinari. Learning partially observed PDE dynamics with neural networks, 2019b. URL https://openreview.net/
+forum?id=HyefgnCqFm.
+Atilim Gunes Baydin, Barak A. Pearlmutter, Alexey Radul, and J. Siskind. Automatic differentiation in machine learning: a survey. ArXiv, abs/1502.05767, 2017.
+Konstantinos Benidis, Syama Sundar Rangapuram, V. Flunkert, Bernie Wang, Danielle C. Maddix, A. Türkmen, Jan Gasthaus, Michael Bohlke-Schneider, David Salinas, L. Stella, L. Callot, and Tim Januschowski. Neural forecasting: Introduction and literature overview. ArXiv,
+abs/2004.10240, 2020.
+Ricky T. Q. Chen, Yulia Rubanova, Jesse Bettencourt, and David Duvenaud. Neural ordinary differential equations. In S. Bengio, H. Wallach, H. Larochelle, K. Grauman, N. CesaBianchi, and R. Garnett, editors, Advances in Neural Information Processing Systems 31, pages
+6571–6583. Curran Associates, Inc., 2018. URL http://papers.nips.cc/paper/
+7892-neural-ordinary-differential-equations.pdf.
+Yi-Cheng Chen, Ping-En Lu, Cheng-Shang Chang, and Tzu-Hsuan Liu. A time-dependent sir model
+for covid-19 with undetectable infected persons. arXiv preprint arXiv:2003.00122, 2020.
+Jessica T Davis, Matteo Chinazzi, Nicola Perra, Kunpeng Mu, Ana Pastore y Piontti, Marco Ajelli,
+Natalie E Dean, Corrado Gioannini, Maria Litvinova, Stefano Merler, Luca Rossi, Kaiyuan Sun,
+Xinyue Xiong, M. Elizabeth Halloran, Ira M Longini Jr., Cécile Viboud, and Alessandro Vespignani. Estimating the establishment of local transmission and the cryptic phase of the covid-19
+pandemic in the usa. medRXiv preprint https://doi.org/10.1101/2020.07.06.20140285, 2020.
+Ensheng Dong, Hongru Du, and Lauren Gardner.
+An interactive web-based dashboard
+to track covid-19 in real time.
+Lancet Inf Dis., 20(5):533–534. doi:10.1016/S1473–
+3099(20)30120–1, 2020. doi: 10.1016/S1473-3099(20)30120-1. URL https://github.
+com/CSSEGISandData/COVID-19.
+Nan Du, Hanjun Dai, Rakshit Trivedi, Utkarsh Upadhyay, Manuel Gomez-Rodriguez, and Le Song.
+Recurrent marked temporal point processes: Embedding event history to vector. In the 22nd ACM
+SIGKDD International Conference on Knowledge Discovery and Data Mining, 2016.
+
+11
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+Richard FitzHugh. Impulses and physiological states in theoretical models of nerve membrane.
+Biophyiscal Journal., 1:445–466, 1961. doi: https://doi.org/10.1016/S0006-3495(61)86902-6.
+V. Flunkert, David Salinas, and Jan Gasthaus. Deepar: Probabilistic forecasting with autoregressive
+recurrent networks. ArXiv, abs/1704.04110, 2017.
+Trevor Hastie, Robert Tibshirani, and Jerome Friedman. Springer, 2009.
+Tillett HE. Infectious diseases of humans; dynamics and control. Epidemiol Infect, 1992.
+B. Houska, F. Logist, M. Diehl, and J. Van Impe. A tutorial on numerical methods for state and
+parameter estimation in nonlinear dynamic systems. In D. Alberer, H. Hjalmarsson, and L. Del
+Re, editors, Identification for Automotive Systems, Volume 418, Lecture Notes in Control and
+Information Sciences, page 67–88. Springer, 2012.
+Wouter M. Kouw and Marco Loog. An introduction to domain adaptation and transfer learning.
+arXiv preprint arXiv:1812.11806, 2018.
+Shiyang Li, Xiaoyong Jin, Yao Xuan, Xiyou Zhou, Wenhu Chen, Yu-Xiang Wang, and Xifeng
+Yan. Enhancing the locality and breaking the memory bottleneck of transformer on time series
+forecasting. arXiv preprint arXiv:1907.00235, 2020.
+Edo Liberty, Zohar Karnin, Bing Xiang, Laurence Rouesnel, Baris Coskun, Ramesh Nallapati,
+Julio Delgado, Amir Sadoughi, Yury Astashonok, Piali Das, Can Balioglu, Saswata Chakravarty,
+Madhav Jha, Philip Gautier, David Arpin, Tim Januschowski, Valentin Flunkert, Yuyang Wang,
+Jan Gasthaus, Lorenzo Stella, Syama Rangapuram, David Salinas, Sebastian Schelter, and Alex
+Smola. Elastic machine learning algorithms in amazon sagemaker. In Proceedings of the 2020
+ACM SIGMOD International Conference on Management of Data, SIGMOD ’20, page 731–737,
+New York, NY, USA, 2020. Association for Computing Machinery. ISBN 9781450367356. doi:
+10.1145/3318464.3386126. URL https://doi.org/10.1145/3318464.3386126.
+Bryan Lim and Stefan Zohren. Time series forecasting with deep learning: A survey. ArXiv,
+abs/2004.13408, 2020.
+Jinichi Nagumo, Suguru Arimoto, and Shuji Yoshizawa. An active pulse transmission line simulating nerve axon. Proceedings of the IRE, 50(10):2061–2070, 1962.
+Adam Paszke, Sam Gross, Soumith Chintala, Gregory Chanan, Edward Yang, Zachary DeVito,
+Zeming Lin, Alban Desmaison, Luca Antiga, and Adam Lerer. Automatic differentiation in
+pytorch. NIPS 2017 Autodiff Workshop, 2017.
+Sen Pei and Jeffrey Shaman. Initial simulation of sars-cov2 spread and intervention effects in the
+continental us. medRXiv preprint https://doi.org/10.1101/2020.03.21.20040303, 2020.
+Tomaso Poggio, Lorenzo Rosasco, Charlie Frogner, and Guille D. Canas. Statistical learning theory
+and applications. 2012.
+Christopher Rackauckas, Y. Ma, Julius Martensen, Collin Warner, K. Zubov, Rohit Supekar,
+D. Skinner, and Ali Ramadhan. Universal differential equations for scientific machine learning.
+ArXiv, abs/2001.04385, 2020.
+12
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+Maziar Raissi and George Em Karniadakis. Hidden physics models: Machine learning of nonlinear
+partial differential equations. Journal of Computational Physics, 357:125–141, 2018.
+Syama Sundar Rangapuram, Matthias W. Seeger, Jan Gasthaus, L. Stella, Y. Wang, and Tim
+Januschowski. Deep state space models for time series forecasting. In NeurIPS, 2018.
+Carl Edward Rasmussen and Christopher KI Williams. Gaussian process for machine learning. MIT
+press, 2006.
+David Salinas, Michael Bohlke-Schneider, Laurent Callot, Roberto Medico, and Jan Gasthaus.
+High-dimensional multivariate forecasting with low-rank gaussian copula processe. In In Advances in Neural Information Processing Systems 32., 2019.
+Omer Berat Sezer, Mehmet Ugur Gudelek, and Ahmet Murat Ozbayoglu. Financial time series
+forecasting with deep learning : A systematic literature review: 2005-2019. arXiv preprint
+arXiv:1911.13288, 2019.
+Justin Sirignano and Konstantinos Spiliopoulos. Dgm: A deep learning algorithm for solving partial
+differential equations. arXiv preprint arXiv:1708.07469, 2018.
+J. Nathan Kutz Steven L. Brunton, Joshua L. Proctor. Discovering governing equations from data:
+Sparse identification of nonlinear dynamical systems. arXiv preprint arXiv:1509.03580, 2015.
+Steven H. Strogatz. Nonlinear dynamics and chaos: with applications to physics, biology, chemistry,
+and engineering. CRC press, 2018.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez,
+Lukasz Kaiser, and Illia Polosukhin. Attention is all you need. ArXiv, 2017.
+Petar Velickovic, Guille mCucurull, Arantxa Casanova, Adriana Romero, Pietro Lio, and Yoshua
+Bengio. Graph attention networks. arXiv preprint arXiv:1710.10903, 2017.
+Qinxia Wang, Shanghong Xie, Yuanjia Wang, and Donglin Zeng. Survival-convolution models
+for predicting covid-19 cases and assessing effects of mitigation strategies. medRXiv preprint
+https://doi.org/10.1101/2020.04.16.20067306, 2020a.
+Rui Wang, Karthik Kashinath, Mustafa Mustafa, Adrian Albert, and Rose Yu. Towards physicsinformed deep learning for turbulent flow prediction. Proceedings of the 26th ACM SIGKDD
+international conference on knowledge discovery and data mining, 2020b.
+Rui Wang, Robin Walters, and Rose Yu. Incorporating symmetry into deep dynamics models for
+improved generalization. arXiv preprint arXiv:2002.03061, 2020c.
+Ruofeng Wen, Kari Torkkola, Balakrishnan Narayanaswamy, and Dhruv Madeka. A multi-horizon
+quantile recurrent forecaster. arXiv preprint arXiv:1711.11053, 2018.
+Neo Wu, Bradley Green, Xue Ben, and Shawn O’Banion. Deep transformer models for time series
+forecasting: The influenza prevalence case. arXiv preprint arXiv:2001.08317, 2020.
+
+13
+
+B RIDGING P HYSICS - BASED AND DATA - DRIVEN MODELING FOR L EARNING DYNAMICAL S YSTEMS
+
+Difan Zou, Lingxiao Wang, Pan Xu, Jinghui Chen, Weitong Zhang, and Quanquan Gu. Epidemic
+model guided machine learning for covid-19 forecasts in the united states. medRXiv preprint
+https://doi.org/10.1101/2020.05.24.20111989, 2020.
+
+14
+
+
