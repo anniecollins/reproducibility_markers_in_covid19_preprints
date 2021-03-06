@@ -1,7 +1,7 @@
 #### Preamble ####
 # Purpose: Download papers from socarxiv that are related to COVID-19.
 # Author: Rohan Alexander
-# Data: 5 March 2021
+# Data: 6 March 2021
 # Contact: rohan.alexander@utoronto.ca
 # License: MIT
 # Pre-requisites: 
@@ -11,6 +11,7 @@
 #### Workspace setup ####
 # library(aRxiv)
 library(httr)
+library(lubridate)
 library(tidyverse)
 # library(lubridate)
 # library(utils)
@@ -64,82 +65,114 @@ purrr::walk2(get_these$number,
              get_these$location,
              safely_get_meta_data_socarxiv)
 
-
-
-
-# Need to map and read_csv
+# Gather them all into one CSV
 socarxiv_files <- list.files(path = "inputs/socarxiv", full.names = TRUE)
 
-all_socarxiv_metadata <- purrr::map_dfr(socarxiv_files, read_csv, col_types = cols(.default = "c"))
+all_socarxiv_metadata <- purrr::map_dfr(socarxiv_files, 
+                                        read_csv, 
+                                        col_types = cols(.default = "c"))
+
+#### Get COVID ones ####
+# Identify which ones have something to do with COVID.
+all_socarxiv_metadata <- 
+  all_socarxiv_metadata %>% 
+  rename(date_created = attributes.date_created,
+         date_modified = attributes.date_modified,
+         date_published = attributes.date_published,
+         date_last_transitioned = attributes.date_last_transitioned,
+         date_withdrawn = attributes.date_withdrawn,
+         title = attributes.title,
+         description = attributes.description,
+         tags = attributes.tags
+         ) %>% 
+  mutate(date_created = lubridate::as_date(date_created),
+         date_modified = lubridate::as_date(date_modified),
+         date_published = lubridate::as_date(date_published),
+         date_last_transitioned = lubridate::as_date(date_last_transitioned),
+         date_withdrawn = lubridate::as_date(date_withdrawn)
+         )
+
+all_socarxiv_metadata <- 
+  all_socarxiv_metadata %>% 
+  filter(year(date_created) >= 2020)
+
+query <- c("COVID-19|COVID 19|covid-19|covid 19|SARS-CoV-2|SARSCoV-2|corona virus|Corona Virus|coronavirus|2019-nCoV|coronavirus-2")
+
+all_socarxiv_metadata <- 
+  all_socarxiv_metadata %>% 
+  mutate(covid_flag_title = 
+           stringr::str_detect(string = title,
+                               pattern = query),
+         covid_flag_description = 
+           stringr::str_detect(string = title,
+                               pattern = query),
+         covid_flag_tag = 
+           stringr::str_detect(string = tags,
+                               pattern = query),
+         covid_flag = if_else(covid_flag_title == TRUE | 
+                                covid_flag_description == TRUE | 
+                                covid_flag_tag == TRUE,
+                              TRUE,
+                              FALSE)
+         ) %>% 
+  select(id, type, date_created, title, description, covid_flag_tag, covid_flag, covid_flag_title, everything()) %>% 
+  
+  select(-covid_flag_title, -covid_flag_description, -covid_flag_tag)
 
 write_csv(all_socarxiv_metadata, "outputs/all_socarxiv_metadata.csv")
+
+
+
+#### Download PDFs ####
+covid_socarxiv_metadata <- 
+  all_socarxiv_metadata %>% 
+  filter(covid_flag == TRUE)
+
+utils::download.file("https://osf.io/preprints/socarxiv/fcqd9/download", 
+                     "test.pdf", 
+                     mode = "wb")  
+
+# Write a function
+download_pdfs <- 
+  function(link_to_pdf_of_interest, save_name){
+    utils::download.file(link_to_pdf_of_interest, save_name, mode = "wb")
+    message <- paste0("Done with ", link_to_pdf_of_interest, " at ", Sys.time())
+    print(message)
+    Sys.sleep(sample(x = c(5:10), size = 1))
+  }
+
+#
+# Use the function
+get_covid_socarxiv_results <- 
+  covid_socarxiv_metadata %>%
+  # slice(1:2) %>% # Uncomment when testing
+  select(id) %>% 
+  mutate(
+    link_pdf = paste0("https://osf.io/preprints/socarxiv/", id, "/download"),
+    save_name = paste0("/Volumes/Hansard/socarxiv/", id, ".pdf")
+  )
+
+safely_download_pdfs <- purrr::safely(download_pdfs)
+
+# Check what's already been downloaded
+already_got <- list.files(path = "/Volumes/Hansard/socarxiv", full.names = TRUE)
+# Remove those rows
+get_covid_socarxiv_results <- 
+  get_covid_socarxiv_results %>% 
+  filter(!save_name %in% already_got)
+
+purrr::walk2(get_covid_socarxiv_results$link_pdf,
+             get_covid_socarxiv_results$save_name,
+             safely_download_pdfs)
+
+
+
 
 ###### UP TO HERE 
 
 
-# Get count of number of papers using the same terms as before
-arxiv_count('all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2"')
-# Result on 20 Feb is: 3434.
 
-arxiv_count('submittedDate:[20071018* TO 20210220*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# Result on 20 Feb is: 3434.
 
-arxiv_results <- arxiv_search(query = 'all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2"',
-                    limit = 3500,
-                    batchsize = 500)
-
-arxiv_count('submittedDate:[20071018* TO 20200331*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# There are 249 to get
-arxiv_result_to_march <- 
-  arxiv_search(query = 'submittedDate:[20071018* TO 20200331*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500,
-               start = 100)
-arxiv_result_to_march_ii <- 
-  arxiv_search(query = 'submittedDate:[20071018* TO 20200331*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500,
-               start = 100)
-
-arxiv_count('submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# There are 1830 to get
-arxiv_result_april_to_aug <- 
-  arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500)
-arxiv_result_april_to_aug_ii <- 
-  arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500,
-               start = 200)
-arxiv_result_april_to_aug_iii <- 
-  arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500,
-               start = 700)
-arxiv_result_april_to_aug_iiii <- 
-  arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500,
-               start = 1700)
-
-arxiv_count('submittedDate:[20200901* TO 20210220*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# There are 1320 to get
-arxiv_result_sep_to_today <- 
-  arxiv_search(query = 'submittedDate:[20200901* TO 20210220*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
-               sort_by="submitted",
-               limit = 3500)
-
-all_arxiv_results <- 
-  rbind(arxiv_result_to_march, arxiv_result_to_march_ii, arxiv_result_april_to_aug, 
-        arxiv_result_april_to_aug_ii, arxiv_result_april_to_aug_iii, 
-        arxiv_result_april_to_aug_iiii, arxiv_result_sep_to_today)
-
-# Can't quite seem to get the all, but still have a lot
-# Count says there are 3434, but only have 3379 from search.
-
-# Save results - this is sampling frame (info for all arxiv COVID-19 papers)
-write_csv(all_arxiv_results, "outputs/data/arxiv_results.csv")
 
 
 #### Have a quick look ####
@@ -158,59 +191,16 @@ all_arxiv_results %>%
   geom_col(aes(x=submitted, y=n))
 
 
-#### Download PDFs ####
-all_arxiv_results <- 
-  read_csv("outputs/data/arxiv_results.csv")
-
-# Write a function
-download_pdfs <- 
-  function(link_to_pdf_of_interest, save_name){
-    utils::download.file(link_to_pdf_of_interest, save_name, mode = "wb")
-    message <- paste0("Done with ", link_to_pdf_of_interest, " at ", Sys.time())
-    print(message)
-    Sys.sleep(sample(x = c(5:10), size = 1))
-    }
-
-# Use the function
-get_all_arxiv_results <- 
-  all_arxiv_results %>% 
-  # slice(1:2) %>% # Uncomment when testing 
-  select(id, link_pdf) %>% 
-  mutate(id = paste0(id, ".pdf"),
-         link_pdf = paste0(link_pdf, ".pdf")
-         ) %>% 
-  mutate(id = paste0("/Volumes/Hansard/arxiv/", id)) %>% 
-  mutate(order = sample(x = c(1:nrow(all_arxiv_results)),
-                        size = nrow(all_arxiv_results),
-                        replace = FALSE)) %>% 
-  arrange(order)
-
-safely_download_pdfs <- purrr::safely(download_pdfs)
-
-# Check what's already been downloaded
-already_got <- list.files(path = "/Volumes/Hansard/arxiv", full.names = TRUE)
-# Remove those rows
-get_all_arxiv_results <- 
-  get_all_arxiv_results %>% 
-  filter(!id %in% already_got)
-
-purrr::walk2(get_all_arxiv_results$link_pdf,
-             get_all_arxiv_results$id,
-             safely_download_pdfs)
-
-# Need to write a package that does this.
-# Check if Annie has time - would be a nice companion package.
-
 
 
 #### Convert to text ####
 
 # Set up folders for download and txt conversion
-arxiv_pdf_folder = "/Volumes/Hansard/arxiv/"
-arxiv_txt_folder = paste(getwd(), "/outputs/data/text-arXiv", sep = "")
+arxiv_pdf_folder = "/Volumes/Hansard/socarxiv/"
+arxiv_txt_folder = paste(getwd(), "/outputs/data/text-socarxiv", sep = "")
 
 # Convert PDFs to text and saves in new folder
 oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
-# install.packages('Rpoppler')
+
 
 
