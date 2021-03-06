@@ -1,0 +1,840 @@
+arXiv:2101.04224v2 [cs.LG] 11 Feb 2021
+
+C HALLENGES AND APPROACHES TO TIME - SERIES
+FORECASTING IN DATA CENTER TELEMETRY: A S URVEY
+
+Shruti Jadon
+Juniper Networks Inc
+Sunnyvale, CA
+sjadon@juniper.net
+
+Jan Kanty Milczek
+deepsense.ai
+Sunnyvale, CA
+jan.milczek@deepsense.ai
+
+Ajit Patankar
+Juniper Networks Inc
+Sunnyvale, CA
+apatankar@juniper.net
+
+February 15, 2021
+
+A BSTRACT
+Time-series forecasting has been an important research domain for so many years. Its applications
+include ECG predictions, sales forecasting, weather conditions, even COVID-19 spread predictions.
+These applications have motivated many researchers to figure out an optimal forecasting approach,
+but the modeling approach also changes as the application domain changes. This work has focused
+on reviewing different forecasting approaches for telemetry data predictions collected at data centers.
+Forecasting of telemetry data is a critical feature of network and data center management products.
+However, there are multiple options of forecasting approaches that range from a simple linear
+statistical model to high capacity deep learning architectures. In this paper, we attempted to summarize
+and evaluate the performance of well known time series forecasting techniques. We hope that this
+evaluation provides a comprehensive summary to innovate in forecasting approaches for telemetry
+data.
+
+1
+
+Introduction
+
+Network and data center products collect a large volume of telemetry data such as traffic, CPU utilization, memory
+usage, etc. One of the most critical business requirements for these products is forecasting the telemetry data. In broad,
+forecasting techniques range from simple mean-variance statistical-based methods to deep learning. On top, these look
+like simply model based choices, but theoretically speaking, these approaches vary in the underlying mathematical
+formulation, data requirements, programming efforts, and performance as well.
+Our work summarizes and evaluates some well representative techniques and demonstrates why one single approach
+can’t fully support telemetry data forecasting. In this context, our contributions are as follows:
+1. Collection and exploratory analysis of telemetry data sets.
+2. A unified arbitrary length prediction generator.
+3. Overview of important forecasting models.
+4. Evaluation and benchmarking of forecasting models.
+5. Outline of the proposed proprietary model.
+The paper is organized as follows: Section II defines the problem definition and requirements or forecasting models’
+assumptions. In Section III, we theoretically evaluate some widely used time series based forecasting techniques. Our
+experimental results are listed in Section IV on several real-world data-sets. We then finally conclude the outcomes in
+section IV.
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+Figure 1: Sample Time-series LTE traffic data for 20sec duration at 20msec index [1].
+
+2
+
+Problem definition and requirements
+
+Let To , T1 , ..Tk be time series instantiations of k factors that determine the response variable y0 , y1 , .., yn . Our business
+problem is two-fold:
+Single or Next Period Prediction:
+yn+1 = f (T0 , T1 , , Tk ; y0 , y1 , . . . , yn )
+
+(1)
+
+yn+1,n+2,...n+m = f (T0 , T1 , , Tk ; y0 , y1 , . . . , yn )
+
+(2)
+
+Multi Period Prediction:
+Note that this formulation is different than forecasting n + 1th value for each factor.
+2.1
+
+Multi-Period Forecasting
+
+There are various approaches to generating forecasts for multiple time periods:
+• fixed-length forecast. The model outputs a fixed-size forecast based on the training data. The model does
+not expose its internal state after forecasting. This is very similar in concept to the multiple-point rolling
+prediction, but implementation details make it hard to use that way.
+• arbitrary-length forecast. The system models the output as a function of time, so it can predict arbitrarily into
+the future. This can be interpreted as a version of the unified arbitrary-length forecast that simply forecasts the
+same values at every bootstrapped sample.
+• single-point rolling prediction. The model predicts a single data point based on the input data. It exposes the
+internal state, allowing for updating it with the prediction and generating an arbitrary number of data points.
+Often uses noise to simulate multiple runs and generate confidence intervals/more accurate predictions.
+• fixed multiple-point rolling prediction. This is similar to the single-point method but the prediction is performed
+in batches.
+2.2
+
+Challenges in Multi-Period Forecasting
+
+The fundamental problem with multi-period forecasting is that in equation 2 the yn+1 value is unknown when generating
+forecast for the yn+2 time period. Our exposition treats this problem in a consistent fashion as follows:
+• Consistent treatment in modeling phase. Some of the modeling techniques, such as LSTM, have a built-in
+capability for multi-period forecasting. However, the number of future periods has to be specified during the
+2
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+training phase and this is a significant restriction. Thus, in rest of the paper, we use only the single period
+forecasting feature of techniques that may inherently support multi-period forecasting.
+• Consequentially, the regularizing factor of multi-period forecasting[2] is lost, but consistency against wellknown techniques like ARIMA is kept.
+• To generate arbitrary-length multi-period forecasting we use an algorithm that is described next.
+2.2.1
+
+Unified arbitrary-length prediction generator
+
+To generate arbitrary-length predictions from single-period predictions, we use the stepwise method of predicting a
+single datapoint and feeding it back into the prediction model.
+This is coupled with the bootstrapped residuals method[3], where forecasts are augmented by samples from the historical
+residuals to generate multiple “possible futures”. The final forecast is an ensemble of these scenarios.
+This approach has the added benefit of producing confidence intervals which are defined as quantiles of predictions at
+each time step.
+It may noted that some methods either don’t need to implement this (e.g. Holt-Winters), or eschew the bootstrapped
+residuals method (e.g. ARIMA) for speed. For consistency, we view them as if they produced the same forecast at each
+bootstrapped sample.
+2.3
+
+Functional Requirements
+
+The main application in a data center environment is for forecasting of high volume of streaming data emanating from
+network and cloud devices. The challenges posed in this environment are as follows:
+• Large number of metrics to forecast. The number of metrics in a data center monitoring application may
+exceed 1000.
+• High data volume. Some of the metrics may be sampled at a high frequency resulting in very high data volume.
+• Minimal or no data for some metrics.
+• Non-linear and multi-variate interactions among metrics.
+• Length of forecasting horizon. Forecasting horizon may vary from minutes to months with plausible use cases
+for each time interval.
+• Consuming applications that require high performance and low latency.
+
+3
+
+Forecasting Techniques
+
+At a high level, forecasting methods can be grouped as those explicitly modeling time series patterns such as state
+space models (SSM) and those without explicit formulations such as deep learning. Prominent SSM include ARIMA
+and exponential smoothing. SSMs are particularly well-suited for applications where the structure of the time series
+is well-understood as they explicitly incorporate structural assumptions in the model. This allows for a model to be
+interpretable but requires significant efforts to determine the structure and covariates. Also, the traditional SSMs cannot
+infer shared patterns from multiple data sets of similar time series as they have to be fitted separately on each time
+series. This makes creating forecasts for a new time series challenging.
+Non-SSM models like Deep Neural Networks make very few, if any, structural assumptions regarding the underlying
+process and yet can identify complex patterns within and across multiple time series. These networks however do
+require significantly more data for training and suffer from a lack of interpretability.
+Recently, researchers have proposed hybrid methods that combine both SSM and deep learning techniques [4] with
+promising results. However, these techniques are not yet available in standard AI/ML libraries and are not considered in
+this paper.
+3.1
+3.1.1
+
+State Space Models (SSM)
+ARIMA (autoregressive integrated moving average)
+
+ARIMA[5] is perhaps the most widely used time series forecasting model. It is characterized by three factors:
+ARIM A(p, d, q) where p is the order (no of time lags) of the auto-regressive component, d is degree of differencing, q
+is the order of moving average model.
+3
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+Pros:
+•
+•
+•
+•
+
+A standard bench marking technique
+Fast performance and easy to implement using many popular libraries
+Foundation block for numerous enhancements such as SARIMA (seasonal ARIMA)
+Works with limited data and limited computing power
+
+Cons:
+• Theoretical limitations such as the error terms needs to have a random normal distribution.
+• Not suitable for distributions with fat tails or volatility clusters.
+• An univariate technique
+Some of multivariate extensions to ARIMA technique include:
+1. Set of dependent variables with a regression for each one. These models are referred as VAR (vector
+autoregressive models) or VARMA’s
+2. Set of independent variables (exogenous) for a single dependent variable – these fall under ARIMAX models.
+However, there do not appear to be many references of successful applications of the multivariate extensions in practice.
+3.2
+
+EWMA (Exponential Weighted Moving Average)
+
+In the following exposition, we only consider one period forecast as explained earlier. A simple EWMA[3] process is
+defined as follows:
+yt+1 = αyt + (1 − α)yt−1
+with the initial condition of
+y0 = y0
+where, yt+1 is the forecast at yt .
+Holt’s extension: Holt’s extension incorporates slope or trend in the EWMA model.
+lt = αyt + (1 − α)(lt−1 + bt−1 )
+bt = β(bt − st−1 ) + (1 − β)bt−1
+yt+1 = lt + yt−1
+Holt-Winter extension: This is a further extension of Holt’s model with an additional term for seasonality.
+lt = αyt + (1 − α)(lt−1 + bt−1 )
+bt = β(lt − lt−1 ) + (1 − β)bt−1
+st = γ(yt − lt ) + (1 − γ)st−1
+yt+1 = lt + bt + st
+Pros:
+• Implementation can be high performance with limited memory. It is possible to implement as an online model.
+• Simple model with good interpretability.
+• Natively supports arbitrary length forecasts
+Cons:
+• Model may be too simple to represent real life scenarios.
+4
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+3.3
+
+GARCH (Generalized Autoregressive Conditional Heteroskedastic Model)
+
+GARCH[6] is a more powerful model as it supports heteroskedastic processes:
+1. Autoregressive (AR) Forecast for next time period is a regressed function of time series value in the current
+time period.
+2. Conditional (C). Forecast for next time period is conditional on the value in the current time period.
+3. Heteroskedastic (H). Variance of values is not constant over time period.
+Pros:
+• A powerful modeling technique capable of supporting several common time series processes Issues
+Cons:
+• Univariate in forecasting nature.
+• Tuning of parameters is complex
+3.3.1
+
+Seasonal Trend Decomposition (STD) Predictor
+
+We have developed an extension of linear regression technique that incorporates seasonal trends. The linear regression
+component is based on the time series while seasonality is modeled by transforming time and holidays into categorical
+features. This approach achieves fast decomposition into linear trend and seasonal factor, and is augmented by input
+sequence transformations to model more complex patterns.
+Equation
+LR − standard linear regression
+Ftime (t) − categorical features based on time
+ŷt = LR(t) + LR(Ftime (t))
+Pros:
+•
+•
+•
+•
+
+Very fast and Easy to use.
+Supports calculations of confidence intervals
+Supports multivariate forecasting
+Supports an arbitrary length forecasts
+
+Cons:
+• Very simple, cannot model complex relations.
+• Confidence intervals are over-simplified
+3.3.2
+
+Seasonal Trend Autoregressive (STAR) Predictor
+
+This predictor extends the STD model by incorporating an autoregressive component. The formulation is as follows:
+LR − standard linear regression
+Ftime (t) − categorical features based on time
+aw − autoregression window
+ŷt = LR(t) + LR(Ftime (t)) + LR(yt−aw : t )
+Pros:
+• Fast and Easy to use
+• Supports basic confidence intervals
+• extensible to multivariate forecasting
+Cons:
+• More complex than STD Predictor, prone to overfitting
+• Slower than STD Predictor
+5
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+3.4
+
+Specialized Libraries
+
+3.4.1
+
+FB (Facebook) Prophet
+
+Facebook Prophet [7] is a specialized time series library and not a specific statistical technique. The library is based on
+an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects. It
+works best with time series that have strong seasonal effects and several seasons of historical data. The library internally
+uses well known Stan statistical library.
+Pros:
+•
+•
+•
+•
+
+Very easy to use and most of the implementation details are abstracted from the user.
+Extensive utility and plotting support.
+Univariate forecasting is well supported.
+A very good default choice for simple applications
+
+Cons:
+• For multi-variate forecasting, the library implementation is not clear. It appears that future values of additional
+regressors are needed to make forecast at time values (t, t + 1, . . . , t + n). Furthermore, only these future
+values are used and not their historical values.
+• Library lacks scalability, flexibility, and extensibility to support complex telemetry forecasting applications.
+3.4.2
+
+GluonTS
+
+GluonTS[8] is a deep learning library for time series modeling. It is a fairly self contained library that includes most of
+the components necessary to build, train and run time series models.
+The main issue with this library is that it is based on Apache MXNet deep learning library. Apache MXNet support
+community is much smaller than either Tensorflow or PyTorch. As we do not want to introduce an additional deep
+learning framework in our production code, it was decided not to evaluate GluonTS.
+Pros:
+• Powerful API, a wide variety of models to choose from
+• Natively generates arbitrary length forecast
+Cons:
+• Slow
+• Uses MXNet
+• Created for short-horizon predictions, rolling predictions currently not implemented and have to be custom
+implemented
+3.5
+
+Deep Learning Models
+
+Sequence based deep learning architectures are able to learn complex time-series features. These models have flexible
+capacity and along with large volume of data can lead to excellent model performance.
+Pros:
+• Ability to model very complex relations in the data
+• State of the art in time series processing
+• Possibility of using transfer learning
+Cons:
+• Training is computationally intensive
+• Hard to tune/use/automate
+In the following sections, we review relevant variants of deep learning networks that are applicable for time series
+forecasting.
+6
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+3.5.1
+
+Recurrent Neural Networks
+
+Recurrent Neural Network is one of the first sequential deep learning architecture. As the name suggests, it is a single
+layer that is stacked multiple times in order to capture the complexity of a series.
+Pros:
+• Ability to learn complex features of time-series.
+Cons:
+• Vanishing gradient problem
+• Fixed size input is required for training.
+
+Figure 2: A Visual Representation of Unrolled Recurrent Neural Network[9]
+3.5.2
+
+Long Short Term Memory (LSTM) Networks
+
+LSTMs are a special kind of RNNs, capable of learning long-term dependencies. They work tremendously well on a
+large variety of problems, and are now widely used. LSTMs are explicitly designed to avoid the vanishing gradient
+problem. The architecture inherently remembers information over a long sequence of the time series.
+Cons:
+• Computational intensity of training
+• Require large amount of data to train than other models
+• Fixed size input is required for training.
+
+Figure 3: Long Short Term Memory Networks Architecture[9]
+3.5.3
+
+Bi-directional LSTMs
+
+LSTM in its core, preserves information from inputs that has already passed through it using the hidden state. But,
+Unidirectional LSTM only preserves information of the past because the only inputs it has seen are from the past. On
+the other hand bidirectional will run your inputs in two ways, one from past to future and one from future to past and
+what differs this approach from unidirectional is that in the LSTM that runs backwards you preserve information from
+the future and using the two hidden states combined you are able in any point in time to preserve information from both
+past and future. In general, Bidirectional LSTMs show very good results as they can understand context better.
+Pros:
+• Preserves information from future as well as past.
+• proven to perform better than uni-directional LSTM in learning time-series distribution.
+Cons:
+7
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+• can take a long time to run,
+• require large amount of data to train, and
+• Fixed size input is required for training.
+
+Figure 4: Bi-directional LSTM Architecture[9]
+
+3.6
+
+Probabilistic Models
+
+Apart from statistical and deep learning models which are majorly parametric approaches, we have also experimented
+with probabilistic models. In probabilistic models, instead of casting data distribution into another distribution like
+we do in deep learning approaches, We learn the parameters of it using optimization approaches like Expectation
+Maximization.
+3.6.1
+
+Hidden Markov Models
+
+The Hidden Markov Model is based on Markov chain. A Markov chain is a model that tells us something about the
+probabilities of sequences of random variables or states. But a Markov chain makes a very strong assumption that for a
+prediction way too in future, we have dependence on only current state, previous states have no impact on the future
+except through the current state. So, as part of Hidden Markov Model, we need to calculate all states and transition
+probability of markov chain, in which sometimes not all states are visible, therefore it’s called Hidden Markov Model.A
+hidden Markov model (HMM) allows us to talk about both observed and hidden events that we think of as causal factors
+in our probabilistic model. For our case we have taken Gaussian Mixture Models as distribution of states.
+Pros:
+• gives better predictions even with less amount of data, and
+• faster to train and predict.
+Cons:
+• Not good for predictions in long run due to its assumption of dependence only on current state.
+
+Figure 5: Hidden Markov Model overview[10]
+
+8
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+Figure 6: Sample Twitter traffic Dataset[13]
+
+4
+
+Experiments and Results
+
+To quantify the differences in runtime and accuracy of the different forecasting techniques, we run them on multiple
+datasets and record their performance.The datasets were selected to model real-system use cases. For each dataset, the
+runtime and two accuracy metrics (R2 and R2 of logarithms) are recorded.
+4.1
+
+Dataset description
+
+For performance evaluation purpose, we employed four data-sets as listed below:
+1. Curtin[11] - a dataset of flow data, annotated with unclear timestamps - they were set to simulate a slight
+hourly seasonality. Set to polling rate of 1min, 10 days total. Has two fields - flow_size and count.
+2. LTE Traffic[12] - a dataset of flow data from a mobile carrier’s LTE network, hourly, full year
+3. Juniper - an internat dataset from Juniper, sampling rate of 15min, over a year in length
+4. Twitter[13] - volume of tweets from 2015, 5min aggregation period, 1.5 months in total
+4.2
+
+Dataset purpose
+• Curtin - consists of several "levels" of possible flow size. Simulates a system that receives heavy requests,
+while otherwise maintaining a constant noise. As the dataset is very hard to fit for (signal to noise ratio is very
+small), it is mostly used to test for model’s resilience to overfitting.
+• LTE Traffic - simulates human behavior on a local (country-wide) scale. Exhibits high daily patterns of
+sleep-work-free time.
+• Juniper - simulates local human behavior in an exponentially growing system
+• Twitter[13] - simulates global human behavior with concentration (i.e. users around the world, most from
+USA).
+9
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+4.3
+
+Experimental settings
+
+CPU: Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+RAM: 4x 8GB, 2133 MT/s
+GPU: GeForce GTX 1060, 6GB
+4.4
+
+Evaluation Metrics
+
+To assess the performance of each model, we have employed three metrics as listed below:
+• RT(s) - run time in seconds. This includes data manipulation
+• R2 - supporting metric
+• lR2 - R2 on logarithms. Main metric (for traffic, predicting order of magnitude is more important than value)
+4.5
+
+Benchmark
+
+Most models were run multiple times with different parameters, with best results achieved shown here. Each model was
+benchmarked twice - predicting the last 1000 or 5000 data points with all other data points available for training. One
+exception was LTE traffic dataset, where 4380 data points (exactly half) were used in place of 5000.
+4.5.1
+
+LTE Traffic
+Model
+GRU
+STAR
+FBP
+HWES
+STD
+
+4.5.2
+
+5000 datapoints
+RT(s) R2
+lR2
+73.12 0.69 0.6
+1.05 0.66 0.65
+3.28 0.65 0.61
+0.5
+0.63 0.61
+0.6
+0.8 0.69
+
+Curtin - flow size
+Model
+GRU
+STAR
+FBP
+HWES
+STD
+LSTM
+Deep-LSTM
+Bi-LSTM
+
+4.5.3
+
+1000 datapoints
+RT(s) R2
+lR2
+40.4 0.77 0.73
+1.27 0.88 0.81
+4.31
+0.8 0.79
+0.86
+0.8 0.77
+0.82 0.88 0.82
+
+1000 datapoints
+RT(s)
+R2
+lR2
+38.81
+0.0
+-0.01
+2.08
+-0.01 -0.01
+1.89
+-0.01 -0.07
+0.92
+-0.01
+0.0
+1.34
+-0.01 -0.01
+0.84 0.086 -1.74
+1.61
+0.15 -1.92
+1.45
+0.21 -1.39
+
+5000 datapoints
+RT(s)
+R2
+lR2
+67.53 -0.01 -0.01
+1.87 -0.02 -0.04
+1.77 -0.02
+0.0
+0.62 -0.02 -0.01
+1.09 -0.02 -0.02
+0.34
+0.03
+-1.7
+0.65
+0.06 -1.74
+0.47
+0.09 -1.03
+
+1000 datapoints
+RT(s)
+R2
+lR2
+29.35 0.01
+0.0
+2.04 -0.03 -0.03
+2.37 -0.09 -0.08
+4.32 -0.47 -0.41
+1.24 -0.06 -0.05
+0.73
+0.52
+0.52
+1.29
+0.52
+0.52
+1.15
+0.53
+0.53
+
+5000 datapoints
+RT(s)
+R2
+lR2
+80.8 -0.06 -0.06
+1.87 -0.11 -0.1
+2.14 -0.12 -0.14
+0.08 -0.16 -0.2
+1.08 -0.12 -0.11
+0.51
+0.53
+0.54
+0.66
+0.54
+0.55
+0.69
+0.53
+0.55
+
+Curtin - flow count
+Model
+GRU
+STAR
+FBP
+HWES
+STD
+LSTM
+Deep-LSTM
+Bi-LSTM
+
+10
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+4.5.4
+
+Juniper data-set
+Model
+GRU
+STAR
+FBP
+HWES
+STD
+RNN
+LSTM
+Bi-LSTM
+
+4.5.5
+
+5000 datapoints
+RT(s) R2
+lR2
+81.42 0.78 0.88
+5.1
+0.79 0.85
+7.6
+0.74 0.84
+11.67 0.83 0.83
+3.45 0.63 0.83
+0.53 0.91 0.82
+0.63 0.92 0.83
+4.8
+0.91 0.84
+
+Twitter data-set
+Model
+GRU
+STAR
+FBP
+HWES
+STD
+LSTM
+Deep LSTM
+Bi-LSTM
+
+4.6
+
+1000 datapoints
+RT(s)
+R2
+lR2
+42.74 0.82
+0.87
+5.0
+0.8
+0.81
+10.15 0.79
+0.81
+12.21 0.75
+0.82
+3.77
+0.64
+0.79
+0.746 0.978 0.943
+0.274 0.98
+0.95
+0.114 0.978 0.93
+
+1000 datapoints
+RT(s)
+R2
+lR2
+30.17 0.45
+0.53
+2.41
+0.37
+0.49
+4.72
+0.27
+0.42
+1.0
+-0.61 -0.53
+1.57
+0.43
+0.53
+0.79
+0.58
+0.61
+1.44
+0.59
+0.62
+1.18
+0.60
+0.61
+
+5000 datapoints
+RT(s)
+R2
+lR2
+69.0
+0.26
+0.46
+2.07
+0.23
+0.44
+2.89
+0.23
+0.36
+0.75 -0.19 -0.12
+1.22
+0.25
+0.44
+0.43
+0.48
+0.59
+0.62
+0.52
+0.61
+0.59
+0.46
+0.59
+
+Observations
+1. Deep Neural Networks were up to 10x slower during training phase than the rest of the algorithms, but they
+provided the best accuracy and less inference time most often and, curiously, were very resistant to over fitting
+on the Curtin dataset.
+2. Holt-Winters Exponential smoothing was the fastest (as expected), but was usually outperformed by STD,
+which does not fall much behind time-wise
+3. Holt-Winters Exponential smoothing heavily overfitted on Twitter data, which is worrying and indicates that
+sanity checks would be needed if the algorithm was to be used
+4. Both STAR Predictor and FBProphet tended to be outperformed by other methods, but consistently places in
+the top, making them excellent choices for a single-solution-fits-all approach
+5. STAR and STD were the fastest algorithms by a significant factor on the largest dataset (Juniper), indicating
+that they should be considered more favorably the more data is to be processed during training.
+
+4.7
+
+Benchmark conclusions
+• Over multiple runs, there was no clear winner on a particular type of dataset
+• If the system can afford to spend the computational resources, the best approach is to implement deep neural
+network models.
+• If the system needs to perform computations quickly, it’s recommended to use either FBProphet (out-of-thebox) or STAR (very configurable)
+
+5
+
+Conclusion
+
+Time-series forecasting objective is more complex to learn as it requires modeling approaches to associate the
+correlation factor with time and simultaneously with past observations. A good forecasting model should be able to
+observe both trends as well as seasonality in data. In this work, we provided a comprehensive review of 11-time series
+forecasting techniques for telemetry data.These techniques are widely used in other fields, such as stock market
+prediction, energy consumption forecasting, weather forecasting, etc. We evaluated the above-listed set of
+representative forecasting techniques on four different time series data-sets and logged our observations as a summary.
+11
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+We can conclude that a single off-the-shelf method is not likely to meet all the requirements due to time-series data’s
+dynamicity.
+
+References
+[1] Roopesh Kumar Polaganga and Qilian Liang. Self-similarity and modeling of lte/lte-a data traffic. Measurement, 75:218–229,
+2015.
+[2] Rich Caruana. Multitask learning. 1997.
+[3] George Athanasopoulos Rob J Hyndman. Forecasting: Principles and Practice. OTexts: Melbourne, Australia. [Online,
+Accessed Jun 10 2020].
+[4] Syama Sundar Rangapuram, Matthias W Seeger, Jan Gasthaus, Lorenzo Stella, Yuyang Wang, and Tim Januschowski. Deep
+state space models for time series forecasting. In Advances in neural information processing systems, pages 7785–7794, 2018.
+[5] Autoregressive integrated moving average.
+https://en.wikipedia.org/wiki/Autoregressive_integrated_moving_average.
+[6] Generalized autoregressive conditional heteroskedasticity.
+https://en.wikipedia.org/wiki/Autoregressive_conditional_heteroskedasticity.
+[7] Sean J Taylor and Benjamin Letham. Forecasting at scale. The American Statistician, 72(1):37–45, 2018.
+[8] Gluonts - probabilistic time series modeling.
+https://gluon-ts.mxnet.io/.
+[9] Christopher Olah. Understanding lstm networks. Understanding LSTM Networks – colah’s blog, 2015.
+[10] Maria Tsakiri-Strati Sofia Siachalou, Giorgos Mallinis. A hidden markov models approach for crop classification: Linking
+crop phenology to time series of multi-sensor remote sensing data. Remote Sensing, 2015.
+[11] S. Prandl, M. Lazarescu, D. S. Pham, S. T. Soh, and S. Kak. An investigation of power law probability distributions for network
+anomaly detection. In 2017 IEEE Security and Privacy Workshops (SPW), pages 217–222, 2017.
+[12] Naebolo Khanh Loi. Predict traffic of lte network.
+https://www.kaggle.com/naebolo/predict-traffic-of-lte-network, Nov 2018.
+[13] Twitter volume dataset.
+https://raw.githubusercontent.com/numenta/NAB/master/data/realTweets/Twitter_volume_AMZN.csv.
+[14] Chris Chatfield. Time-series forecasting. CRC press, 2000.
+[15] Shruti Jadon. An overview of deep learning architectures in few-shot learning domain. arXiv preprint arXiv:2008.06365, 2020.
+[16] Shruti Jadon. Introduction to different activation functions for deep learning. Medium, Augmenting Humanity, 16, 2018.
+[17] Xueheng Qiu, Le Zhang, Ye Ren, Ponnuthurai N Suganthan, and Gehan Amaratunga. Ensemble deep learning for regression
+and time series forecasting. In 2014 IEEE symposium on computational intelligence in ensemble learning (CIEL), pages 1–6.
+IEEE, 2014.
+[18] John Cristian Borges Gamboa. Deep learning for time-series analysis. arXiv preprint arXiv:1701.01887, 2017.
+[19] Javier Contreras, Rosario Espinola, Francisco J Nogales, and Antonio J Conejo. Arima models to predict next-day electricity
+prices. IEEE transactions on power systems, 18(3):1014–1020, 2003.
+[20] Per Jonsson and Lars Eklundh. Seasonality extraction by function fitting to time-series of satellite sensor data. IEEE transactions
+on Geoscience and Remote Sensing, 40(8):1824–1832, 2002.
+[21] Sepp Hochreiter and Jürgen Schmidhuber. Long short-term memory. Neural computation, 9(8):1735–1780, 1997.
+[22] Pankaj Malhotra, Lovekesh Vig, Gautam Shroff, and Puneet Agarwal. Long short term memory networks for anomaly detection
+in time series. In Proceedings, volume 89. Presses universitaires de Louvain, 2015.
+[23] Ken-ichi Kamijo and Tetsuji Tanigawa. Stock price pattern recognition-a recurrent neural network approach. In 1990 IJCNN
+International Joint Conference on Neural Networks, pages 215–221. IEEE, 1990.
+[24] Khaled A Althelaya, El-Sayed M El-Alfy, and Salahadin Mohammed. Evaluation of bidirectional lstm for short-and long-term
+stock market prediction. In 2018 9th international conference on information and communication systems (ICICS), pages
+151–156. IEEE, 2018.
+[25] Iflah Aijaz and Parul Agarwal. A study on time series forecasting using hybridization of time series models and neural networks.
+Recent Advances in Computer Science and Communications (Formerly: Recent Patents on Computer Science), 13(5):827–832,
+2020.
+[26] Bryan Lim and Stefan Zohren. Time series forecasting with deep learning: A survey. arXiv preprint arXiv:2004.13408, 2020.
+[27] Cenru Liu. Shallow, deep, ensemble models for network device workload forecasting. In 2020 15th Conference on Computer
+Science and Information Systems (FedCSIS), pages 101–104. IEEE, 2020.
+
+12
+
+C HALLENGES AND A PPROACHES TO T IME SERIES FORECASTING IN DATA C ENTER T ELEMETRY
+
+[28] Debashis Sahoo, Naveksha Sood, Usha Rani, George Abraham, Varun Dutt, and AD Dileep. Comparative analysis of multi-step
+time-series forecasting for network load dataset. In 2020 11th International Conference on Computing, Communication and
+Networking Technologies (ICCCNT), pages 1–7. IEEE, 2020.
+[29] Atif Mahmood, Miss Laiha Mat Kiah, Muhammad Reza Z’aba, Adnan N Qureshi, Muhammad Shahreeza Safiruz Kassim, Zati
+Hakim Azizul Hasan, Jagadeesh Kakarla, Iraj Sadegh Amiri, and Saaidal Razalli Azzuhri. Capacity and frequency optimization
+of wireless backhaul network using traffic forecasting. IEEE Access, 8:23264–23276, 2020.
+[30] Shruti Jadon, Mithun Dharamraj, Anita Kar, and Harshit Chitalia. Machine learning pipeline for predictions regarding a
+network.
+
+13
+
+

@@ -1,0 +1,1587 @@
+EMIXER: End-to-end Multimodal X-ray Generation
+via Self-supervision
+
+arXiv:2007.05597v2 [eess.IV] 15 Jan 2021
+
+Siddharth Biswal
+Georgia Tech
+sbiswal7@gatech.edu
+Ayis Pyrros
+Dupage Medical Group
+ayis@ayis.org
+
+Peiye Zhuang
+UIUC
+peiye@illinois.edu
+
+Nasir Siddiqui
+Dupage Medical Group
+nsiddiqui@gmail.com
+
+Sanmi Koyejo
+UIUC
+sanmi@illinois.org
+
+Jimeng Sun
+UIUC
+jimeng@illinois.edu
+
+Abstract
+Deep generative models have enabled the automated synthesis of high-quality
+data for diverse applications. However, the most effective generative models are
+specialized to data from a single domain (e.g., images or text). Real-world applications such as healthcare require multi-modal data from multiple domains (e.g.,
+both images and corresponding text), which are difficult to acquire due to limited
+availability and privacy concerns and are much harder to synthesize. To tackle this
+joint synthesis challenge, we propose an End-to-end MultImodal X-ray genERative
+model (EMIXER) for jointly synthesizing x-ray images and corresponding free-text
+reports, all conditional on diagnosis labels. EMIXER is an conditional generative
+adversarial model by 1) generating an image based on a label, 2) encoding the
+image to a hidden embedding, 3) producing the corresponding text via a hierarchical decoder from the image embedding, and 4) a joint discriminator for assessing
+both the image and the corresponding text. EMIXER also enables self-supervision
+to leverage vast amount of unlabeled data. Extensive experiments with real Xray reports data illustrate how data augmentation using synthesized multimodal
+samples can improve the performance of a variety of supervised tasks including
+COVID-19 X-ray classification with very limited samples. The quality of generated
+images and reports are also confirmed by radiologists. We quantitatively show
+that EMIXER generated synthetic datasets can augment X-ray image classification,
+report generation models to achieve 5.94% and 6.9% improvement on models
+trained only on real data samples. Taken together, our results highlight the promise
+of state of generative models to advance clinical machine learning.
+
+1
+
+Introduction
+
+While clinical applications of supervised machine learning algorithms continue to advance, their
+impact is stifled by the limited amount of available labeled clinical data. This issue only made
+more dire by applications such as radiology report generation for medical images, which require
+paired data jointly across images, clinical notes, and diagnosis labels. Data sharing across healthcare
+organizations and institutions remains difficult, often due to legal and privacy concerns [1, 2]. On
+the other hand, generative modeling has improved dramatically in the past few years. While early
+Generative Adversarial Networks (GANs) could only synthesize low-resolution grayscale images [3],
+Preprint. Under review.
+
+state-of-art generative models can now synthesize diverse high-quality and high-resolution images
+[4, 5, 6, 7]. GANs and related generative models have been applied to various domains such as
+computer vision [4, 5], natural language processing [8, 9], time-series synthesis [10], semantic
+segmentation [11, 12], among others. This manuscript explores using generative models to address
+the challenge of limited data in machine learning for clinical applications. We explore a variety of
+applications, with a focus on using synthetic data to augment real datasets – increasing the amount of
+the data and labels available [13], thereby improving downstream model performance.
+We focus on X-rays as are a primary diagnostic tool in many clinical workflows, most importantly in
+radiology, and are used for detecting pneumonia, bone fracture, and cancer[14, 15]. Recent research
+efforts have shown promise for lung cancer detection in radiology, prostate cancer in pathology, and
+differential diagnoses in dermatology [16, 17, 18, 19]. Most recently, X-rays have been employed
+for the coronavirus diagnosis and prognosis [20]. Along with X-rays, associated reports written
+by clinicians are the primary communication between patients and doctors [21, 22]. Several deep
+learning based X-ray image to report writing method been proposed [23, 24, 25]. Researchers
+have proposed generative models for clinical data [13]. However, existing methods are limited to a
+single modality – images, or clinical reports only. Thus, current generative models are not able to
+produce high quality multimodal synthetic datasets, which is the focus of this paper. This manuscript
+investigates an end-to end approach for generating multimodal X-ray images and text reports which
+are essential for the radiology applications. To this end, our work addresses the following challenges.
+• Multimodal generation of images and corresponding reports: Multimodal generative models
+are difficult to train compared to single-mode modal generative models [26, 27, 28, 29, 30, 31].
+In the past few years, there have been multiple attempts at developing models that can generate
+multiple modalities at the same time [32]. In particular, text synthesis using generative models
+has proven to be extremely challenging – most likely because because discrete text tokens are not
+differentiable – making it more difficult to train GANs. We show that using an end-to-end approach,
+combines with appropriate text embeddings can overcome these issues.
+• Generative model training with limited labels: Generative models typically require large quantities of high-quality labeled data for training. However, labels are scarcely available in real-world
+applications such as medical domain. This renders training of high-quality generative models
+challenging. We present successful results with limited labeled X-ray data along with large amount
+of unlabeled X-ray data, and conjecture about properties of X-rays which make this feasible.
+• Difficultly of data augmentation with limited data: The task of training a generative model for
+classifier augmentation [33, 34] is particularly challenging in the case of rare diseases or new
+phenotypes, as the limited amount of labels renders training of generative models difficult. For
+example, in the case of the COVID-19 pandemic, the amount of available X-ray data and labels
+are extremely low. Given the limited labels, training high-quality generative models to augment
+the original dataset is a challenge. Pretraining models of large and diverse augmented data can
+potentially provide robust embeddings for new phenotypes.
+We propose EMIXER, an end-to-end multimodal generative model that can generate paired chest X-ray
+images and corresponding reports simultaneously, conditioned on diagnosis labels. Our primary
+contributions are summarized in the following.
+• Multimodal X-ray image and report generation. We show that EMIXER generates high-quality
+X-ray images and corresponding reports. Multiple radiologists scored average 7.340/10 for synthetic data and 7.825/10 for real data on their realisticness and quality. Furthermore, EMIXER
+generated synthetic datasets used to augment X-ray image classification models lead to up to
+5.94% improvement in classification accuracy compared to models trained on real X-ray images
+only. Similarly, EMIXER augmented paired X-ray image and report datasets improve X-ray report
+generation models up to 6.9% as measured by the CIDEr scores.
+• Learning high-quality generative models from limited samples. EMIXER uses self-supervision
+to enable learning of high-quality generative models from limited labels. We show that even with
+30% of the original labels, EMIXER can outperform baselines with the 100% labeled data in terms
+of image classification and report generation tasks.
+• Improved classification of COVID-19 chest X-rays via data augmentation. We utilize the
+pre-trained model of EMIXER with augmenting classification models, applied to the automated
+2
+
+diagnosis of COVID-19 from X-ray images. Our results show 11% improvement in predictive
+accuracy than the one without using pre-trained EMIXER model.
+
+2
+
+Related Work
+
+Generative models. In the past few years, there has been great progress in the area of generative
+modeling of complex imaging data. Since the introduction of the Generative Adversarial Networks
+(GAN), there have been many variants proposed such as DCGAN, Progressive GAN, Self-supervised
+GANs [3, 5, 35, 36], among others. In addition to GANs, other types of generative models are
+also quite widely used such as Flow Models, Autoregressive Models, and variational autoencoders
+[37, 38, 39, 40]. Flow Models uses a stack of invertible transformations to a sample from prior
+distributions, thus can compute the exact log-likelihoods of observations. Autoregressive models
+factorize the distribution over observations into a sequence of conditional distributions (e.g. over
+pixels for images), then process each component in sequence [41, 42]. For image generation
+applications, GAN-based models produce among the photo-realistic images. However, the training of
+GAN models can be quite challenging with known issues such as mode collapse and instability in
+convergence [43]. There have been many works to improve upon these challenges, e.g., by changing
+the objective function [44]. Some other research efforts have focused on constraining the discriminator
+through gradient penalties or normalization [45]. BigGAN [46, 4] adds the self-attention block, and
+ProGAN considers training a single model across a sequence of increasing resolutions [5]. While
+there is a lot of effort in modeling single modalities especially images, there is a dearth of research
+on multimodal image and text generation.This work addresses the challenge of multimodal joint
+generation of image and text.
+Medical report generation. Deep learning based image classification has been successfully applied
+to many different types of medical image classification tasks such as diabetic retinopathy classification,
+X-ray classification, cancer detection from cell images, and X-ray based bone classification [47,
+15, 48], among other applications. Similarly, different image segmentation algorithms have been
+very successfully applied to medical images to identify different organs and diseases. There has
+been progress in the task of automated report generation for medical images such as X-rays [49].
+Existing applications of machine learning to clinical tasks must address a variety of challenges such
+availability of large datasets.
+
+3
+3.1
+
+Methods
+Problem Definition
+
+We begin by introducing notations. We denote real chest X-ray images as In ∈ Rl×l where l × l is the
+size of the image, text X-ray reports as Sn and labels as yn ∈ {0, 1}k for nth data sample. The X-ray
+n
+report Sn contains a sequence of sentences Sn = [sn
+1 . . . sT ], where the report length T may vary.
+n
+n
+n
+n
+Sentence st consists of sequence of words st = [at,1 , at,2 , . . .] where an
+t,j j-th word represented
+as one-hot vectors in the sentence t of document n. The dataset, denoted as E is a combination of
+N
+images In , reports Sn and labels yn denoted as E = {In , Sn , yn }n=1 . EMIXER generates synthetic
+dataset that consists of synthetic X-ray images În , synthetic report Ŝn conditioned on class labels.
+We train an end-to-end generative model which consists of an X-ray image generator G, X-ray image
+discriminator Dimage , X-ray report discriminator Dreport , and an X-ray image to report decoder F.
+Each of these components is a neural network that are trained jointly to produce paired X-ray images
+and clinical reports conditioned on diagnosis labels.
+3.2
+
+The EMIXER Model
+
+We describe primary components of EMIXER in this section. As illustrated in Fig. 1, EMIXER
+is composed of four different trainable networks: (a) Image generator: This image generator
+synthesizes X-ray images from a prior noise distribution conditioned on label information (b) Image
+to report decoder: An image to report decoder produces a text report from X-ray image (c) Image
+Discriminator: This discriminator is tasked with discriminating between real and synthetic X-ray
+images (d) Text Discriminator: This text discriminator distinguishes between real and synthetic
+X-ray reports (e) Joint discriminator: The joint discriminator combines the embedding of X-ray
+images and text to discriminate between real and synthetic embeddings.
+3
+
+Image generator
+y
+
+yemb
+
+z
+
+zin
+
+Text decoder
+Resblock
+
+Synthetic
+x-ray
+
+Self-supervision
+(rotation task)
+Real X-ray
+
+Selfattention
+
+Image
+discriminator
+
+CNN
+
+RNN
+
+X-ray image
+encoder
+
+Sentence
+decoder
+
+Joint
+discriminator
+
+RNN
+Word
+decoder
+
+Synthetic
+report
+
+Text
+discriminator
+Real report
+
+Figure 1: An overview of EMIXER generator framework
+
+3.2.1
+
+X-ray Image Generator (G)
+
+An X-ray image generator is a deep neural network that accepts two inputs; a noise vector z ∈ Rdz
+and class information y represented as one-hot vector. First, we split the noise vector z to obtain
+zspl ∈ R20 vectors. The vectors zspl is passed through a linear layer to obtain zin , zin = Wl zspl +bl .
+We embed the class information y via a linear layer to obtain yemb ∈ R128 . zin concatenated with
+yemb is passed through three layers of residual-block which applies batch-normalization with
+deconvolution operation, resout = res-block(zin , yemb ) [50]. The output resout is passed through
+a self-attention block which applies applies a 1 × 1 convolution operation with softmax to obtain
+intermediate feature vectors which are combined with the original input to compute the att-block,
+attout = self-att-block(resout ). Finally this output self-att-block is passed through another
+res-block to obtain the Î as the output of image generator. Taken together, the generator network
+can be abstracted as the following Î = G (z, y). We provide implementation details of res-block,
+self-att-block blocks in the supplement.
+3.2.2
+
+X-ray Report Generator (F)
+
+The image is fed through an image encoder convolutional neural network(CNN) to obtain a feature
+representation. These feature vectors are passed to a sentence decoder RNN to recurrently generate
+topic vectors for each sentence. These topic vectors are used by a word decoder to generate the words
+for each sentence as Ŝ = F(Î).
+X-ray image encoder Specifically, given an image I, we first extract its features v ∈ R512 from an
+intermediate layer of a CNN, v = CNN(I). We use a pretrained DenseNet-121 as the CNN model
+trained on a different chest X-ray dataset [51]. Note that this CNN is different from the CNN used in
+the image discriminator Dimage . The report generator module is composed of a sentence decoder and
+word decoder RNN which are described below.
+Sentence decoder RNN: Given the X-ray image features v extracted by the CNN, a sentence
+decoder is used generate topic vectors ti . We employ a Long-Short Term Memory network (LSTM)
+to compute the hidden state as hi = LSTM(v; hi-1 ). We use the hidden states in two ways: First,
+we project the hidden state hi through a linear layer and logistic layer to get probability distribution
+ui over two states CONTINUE = 0, STOP = 1. Second, we also feed hi through three-layered fully
+connected network to get a topic vector ti for ith sentence in the report, ti = Wto hi + bto .
+Word decoder RNN: The words for each individual sentence are generated by a word decoder
+which is a trainable three-layer LSTM. The sentence topics ti generated by the sentence decoder
+are combined with the <START> token as input for the first and second input to the word LSTM.
+In subsequent steps, we provide the hidden state of the last LSTM layer to predict a distribution
+over the words in the vocabulary. The hidden state hword ∈ RH of the word LSTM is directly used
+to predict the distribution over words: p (word|hword ) = softmax (Wout hword ) where Wout is the
+parameter matrix. Finally, after the word decoder generates the word sequences, we concatenate all
+the generated sequence to obtain the final report.
+4
+
+3.2.3
+
+Discriminator (D)
+
+EMIXER uses three discriminators, an image discriminator, a report discriminator and joint embedding
+discriminator to ensure image and report consistency of the synthetic data. The image discriminator
+measures whether the generated image Î matches the image distribution of real X-ray images, and the
+report discriminator Ŝ discriminates between the real and synthetic X-ray reports.
+X-ray Image discriminator (Dimage ): We use a convolutional neural network discriminator for
+X-ray images which are fed real and synthetic X-ray images for classification. The discriminators use
+a ResNet architecture where the input image is passed through multiple layers of ResBlocks, where
+ResBlocks are composed of 3 × 3 convolution with ReLU layers [50]. This image discriminator can
+be represented as D(I, y) = crf (D̃(I)) + P (D̃(I), y) where P (ṽ, y) = x̃> W y is a linear layer with
+weight matrix W applied to to image feature v and one-hot encoded label y. crf is a linear classifier
+tasked with detecting if the provided sample is real or fake.
+X-ray Report Discriminator (Dreport ): We use a X-ray report discriminator which classifies a given
+X-ray report as real or fake. X-ray reports generated from the decoder and real X-ray reports are
+passed as input discriminator. We employ a LSTM to to extract text embeddings from given X-ray
+report S, p = LSTM(S) [52]. These report embeddings p are passed through multi-layer linear
+layers with softmax layer to obtain yr/f . The report discriminator can be abstracted as to discriminate
+between real or fake report embedding as yr/f = Dreport (ê). We provide further details of the
+implementation in the supplementary section.
+Joint Discriminator for X-ray images and Reports (Djoint ): Along with the image discriminator
+and report discriminator, we also use a joint embedding discriminator. We hypothesize that as the
+X-ray images and reports are dependent upon each other, a joint multimodal embedding discriminator
+provides further guidance to the generator network for generating higher quality images and reports.
+This joint embedding discriminator is designed to discriminate real joint embeddings from fake joint
+embeddings. The joint embedding discriminator first obtains image features Iemb from the X-ray
+images using a CNN before the pooling layer. The text-reports are provided as input to an LSTM.
+The last hidden vector of the LSTM is passed through a linear layer to obtain report embedding Semb .
+The image feature vector Iemb and report embedding Semb are concatenated together to form the
+joint embedding Cjoint . This joint embedding is passed through linear layers to obtain probability of
+real or fake embedding. This discriminator can be abstracted as yr/f = Djoint (Ĉjoint ).
+Learning: Previous works have shown that self-supervision guide the classifier to learn useful data
+representation by detecting auxiliary information such as rotation angles. When applied to image
+classification, typically images are rotated and the angle of rotation is provided as the artificial
+label. In this rotation task, the self-supervised task is to predict the angle of rotation of an image.
+We use R = {0, 90, 180, 270} rotation angles. Image I is rotated by r degrees is denoted as Ir
+and QDimage (R = r|Ir ) is probability distribution over the rotation angles. The EMIXER framework
+corresponds to a constrained minimax game given by where the value function V is given by
+h
+ i
+V (G, D∗ ) = Ex1 ∼pX1 − log Dimage Î + Ez∼pZ [− log (1 − Dimage (G(z)))]
+h
+ i
++ Ex1 ∼pX1 − log Dreport Ŝ + Ez∼pZ [− log (1 − Dreport (F (G(z)))]
+h
+
+i
++ Ex1 ∼pX1 − log Djoint Î, Ŝ
++ Ez∼pZ [− log (1 − Djoint (F (G(z)) , G(z))]
+
+
++ αEx∼PG Er∼R log QDimage (R = r|Ir )
+where G, Dimage , Dreport , Djoint , F are the image generator, image discriminator, report discriminator
+and image to report decoder, respectively. EMIXER can be trained by back propagation with the
+alternating gradient update steps. The details of the learning algorithm are given in the supplementary
+materials.
+
+4
+
+Experiments
+
+In this section, we perform extensive evaluations to measure the effectiveness of EMIXER for paired
+chest X-ray image and report generation. We empirically show that (1) our proposed model can
+generate high-quality X-ray images and reports (2) EMIXER with self-supervised loss can match the
+5
+
+generated sample quality of the conditional models using only fraction of labels (3) EMIXER can be
+used to augment datasets in limited label settings such as COVID-19 chest X-ray detection.
+4.1
+
+Datasets
+
+We perform experiments on MIMIC-CXR dataset, one of the largest X-ray datasets containing
+377,110 X-ray images and corresponding reports [53]. MIMIC dataset contains 377,110 chest X-rays
+associated with 227,827 imaging studies sourced from the Beth Israel Deaconess Medical Center
+between 2011-2016. The labels extracted from the reports contain 14 different unique classes. We
+resize the images to 128 × 128 × 3 as done in previous work [45].
+4.2
+
+Evaluation Metrics
+
+We perform quantitative and qualitative experiments: (a) For classification experiments, we used
+accuracy and AUC as classification metrics. We use CIDEr, BLEU scores for image captioning
+experiments [54, 55]. (b) To evaluate X-ray image quality, we use the Fréchet Inception Distance
+(FID) scores. We use a special pre-trained Inception network on chest X-ray images. We have
+provided further details in the supplement. (c) We qualitatively evaluate the generated X-ray images
+and reports. For this, we present randomized pairs of real or synthetic X-ray images and reports to
+clinical experts for evaluation (they do not know if the presented sample is real or synthetic). The
+clinical experts were asked to provide a numerical quality score between 1-10 (10 being the best) for
+each sample.
+4.3
+
+Models
+
+JointGAN: JointGAN trains multiple generators and a single softmax-based critic, all jointly trained
+via adversarial learning[32] to generate joint data distributions. CoGAN: CoGAN learns separate
+generators for two different domains with tied weights on the first few layers for shared latent
+representations [26]. Single Modal Image GAN with text decoder(SM-GAN) In this setup, we
+use a GAN model to generate X-ray images. These X-ray images are passed to a text decoder
+which produces text reports corresponding to the synthetic chest X-rays. EMIXER: We compare these
+baselines against our method which is a self-supervised generative model with multiple discriminators
+for each modality. The final loss for our discriminator is the combination of adversarial loss of both
+the generators and joint embedding.
+4.4
+
+Experimental Results and Discussion
+
+Our experiments aim to answer the following questions.
+•
+•
+•
+•
+4.4.1
+
+Can EMIXER generate high quality X-ray images?
+Can EMIXER generate high quality pairs of X-ray images and reports?
+Can EMIXER learn a high quality generative model from limited samples?
+Can EMIXER be used to improve COVID X-ray classification?
+
+Image quality evaluation: Is EMIXER capable of generating high quality X-ray images?
+
+One of the primary applications of generative models is data augmentation to increase sample size
+and improve downstream model performance. We use the baselines and EMIXER to augment the real
+X-ray images and evaluate the improved quality of the datasets by using these augmented datasets for
+X-ray image classification.
+X-ray image classification setup: We trained two separate X-ray image classification models
+on real X-ray images and synthetic X-ray images. We hypothesize that good generative models
+should generate images that resemble real data and can be used to train a classification model.
+These classification models are evaluated on held out real X-ray images. This setup evaluates the
+performance of the classification model for five different classes of diseases related to the X-ray
+images. In this experiment, we report accuracy and AUC for classification scores in Table 1, where
+we increase the dataset size by augmenting the real data with generated X-ray images. We use 100k
+real X-ray images and gradually increase the augmented dataset size by adding synthetic X-ray
+images up to 600k. We notice improved performance of these image classification model by up to
+5.94% compared to real X-ray images, and 3.6% improvement compared to the best baseline. This
+highlights that EMIXER is able to generate synthetic X-ray images which are able to augment the real
+dataset to improve the classification performance.
+6
+
+Table 1: Comparison of X-ray report generation model performance with real and augmented dataset;
+In this table R indicates real data samples, S indicates Synthetic data samples
+Image Classification
+
+Report Generation
+
+Dataset
+
+Method
+
+AUC
+
+ACC
+
+CIDEr
+
+BLEU-1
+
+BLEU-2
+
+BLEU-3
+
+BLEU-4
+
+Only real data
+
+R 100k
+
+.824 ± 0.0034
+
+.846 ± 0.0041
+
+.712 ± 0.0014
+
+.253 ± 0.0024
+
+.198 ± 0.0034
+
+.095 ± 0.0041
+
+.074 ± 0.0012
+
+JointGAN
+
+R100k + S50k
+R100k + S100k
+R100k + S300k
+R100k + S600k
+
+.798 ± 0.0012
+.812 ± 0.0013
+.826 ± 0.0018
+.831 ± 0.0009
+
+.814 ± 0.0023
+.835 ± 0.0021
+.839 ± 0.0011
+.846 ± 0.0019
+
+.719 ± 0.0023
+.725 ± 0.0019
+.748 ± 0.0017
+.773 ± 0.0022
+
+.259 ± 0.0019
+.261 ± 0.0014
+.272 ± 0.0015
+.313 ± 0.0011
+
+.201 ± 0.0024
+.207 ± 0.0029
+.213 ± 0.0021
+.224 ± 0.0041
+
+.098 ± 0.0025
+.114 ± 0.0022
+.129 ± 0.0029
+.134 ± 0.0021
+
+.079 ± 0.0031
+.081 ± 0.0034
+.085 ± 0.0051
+.093 ± 0.0021
+
+CoGAN
+
+R100k + S50k
+R100k + S100k
+R100k + S300k
+R100k + S600k
+
+.827 ± 0.0034
+.829 ± 0.0011
+.831 ± 0.0013
+.837 ± 0.0011
+
+.843 ± 0.0019
+.854 ± 0.0021
+.857 ± 0.0024
+.849 ± 0.0023
+
+.703 ± 0.0019
+.692 ± 0.0014
+.724 ± 0.0015
+.734 ± 0.0022
+
+.231 ± 0.0022
+.214 ± 0.0023
+.241 ± 0.0024
+.251 ± 0.0021
+
+.192 ± 0.0012
+.187 ± 0.0012
+.211 ± 0.0012
+.236 ± 0.0012
+
+.082 ± 0.0019
+.073 ± 0.0022
+.091 ± 0.0041
+.114 ± 0.0032
+
+.073 ± 0.0031
+.067 ± 0.0033
+.076 ± 0.0025
+0.081 ± 0.0019
+
+SMGAN
+
+R100k + S50k
+R100k + S100k
+R100k + S300k
+R100k + S600k
+
+.818 ± 0.0013
+.823 ± 0.0035
+.821 ± 0.0021
+.842 ± 0.0029
+
+.832 ± 0.0013
+.831 ± 0.0014
+.847 ± 0.0019
+.859 ± 0.0018
+
+.713 ± 0.0031
+.723 ± 0.0032
+.731 ± 0.0033
+.752 ± 0.0039
+
+.251 ± 0.0019
+.258 ± 0.0031
+.263 ± 0.0018
+.275 ± 0.0011
+
+.203 ± 0.0034
+.207 ± 0.0034
+.212 ± 0.0034
+.236 ± 0.0034
+
+.093 ± 0.0021
+.098 ± 0.0022
+.106 ± 0.0032
+.125 ± 0.0031
+
+.077 ± 0.0014
+.079 ± 0.0019
+.089 ± 0.0036
+.096 ± 0.0025
+
+EMIXER
+
+R100k + S50k
+R100k + S100k
+R100k + S300k
+R100k + S600k
+
+.835 ± 0.0015
+.842 ± 0.0021
+.853 ± 0.0019
+.873 ± 0.0025
+
+.857 ± 0.0024
+.864 ± 0.0024
+.869 ± 0.0028
+.884 ± 0.0026
+
+.731 ± 0.0031
+.752 ± 0.0024
+.763 ± 0.0035
+.783 ± 0.0043
+
+.276 ± 0.0034
+.297 ± 0.0041
+.324 ± 0.0042
+.346 ± 0.0022
+
+.204 ± 0.0027
+.216 ± 0.005
+.229 ± 0.0014
+.247 ± 0.0019
+
+.112 ± 0.0032
+.132 ± 0.0019
+.145 ± 0.0014
+.169 ± 0.0018
+
+.078 ± 0.0021
+.083 ± 0.0024
+.097 ± 0.0031
+.132 ± 0.0052
+
+Table 2: Comparative evaluation of phenotype classification via joint embedding with real and
+augmented data
+Method
+Dataset
+AUC
+Acc
+Only Real
+JointGAN
+CoGAN
+SMGAN
+EMIXER
+
+4.5
+
+Real [100k ]
+R100k + S300k
+R100k + S300k
+R100k + S300k
+R100k + S300k
+
+.849 ± 0.0025
+.869 ± 0.0023
+.871 ± 0.0014
+.883 ± 0.0016
+.905 ±0.0019
+
+.868 ± 0.0021
+.905 ± 0.0023
+.896 ± 0.0019
+.902 ± 0.0015
+.924 ±0.0012
+
+Joint Image and Text Evaluation: Can EMIXER generate high quality pairs of image and
+reports?
+
+One of the primary advantages of EMIXER is the ability to jointly generate paired X-ray images and
+reports. We performed two different experiments to understand the effectiveness of EMIXER towards
+generating paired images and reports.
+Report Generation Task: X-ray report generation is one of the key tasks in radiology clinical
+workflow [21]. We validate the effectiveness of augmented paired image and report datasets for report
+generation task. In this setup, we train report generation models on real data and a combination of
+real and synthetic data. These trained models are evaluated on held-out real paired datasets. We
+present the results of these experiments in Table 1. In this setup, we vary the amount of synthetic
+data added to the real dataset. We present the performance of real and augmented datasets for report
+generation task in terms of natural language processing metrics such as CIDEr, BLEU 1-4 [54, 55].
+We show that EMIXER improves up to 6.9% compared to models trained only on real datasets. This
+highlights the fact that EMIXER can be used to augment and improve report generation models.
+Multimodal joint embeddings of X-ray images and reports: The multimodal embeddings learned
+can be used for classification tasks. We perform an experiment to evaluate the joint quality of images
+and generated text. In table ??a, we compare the result of varying combinations of real and synthetic
+data on the joint modeling task. In this joint modeling task, we combine features from X-ray images
+and text reports together for downstream classification. We classify different disease phenotypes
+using these joint embeddings. We find that adding a synthetic dataset to the real dataset for this joint
+embedding significantly improves the performance of the classification model.
+4.5.1
+
+Limited label setup: Can we learn a high quality generative model from limited data?
+
+Machine Learning applications in clinical domains are often limited by the amount of available data
+and labels. Since generative models require large amounts of data and labels to train, it is a challenge
+in clinical tasks to learn a high-quality generative models. We show in the following experiments
+that we can employ self-supervision to overcome the label limitations. We explore the limits of
+usage of labels by varying the percentage of labels used in the models. In this experiment, we use
+limited labels ranging from 30%, 50% to compare with 100% label usage. We show that even with
+7
+
+Table 3: Comparison of generative models with limited labels
+Method
+Acc
+BLEU-1
+FID
+CoGAN(full)
+JointGAN(full)
+SM-GAN(full)
+EMIXER (30%)
+EMIXER (50%)
+EMIXER (100%)
+
+0.827 ± 0.0011
+0.813 ± 0.0014
+0.813 ± 0.0021
+0.838 ± 0.0013
+0.842 ± 0.0008
+0.845 ± 0.0024
+Table 4:
+
+0.247 ± 0.0023
+0.221 ± 0.0031
+0.221 ± 0.0028
+0.258 ± 0.0021
+0.269 ± 0.0024
+0.271 ± 0.0014
+Caption
+
+15.23 ± 0.0015
+16.58 ± 0.0019
+16.58 ± 0.0021
+12.84 ± 0.0021
+11.73 ± 0.0023
+11.31 ± 0.0028
+
+limited labels EMIXER can perform competitively. We compare existing baselines to our model which
+uses self-supervision to able to generate images from limited labels. Table ??b shows that EMIXER
+outperforms the baselines in terms of image generation diversity as measured by FID.
+4.5.2
+
+Case Study: COVID-19 X-ray data augmentation experiment
+
+We applied the generative models towards improving COVID X-ray classification. In this task, we use
+EMIXER to augment chest X-ray images to improve COVID-19 detection. Currently, COVID X-rays
+classification includes four classes: normal, bacterial pneumonia, viral pneumonia and COVID-19.
+In this experiment, we evaluate if EMIXER generated synthetic data can augment chest X-ray image
+samples for the COVID-19 classification task. Specifically, we compare three different models:
+COVID-19 dataset, pretrained model on CheXpert dataset, pretrained model on combined
+data of real and synthetic data [56, 57]. We trained three different models on these datasets.
+Models pretrained on real dataset and combined dataset are finetuned on the COVID-19 dataset. We
+show that augmenting real datasets with EMIXER generated samples improves the overall performance
+in Table 5.
+Table 5: Comparison of performance for COVID-19 classification
+Type
+
+4.5.3
+
+AUC
+
+Sensitivity
+
+PPV
+
+COVID samples
+
+Normal Lung
+Bact. Pneumonia
+Viral Pneumonia
+COVID-19
+
+Phenotype
+
+0.853 ± 0.0023
+0.847 ± 0.0012
+0.841 ± 0.0034
+0.853 ± 0.0033
+
+0.705 ± 0.0034
+0.734 ± 0.0014
+0.758 ± 0.0015
+0.765 ± 0.0019
+
+0.834 ± 0.0021
+0.768 ± 0.0041
+0.725 ± 0.0021
+0.854 ± 0.0024
+
+ChexPert real dataset
+
+Normal Lung
+Bact. Pneumonia
+Viral Pneumonia
+COVID-19
+
+0.932 ± 0.0027
+0.923 ± 0.0021
+0.917 ± 0.0018
+0.921 ± 0.0014
+
+0.761 ± 0.0031
+0.823 ± 0.0017
+0.832 ± 0.0014
+0.863 ± 0.0021
+
+0.931 ± 0.0014
+0.834 ± 0.0019
+0.745 ± 0.0009
+0.928 ± 0.0016
+
+ChexPert real data + EMIXER (250k Samples)
+
+Normal Lung
+Bact. Pneumonia
+Viral Pneumonia
+COVID-19
+
+0.956 ± 0.0019
+0.945 ± 0.0033
+0.948 ± 0.0031
+0.953 ± 0.0038
+
+0.783 ± 0.0017
+0.851 ± 0.0014
+0.853 ± 0.0023
+0.898 ± 0.0034
+
+0.963 ± 0.0015
+0.842 ± 0.0018
+0.775 ± 0.0019
+0.943 ± 0.0021
+
+Evaluation by Radiologists
+
+We perform a qualitative evaluation of the generated X-ray images and reports. In this task, we
+present randomized X-ray images and reports to expert doctors. Two radiologists provide a rating
+between 1-10 for each pair of images and reports. We have presented the results of this evaluation
+task in figure 2. The scores for real and synthetic X-rays samples were 7.825 ± 1.17 and 7.34 ± 1.321.
+The inter-rater agreement was 0.832 measured using cohen’s kappa. The comments provided by the
+doctors indicate that synthetic samples were similar to real samples with some language incoherence
+in X-ray reports.
+
+5
+
+Conclusion
+
+In this paper, we address the challenging multimodal paired x-ray image and report generation task by
+proposing a novel self-supervised multimodal generative model called EMIXER. EMIXER successfully
+uses a multimodal generative model to learn to generate paired x-ray images and reports. We use
+self-supervision to guide EMIXER to learn from limited samples which are very applicable in the
+medical domain as the number of labels is often limited. We also use multiple discriminators to guide
+the process of image generation, report decoding. We show via extensive experiments that EMIXER
+can augment real x-ray image datasets to improve downstream classification tasks. Finally, in timely
+case-study, we show that EMIXER can also improve COVID-19 x-ray classification.
+
+8
+
+Real Sample
+
+No definitive pneumothorax is
+seen. Right basal opacity appears
+to be slightly improved since the
+prior study. Heart size and
+mediastinum are unchanged.
+
+Synthetic Sample
+
+There is no evidence of
+complication. No
+pneumothorax is present.
+The radiograph is normal.
+Cardiac size is normal.
+
+Figure 2: Qualitative evaluation. (a) User study Results (b) Comparative real and synthetic samples
+
+Broader Impact
+Our paper presents an end-to-end multimodal X-ray generation algorithm to produce synthetic but
+realistic X-ray images and the corresponding text reports.
+Application and societal impact: Deep learning models have shown great promises in medical
+imaging applications such as automatic diagnosis of radiology images. However, large amount
+of labeled training data are required to develop accurate models. Unfortunately, medical data are
+extremely difficult to share due to the sensitive nature of the data around patient privacy and legal
+constraints. In addition, many conditions and situations are intrinsically rare which mean limited data.
+Our proposed method EMIXER can alleviate these challenges by producing realistic but synthetic
+data to support model building and augmenting to the limited existing data in some situations as we
+demonstrated in the COVID-19 image classification task.
+As sensing technology become cheap and ubiquitous (e.g., high-resolution cameras from smart
+phones), it is foreseeable that AI supported telemedicine can efficiently support many people especially the ones in the rural community, where our proposed algorithm can play an important
+role.
+Caveat and potential weakness: Although synthetic data can potentially alleviate the sensitive
+data sharing in healthcare, it is important to study and quantify the privacy implication of synthetic
+generated data by a model trained with real data. Although unlikely, some real data can be potentially
+remembered and resynthesized in the synthetic data. There is a balance between data utility and
+privacy preservation in this line of research. Finally, a broader trend to consider is that AI technology
+has largely enabled automation and improved efficiency of many industries such as traditional retail to
+e-commerce, automation in production plants. The traditional workforce can be negatively impacted.
+It is important to consider social impact of AI technology to the existing industries. Although in
+healthcare the skilled experts are still in shortage, the AI based medical technology will probably
+have limited negative impact in the existing workforce.
+
+References
+[1] Amy L McGuire, Rebecca Fisher, Paul Cusenza, Kathy Hudson, Mark A Rothstein, Deven McGraw,
+Stephen Matteson, John Glaser, and Douglas E Henley. Confidentiality, privacy, and security of genetic
+and genomic test information in electronic health records: points to consider. Genetics in Medicine,
+10(7):495–499, 2008.
+[2] Barbara L Filkins, Ju Young Kim, Bruce Roberts, Winston Armstrong, Mark A Miller, Michael L Hultner,
+Anthony P Castillo, Jean-Christophe Ducom, Eric J Topol, and Steven R Steinhubl. Privacy and security in
+the era of digital health: what should translational researchers know and do about it? American journal of
+translational research, 8(3):1560, 2016.
+[3] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil Ozair, Aaron
+Courville, and Yoshua Bengio. Generative adversarial nets. In NIPS, pages 2672–2680, 2014.
+[4] Andrew Brock, Jeff Donahue, and Karen Simonyan. Large scale gan training for high fidelity natural
+image synthesis. arXiv preprint arXiv:1809.11096, 2018.
+[5] Tero Karras, Timo Aila, Samuli Laine, and Jaakko Lehtinen. Progressive growing of gans for improved
+quality, stability, and variation. arXiv preprint arXiv:1710.10196, 2017.
+[6] Tero Karras, Samuli Laine, and Timo Aila. A style-based generator architecture for generative adversarial
+networks. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+2019.
+
+9
+
+[7] Tero Karras, Samuli Laine, Miika Aittala, et al. Analyzing and improving the image quality of stylegan.
+arXiv preprint, 2019.
+[8] Zihang Dai, Zhilin Yang, Fan Yang, William W Cohen, and Russ R Salakhutdinov. Good semi-supervised
+learning that requires a bad gan. In Advances in neural information processing systems, pages 6510–6520,
+2017.
+[9] William Fedus, Ian Goodfellow, and Andrew M Dai. Maskgan: better text generation via filling in the_.
+arXiv preprint arXiv:1801.07736, 2018.
+[10] Eoin Brophy, Zhengwei Wang, and Tomas E Ward. Quick and easy time series generation with established
+image-based gans. arXiv preprint arXiv:1902.05624, 2019.
+[11] Hao Dong, Simiao Yu, Chao Wu, and Yike Guo. Semantic image synthesis via adversarial learning. In
+Proceedings of the IEEE International Conference on Computer Vision, pages 5706–5714, 2017.
+[12] Pauline Luc, Camille Couprie, Soumith Chintala, and Jakob Verbeek. Semantic segmentation using
+adversarial networks. arXiv preprint arXiv:1611.08408, 2016.
+[13] Edward Choi, Siddharth Biswal, Bradley Malin, Jon Duke, Walter F Stewart, and Jimeng Sun. Generating
+multi-label discrete patient records using generative adversarial networks. arXiv preprint arXiv:1703.06490,
+2017.
+[14] Pranav Rajpurkar, Jeremy Irvin, Kaylie Zhu, Brandon Yang, Hershel Mehta, Tony Duan, Daisy Ding, Aarti
+Bagul, Curtis Langlotz, Katie Shpanskaya, et al. Chexnet: Radiologist-level pneumonia detection on chest
+x-rays with deep learning. arXiv preprint arXiv:1711.05225, 2017.
+[15] Varun Gulshan, Lily Peng, Marc Coram, Martin C Stumpe, Derek Wu, Arunachalam Narayanaswamy,
+Subhashini Venugopalan, Kasumi Widner, Tom Madams, Jorge Cuadros, et al. Development and validation
+of a deep learning algorithm for detection of diabetic retinopathy in retinal fundus photographs. Jama,
+316(22):2402–2410, 2016.
+[16] Diego Ardila, Atilla P Kiraly, Sujeeth Bharadwaj, Bokyung Choi, Joshua J Reicher, Lily Peng, Daniel
+Tse, Mozziyar Etemadi, Wenxing Ye, Greg Corrado, et al. End-to-end lung cancer screening with threedimensional deep learning on low-dose chest computed tomography. Nature medicine, 25(6):954–961,
+2019.
+[17] Y Fujisawa, Y Otomo, Y Ogata, Y Nakamura, R Fujita, Y Ishitsuka, R Watanabe, N Okiyama, K Ohara,
+and M Fujimoto. Deep-learning-based, computer-aided classifier developed with a small dataset of clinical
+images surpasses board-certified dermatologists in skin tumour diagnosis. British Journal of Dermatology,
+180(2):373–381, 2019.
+[18] Eirini Arvaniti, Kim S Fricker, Michael Moret, Niels Rupp, Thomas Hermanns, Christian Fankhauser,
+Norbert Wey, Peter J Wild, Jan H Rueschoff, and Manfred Claassen. Automated gleason grading of prostate
+cancer tissue microarrays via deep learning. Scientific reports, 8(1):1–11, 2018.
+[19] Aly A Mohamed, Wendie A Berg, Hong Peng, Yahong Luo, Rachel C Jankowitz, and Shandong Wu. A deep
+learning method for classifying mammographic breast density categories. Medical physics, 45(1):314–321,
+2018.
+[20] Adam Jacobi, Michael Chung, Adam Bernheim, and Corey Eber. Portable chest x-ray in coronavirus
+disease-19 (covid-19): A pictorial review. Clinical Imaging, 2020.
+[21] Lawrence H Schwartz, David M Panicek, Alexandra R Berk, Yuelin Li, and Hedvig Hricak. Improving
+communication of diagnostic radiology findings through structured reporting. Radiology, 260(1):174–181,
+2011.
+[22] Charles E Kahn Jr, Curtis P Langlotz, Elizabeth S Burnside, John A Carrino, David S Channin, David M
+Hovsepian, and Daniel L Rubin. Toward best practices in radiology reporting. Radiology, 252(3):852–856,
+2009.
+[23] Baoyu Jing, Pengtao Xie, and Eric Xing. On the automatic generation of medical imaging reports. arXiv
+preprint arXiv:1711.08195, 2017.
+[24] Baoyu Jing, Zeya Wang, and Eric Xing. Show, describe and conclude: On exploiting the structure
+information of chest x-ray reports. arXiv preprint arXiv:2004.12274, 2020.
+[25] Yuan Li, Xiaodan Liang, Zhiting Hu, and Eric P Xing. Hybrid retrieval-generation reinforced agent for
+medical image report generation. In Advances in neural information processing systems, pages 1530–1540,
+2018.
+[26] Ming-Yu Liu and Oncel Tuzel. Coupled generative adversarial networks. In Advances in neural information
+processing systems, pages 469–477, 2016.
+[27] Phillip Isola, Jun-Yan Zhu, Tinghui Zhou, et al. Image-to-image translation with conditional adversarial
+networks. In Proceedings of the IEEE conference on computer vision and pattern recognition (CVPR),
+2017.
+
+10
+
+[28] Jun-Yan Zhu, Richard Zhang, Deepak Pathak, et al. Toward multimodal image-to-image translation. In
+Advances in neural information processing systems (NeurIPS), 2017.
+[29] Jun-Yan Zhu, Taesung Park, Phillip Isola, et al. Unpaired image-to-image translation using cycle-consistent
+adversarial networks. In Proceedings of the IEEE international conference on computer vision (ICCV),
+2017.
+[30] Yunjey Choi, Minje Choi, Munyoung Kim, et al. Stargan: Unified generative adversarial networks for
+multi-domain image-to-image translation. In Proceedings of the IEEE conference on computer vision and
+pattern recognition (CVPR), 2018.
+[31] Yunjey Choi, Youngjung Uh, Jaejun Yoo, et al. Stargan v2: Diverse image synthesis for multiple domains.
+CVPR, 2020.
+[32] Yunchen Pu, Shuyang Dai, Zhe Gan, Weiyao Wang, Guoyin Wang, Yizhe Zhang, Ricardo Henao, and
+Lawrence Carin. Jointgan: Multi-domain joint distribution learning with generative adversarial nets. arXiv
+preprint arXiv:1806.02978, 2018.
+[33] Sheng-Wei Huang, Che-Tsung Lin, Shu-Ping Chen, Yen-Yi Wu, Po-Hao Hsu, and Shang-Hong Lai.
+Auggan: Cross domain adaptation with gan-based data augmentation. In Proceedings of the European
+Conference on Computer Vision (ECCV), pages 718–731, 2018.
+[34] Antreas Antoniou, Amos Storkey, and Harrison Edwards. Data augmentation generative adversarial
+networks. arXiv preprint arXiv:1711.04340, 2017.
+[35] Alec Radford, Luke Metz, and Soumith Chintala. Unsupervised representation learning with deep
+convolutional generative adversarial networks. arXiv preprint arXiv:1511.06434, 2015.
+[36] Bo Dai, Sanja Fidler, Raquel Urtasun, and Dahua Lin. Towards diverse and natural image descriptions
+via a conditional gan. In Proceedings of the IEEE International Conference on Computer Vision, pages
+2970–2979, 2017.
+[37] Diederik P Kingma and Max Welling. Auto-encoding variational bayes. arXiv preprint arXiv:1312.6114,
+2013.
+[38] Durk P Kingma and Prafulla Dhariwal. Glow: Generative flow with invertible 1x1 convolutions. In
+Advances in Neural Information Processing Systems, pages 10215–10224, 2018.
+[39] Laurent Dinh, David Krueger, and Yoshua Bengio. Nice: Non-linear independent components estimation.
+arXiv preprint arXiv:1410.8516, 2014.
+[40] Laurent Dinh, Jascha Sohl-Dickstein, and Samy Bengio. Density estimation using real nvp. arXiv preprint
+arXiv:1605.08803, 2016.
+[41] Aaron van den Oord, Nal Kalchbrenner, and Koray Kavukcuoglu. Pixel recurrent neural networks. arXiv
+preprint arXiv:1601.06759, 2016.
+[42] Aaron Van den Oord, Nal Kalchbrenner, Lasse Espeholt, Oriol Vinyals, Alex Graves, et al. Conditional
+image generation with pixelcnn decoders. In Advances in neural information processing systems, pages
+4790–4798, 2016.
+[43] Tim Salimans, Ian Goodfellow, Wojciech Zaremba, Vicki Cheung, Alec Radford, and Xi Chen. Improved
+techniques for training gans. In NIPS, pages 2226–2234, 2016.
+[44] Martin Arjovsky, Soumith Chintala, and Léon Bottou. Wasserstein gan. arXiv preprint arXiv:1701.07875,
+2017.
+[45] Takeru Miyato and Masanori Koyama.
+arXiv:1802.05637, 2018.
+
+cgans with projection discriminator.
+
+arXiv preprint
+
+[46] Han Zhang, Ian Goodfellow, Dimitris Metaxas, and Augustus Odena. Self-attention generative adversarial
+networks. arXiv preprint arXiv:1805.08318, 2018.
+[47] Xiaosong Wang, Yifan Peng, Le Lu, Zhiyong Lu, and Ronald M Summers. Tienet: Text-image embedding
+network for common thorax disease classification and reporting in chest x-rays. In Proceedings of the
+IEEE conference on computer vision and pattern recognition, pages 9049–9058, 2018.
+[48] Fausto Milletari, Nassir Navab, and Seyed-Ahmad Ahmadi. V-net: Fully convolutional neural networks
+for volumetric medical image segmentation. In 2016 Fourth International Conference on 3D Vision (3DV),
+pages 565–571. IEEE, 2016.
+[49] Guanxiong Liu, Tzu-Ming Harry Hsu, Matthew McDermott, Willie Boag, Wei-Hung Weng, Peter Szolovits,
+and Marzyeh Ghassemi. Clinically accurate chest x-ray report generation. arXiv preprint arXiv:1904.02633,
+2019.
+[50] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition.
+In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 770–778, 2016.
+
+11
+
+[51] Gao Huang, Zhuang Liu, Laurens Van Der Maaten, and Kilian Q Weinberger. Densely connected
+convolutional networks. In Proceedings of the IEEE conference on computer vision and pattern recognition,
+pages 4700–4708, 2017.
+[52] Kyunghyun Cho, Bart Van Merriënboer, Caglar Gulcehre, Dzmitry Bahdanau, Fethi Bougares, Holger
+Schwenk, and Yoshua Bengio. Learning phrase representations using rnn encoder-decoder for statistical
+machine translation. arXiv preprint arXiv:1406.1078, 2014.
+[53] Alistair EW Johnson, Tom J Pollard, Seth Berkowitz, Nathaniel R Greenbaum, Matthew P Lungren,
+Chih-ying Deng, Roger G Mark, and Steven Horng. Mimic-cxr: A large publicly available database of
+labeled chest radiographs. arXiv preprint arXiv:1901.07042, 1(2), 2019.
+[54] Ramakrishna Vedantam, C Lawrence Zitnick, and Devi Parikh. Cider: Consensus-based image description
+evaluation. In Proceedings of the IEEE conference on computer vision and pattern recognition, pages
+4566–4575, 2015.
+[55] Kishore Papineni, Salim Roukos, Todd Ward, and Wei-Jing Zhu. Bleu: a method for automatic evaluation
+of machine translation. In Proceedings of the 40th annual meeting on association for computational
+linguistics, pages 311–318. Association for Computational Linguistics, 2002.
+[56] Joseph Paul Cohen, Paul Morrison, and Lan Dao. Covid-19 image data collection. arXiv 2003.11597,
+2020.
+[57] Jeremy Irvin, Pranav Rajpurkar, Michael Ko, Yifan Yu, Silviana Ciurea-Ilcus, Chris Chute, Henrik
+Marklund, Behzad Haghgoo, Robyn Ball, Katie Shpanskaya, et al. Chexpert: A large chest radiograph
+dataset with uncertainty labels and expert comparison. In Proceedings of the AAAI Conference on Artificial
+Intelligence, volume 33, pages 590–597, 2019.
+[58] Mehdi Mirza and Simon Osindero. Conditional generative adversarial nets. arXiv preprint arXiv:1411.1784,
+2014.
+[59] Diederik P Kingma and Jimmy Ba. Adam: A method for stochastic optimization. arXiv preprint
+arXiv:1412.6980, 2014.
+[60] Spyros Gidaris, Praveer Singh, and Nikos Komodakis. Unsupervised representation learning by predicting
+image rotations. arXiv preprint arXiv:1803.07728, 2018.
+[61] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter. Gans
+trained by a two time-scale update rule converge to a local nash equilibrium. In Advances in neural
+information processing systems, pages 6626–6637, 2017.
+
+12
+
+6
+
+Supplementary
+
+6.1
+
+Preliminaries: Generative Adversarial Networks
+
+The Generative Adversarial Network (GAN) involves a Generator (G) and a Discriminator (D) network. The
+purpose of Generator (G) is to map random noise to samples, while the Discriminator (D) classifies real and
+generated samples. The generator builds a mapping function from a prior noise distribution pz (z) to data space
+as G(z) to learn a generator distribution pg , while the discriminator D(x) outputs a single scalar representing
+the probability that x came form training data rather than pg where pdata is the real data distribution. The
+basic GAN objective function seeks a Nash equilibrium to the following two player min-max problem where
+value function is defined as minG maxD V (D, G) = Ex∼pdata (x) [log D(x)] + Ez∼p(z) [log(1 − D(G(z)))]
+[3] where z ∈ Rdz is a latent variable drawn from distribution p(z) such as the unit Gaussian N (0, I)
+or the unit uniform U[−1, 1]. Generative adversarial networks can be extended to conditional versions if
+the generators and discriminators are conditioned on label information y[58]. The condition information
+y and p(z) are combined in the joint representation of the generator. The discriminator is provided with
+generated samples and labels y as inputs. The objective function can be modified as minG maxD V (D, G) =
+Ex∼pdata (x) [log D(x|y)] + Ez∼pz (z) [log(1 − D(G(z|y)))]
+
+6.2
+6.2.1
+
+EMIXER: Architecture Details
+Notations Table
+
+We used these notations to describe different modules. The notations are described in table 4.
+
+6.2.2
+
+Symbol
+
+Definition and description
+
+In
+Sn
+În
+Ŝn
+E
+yn .
+wNs
+z
+G(. )
+Dimage (. )
+Dreport (.)
+Djoint (.)
+F(. )
+
+Notation for X-ray Images
+Notation for sentences in the X-ray report
+Generated X-ray images
+Generated X-ray reports
+Dataset consisting of images, reports and labels
+Notation for labels associated with images
+Words in the sentences of X-ray report
+Noise vector for the generator
+Generator Neural Network
+X-ray image discriminator Neural Network
+Discriminator Neural Network
+Discriminator Neural Network
+Report Generator Network
+Table 6: Notations used in EMIXER
+
+EMIXER Model
+
+In this section, we provide further description of the different neural networks within in EMIXER.
+X-ray Image Generator(G): Figure 3 shows the architecture of the image generator. X-ray image generator
+accepts two inputs: (a) noise vector z ∈ R120 (b) class information y represented as one-hot vector. We
+embed the class information y via a linear layer to obtain vector yemb ∈ R128 . It has been shown generators
+can use the latent space to influence features at different resolutions by providing direct connections from
+noise vector to different layers of the generator. We split the noise vector z to obtain different smaller vectors
+zspl ∈ R20 (https://pytorch.org/docs/master/generated/torch.split.html). The vectors zspl is passed through
+a linear layer to obtain zin , zin = fc(zspl ). We concatenate zin with yemb which is passed through three
+layers of Res-block-up [50]. We have provided the details of this convolution block in table 7. We use h, w
+to denote input height and width and ci , co are input and output channels for the Res-block-up. The output
+from the previous layer and the concatenated vector from zin , yemb is provided as input to each of the residual
+block. The final residual output resout is passed through a self-attention block which applies applies a 1 × 1
+convolution operation with softmax to obtain intermediate feature vectors which are combined with the original
+input to compute the att-block, attout = self-att-block(resout ). Finally this output self-att-block is passed
+through another res-block to obtain the Î as the output of generator.
+X-ray Image Discriminator (Dimage ): Figure 4 shows the architecture of the X-ray image discriminator. X-ray
+image discriminator is used to distinguish between real and fake X-ray images. The discriminator takes an X-ray
+image I ∈ R128×128×3 as an input. Image I is passed through multiple layers of residual convolutional blocks
+Res-block-Down. We have provided the details of the convolution block in table ??. We use h, w to denote
+input height and width and ci , co are input and output channels for the Res-block-Down. In each residual
+
+13
+
+Figure 3: Architectural layout of EMIXER image generator G
+
+Table 7: Details of Res-block-up for generator
+Layer
+Kernel Output
+Shortcut
+[1,1,1] 2h × 2w × co
+condBN, ReLU −
+h × w × ci
+Conv
+[3,3,1] 2h × 2w × co
+condBN, ReLU −
+2h × 2w × co
+Conv
+[3,3,1] 2h × 2w × co
+Addition
+−
+2h × 2w × co
+
+convolutional block the number of channels is doubled to process the previous layers input. The intermediate
+feature vector obtained from the residual blocks is passed through a pooling layer and ReLU activation layer.
+Finally we combine it with the projected condition vector and pass there through a linear layer to obtain the final
+output.
+X-ray Report Generator (F): We describe the architecture of the X-ray report generation module in Figure 5.
+The report generation component contains three different sub-components: (a) Image encoder CNN (b) Sentence
+LSTM (c) Word LSTM. The image encoder CNN takes an X-ray image as input and produces feature vectors.
+This CNN model is pre-trained on X-ray images I using a DenseNet model. The sentence LSTM produces topic
+vectors ti which are used as input for word LSTMs to produce the words. After the word LSTM produces all
+the words, the words are combined to create the final report S.
+
+Table 8: Details of Res-block-Down for discriminator.
+Layer
+kernel Output
+Shortcut [1,1,1] h/2 × w/2 × co
+ReLU
+−
+h × w × ci
+Conv
+[3,3,1] h × w × co
+ReLU
+−
+h × w × co
+Conv
+[3,3,1] h/2 × w/2 × co
+Addition −
+h/2 × w/2 × co
+14
+
+Figure 4: Architectural layout of EMIXER image generator DImage
+
+Figure 5: Architectural layout of EMIXER report generator F
+
+X-ray Report Discriminator (Dreport ): As we show in the figure 6, the X-ray report S is passed as input to
+the LSTM. LSTMs have been used to represent paragraphs and sentences to produce context vectors. We use
+the final representation obtained from the LSTM and pass that to a linear layer. This is finally passed through a
+softmax layer to obtain the probability of real or fake.
+
+Figure 6: Architectural layout of EMIXER text discriminator DReport
+Joint Discriminator (Djoint ) As shown in figure 7, the X-ray report S and image I are used to create a joint
+embedding. X-ray images I is passed through CNN to obtain an X-ray image feature vector fv . X-ray report S is
+passed through a LSTM to obtain the final representation of the report fs . The feature vectors are concatenated
+together to obtain a joint embedding Cjoint . This is finally passed through a linear layer and softmax layer to
+obtain the probability of embedding being real or fake.
+
+Figure 7: Architectural layout of EMIXER image generator DJoint
+6.3
+6.3.1
+
+Appendix B Experimental Details
+Dataset Details
+
+We used MIMIC-CXR dataset consisting of X-ray images and reports [53]. This data set was collected from
+Beth Israel Deaconess Hospital. We apply pre-processing to remove duplicated samples from this dataset. The
+Radiology reports typically contain an impression and findings section. We extracted the finding section from
+the report for training our models. We apply tokenization and only keep tokens with at least 6 occurrences in the
+corpus for training purposes.
+
+15
+
+6.3.2
+
+Architecture and hyperparameters
+
+We use Adam optimizer with a learning rate of 5 · 10−5 for the generative model and 2 · 104 for the discriminators
+for training EMIXER [59]. We staggered discriminator steps and generator steps in 2:1 ratio which led to 400k
+(800k) generator (discriminator) steps. This helps the discriminator improve it’s parameter update process faster
+compared to a generator. We fix our batch size at 512 while training. We use a noise vector of 120 dimensions as
+input for the generator. We also use spectral normalization for the layers in the generator and discriminator in
+the training process. All the models generate 128 × 128 × 3 X-ray images. We obtain partially labeled data sets
+for the self-supervised experiments by randomly selecting 30% of the samples from each class. We rotate the
+images and use the rotation angles as labels for self-supervision [60].
+
+6.3.3
+
+Evaluation Metrics
+
+Fréchet Inception Distance (FID score): We first pass real data and generated samples embedded in a
+specific layer of special pre-trained Inception network on chest X-ray images instead of ImageNet [61].
+2
+Then,
+ a multivariate Gaussian
+ is fit to the data and the distance computed as FID(x, g) = kµx − µg k2 +
+1
+
+Tr Σx + Σg − 2 (Σx Σg ) 2 where µ and Σ denote the empirical mean, covariance and subscripts x and g
+denote the real and generated data respectively.
+
+6.4
+
+Results
+
+6.4.1
+
+Phenotype Classification from X-ray Images with augmented data
+
+We report the performance of EMIXER and the baseline models for different phenotype detection from chest
+X-ray images. The setup for this experiment is similar where we train two models on real X-ray images and
+generated X-ray images. These trained models are evaluated on held-out X-ray images. The performance of the
+test X-ray images are reported in Table 9
+
+Table 9: Performance of X-ray image classification using synthetic X-ray
+Dataset
+
+MIMIC
+
+6.4.2
+
+Method
+Real data [100k images]
+CoGAN [100k images]
+JointGAN [100k images]
+EMIXER [100k images]
+
+Cardiomegaly
+
+Consolidation
+
+Pleural Effusion
+
+Pneumothorax
+
+Pulmonary Edema
+
+0.812
+0.741
+0.732
+0.784
+
+0.847
+0.817
+0.785
+0.734
+
+0.753
+0.708
+0.724
+0.728
+
+0.735
+0.713
+0.681
+0.715
+
+0.732
+0.682
+0.713
+0.718
+
+Performance comparison of augmented data to real data
+
+We performed an experiment to evaluate augmented datasets in comparison to real datasets of similar size. In
+this setup, we keep the total size of the dataset constant at 100k and change the ratio of real and synthetic images.
+We present the results of this experiment in Table 10. This experiment evaluates the performance of augmented
+datasets where the total dataset size is low. We show that even when we use 80% fewer real images, augmented
+datasets only show 6% decrease in performance. This shows that even with low-data availability, synthetic data
+augmentation can perform competitively compared to models trained only on real X-ray images.
+
+6.4.3
+
+Additional generated data samples
+
+In figures 8 and 9, we show additional generated X-ray image,report pairs in comparison to real X-ray image
+and report pairs. Figure 10 and 11 show comparison of real X-ray images to synthetic X-ray images. Finally,
+figure 12 shows more synthetic X-ray images.
+
+16
+
+Table 10: X-ray image classification performance comparison with EMIXER augmented data. Dataset
+size at 100k while reducing the amount of real images in the augmented dataset. In this table, R
+indicates Real data and S indicate Synthetic data.
+Method
+Data
+AUC Acc
+Only Real
+
+R100k
+
+.824
+
+.846
+
+JointGAN
+
+R90k + S10k
+R80k + S20k
+R60k + S40k
+R20k + S80k
+
+.796
+.778
+.745
+.717
+
+.813
+.801
+.764
+.732
+
+CoGAN
+
+R90k + S10k
+R80k + S20k
+R60k + S40k
+R20k + S80k
+
+.784
+.771
+.736
+.712
+
+.808
+.796
+.757
+.746
+
+SMGAN
+
+R90k + S10k
+R80k + S20k
+R60k + S40k
+R20k + S80k
+
+.794
+.764
+.742
+.723
+
+.812
+.783
+.763
+.742
+
+EMIXER
+
+R90k + S10k
+R80k + S20k
+R60k+ S40k
+R20k + S80k
+
+.808
+.792
+.773
+.756
+
+.828
+.821
+.796
+.774
+
+17
+
+There is bibasilar atelectasis. The aortic
+knob is calcified. Cardiac silhouette is
+stable. The colon is seen beneath the
+right hemidiaphragm. Chain sutures
+project over the right upper lung.
+Known right hilar mass and hilar
+lymphadenopathy. No pneumothorax.
+
+Real Sample
+
+Lung volumes are low. There is
+improved aeration of the left
+base. There is a small right pleural
+effusion with associated
+compressive atelectasis.
+
+Synthetic Sample
+
+There is no evidence of
+complication. No
+pneumothorax is present. The
+radiograph is normal. Cardiac
+size is normal.
+
+No definitive pneumothorax is
+seen. Right basal opacity appears
+to be slightly improved since the
+prior study. Heart size and
+mediastinum are unchanged.
+
+Elevation of the right hemidiaphragm,
+caused by slightly distended right bowel
+loops. Atelectasis at the right lung bases
+and mild parenchymal opacities in the
+lateral parts of the right upper lobe base.
+These have not substantially changed as
+compared to the prior image. Moderate
+cardiomegaly with moderate tortuosity of
+the thoracic aorta. No pleural effusions.
+
+Lung volumes have increased, likely
+reflecting a deeper inspiration. The
+evidence of lymphadenopathy has
+decreased, the hilar structures are
+better defined and less dense than
+on the previous exam. The size of
+the cardiac silhouette has slightly
+decreased.
+
+Cardiac and mediastinal silhouettes
+are stable with the cardiac
+silhouette top-normal to mildly
+enlarged although likely exaggerated
+by relatively low lung volumes. Heart
+is mildly enlarged.
+
+Heart size is normal. Mediastinum
+is normal. The res interval
+improvement of the right upper
+lung opacification after the right
+upper lobe wedge resection
+with stable appearance of the
+postsurgical changes. Left lung is
+clear.
+
+Figure 8: Comparison of Real X-ray image and report pairs with generated X-ray images, reports
+pairs
+
+18
+
+Real Sample
+
+Synthetic Sample
+
+Again seen is a tiny right apical
+pneumothorax, similar to the prior film.
+Also again seen is subcutaneous
+emphysema in the right
+supraclavicular/right neck and right flank
+regions. Again seen is minimal patchy
+opacity at both lung bases, with slight
+blunting of both costophrenic angles
+
+There is bibasilar atelectasis. The
+aortic knob is calcified. The cardiac
+silhouette is stable. The colon is seen
+beneath the right hemidiaphragm.
+Chain sutures project over the right
+upper lung. Known right hilar mass
+and hilar lymphadenopathy. No
+pneumothorax.
+
+The cardiac silhouette is mildly enlarged.
+There is increased opacity at the right
+lung base. No pleural effusion or
+pneumothorax.
+
+Atelectasis are seen at the left base.
+The right base is
+clear. No vascular congestion or
+acute focal pneumonia.
+Right IJ catheter again extends to
+the lower portion of the SVC.
+
+There is bibasilar atelectasis. The aortic
+knob is calcified. Cardiac silhouette is
+stable. The colon is seen beneath the
+right hemidiaphragm. Chain sutures
+project over the right upper lung.
+Known right hilar mass and hilar
+lymphadenopathy. No pneumothorax.
+
+Lung volumes are low. There is
+improved aeration of the left
+base. There is a small right pleural
+effusion with associated
+compressive atelectasis.
+
+Figure 9: Comparison Real
+of Real
+X-ray image and report pairs with generated X-ray images, reports
+Sample
+Synthetic Sample
+pairs
+
+No definitive pneumothorax is
+seen. Right basal opacity appears
+to be slightly improved since the
+prior study. Heart size and
+mediastinum are unchanged.
+
+19
+
+There is no evidence of
+complication. No
+pneumothorax is present. The
+radiograph is normal. Cardiac
+size is normal.
+
+Figure 10: figure
+Real X-ray images
+
+Figure 11: figure
+Synthetic X-ray images
+
+Figure 12: Samples of Synthetic X-ray images
+
+20
+
+

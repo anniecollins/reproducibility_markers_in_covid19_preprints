@@ -1,0 +1,515 @@
+3D U-N ET FOR SEGMENTATION OF COVID-19 ASSOCIATED
+PULMONARY INFILTRATES USING TRANSFER LEARNING :
+S TATE - OF - THE - ART RESULTS ON AFFORDABLE HARDWARE
+A P REPRINT
+
+arXiv:2101.09976v1 [eess.IV] 25 Jan 2021
+
+Keno K. Bressem
+Department of Radiology
+Charité Universitätsmedizin Berlin
+keno-kyrill.bressem@charite.de
+Bernd Hamm
+Department of Radiology
+Charité Universitätsmedizin Berlin
+
+Stefan M. Niehues
+Department of Radiology
+Charité Universitätsmedizin Berlin
+
+Marcus R. Makowski
+Department of Radiology
+Technische Universität München
+
+Janis L. Vahldiek∗
+Department of Radiology
+Charité Universitätsmedizin Berlin
+
+Lisa C. Adams*
+Department of Radiology
+Charité Universitätsmedizin Berlin
+
+January 26, 2021
+
+A BSTRACT
+Segmentation of pulmonary infiltrates can help assess severity of COVID-19, but manual segmentation
+is labor and time-intensive. Using neural networks to segment pulmonary infiltrates would enable
+automation of this task. However, training a 3D U-Net from computed tomography (CT) data is
+time- and resource-intensive. In this work, we therefore developed and tested a solution on how
+transfer learning can be used to train state-of-the-art segmentation models on limited hardware and
+in shorter time. We use the recently published RSNA International COVID-19 Open Radiology
+Database (RICORD) to train a fully three-dimensional U-Net architecture using an 18-layer 3D
+ResNet, pretrained on the Kinetics-400 dataset as encoder. The generalization of the model was then
+tested on two openly available datasets of patients with COVID-19, who received chest CTs (Corona
+Cases and MosMed datasets). Our model performed comparable to previously published 3D U-Net
+architectures, achieving a mean Dice score of 0.679 on the tuning dataset, 0.648 on the Coronacases
+dataset and 0.405 on the MosMed dataset. Notably, these results were achieved with shorter training
+time on a single GPU with less memory available than the GPUs used in previous studies.
+Keywords COVID-19 · U-Net · Segmentation · Computed Tomography
+
+1
+
+Introduction
+
+The Coronavirus Disease-2019 (COVID-19) is an infectious disease of the respiratory tract and lungs, with more than 80
+million confirmed cases worldwide and nearly two million deaths in early 2021 [1]. For the management of COVID-19,
+rapid diagnosis is critical to quickly isolate affected patients and prevent further spread of the disease [2].
+Presently, the diagnostic standard for COVID-19 is real-time reverse transcription polymerase chain reaction (RT-PCR)
+from pharyngeal or deep nasal swaps [3]. However, in the clinical setting, computed tomography (CT) is increasingly
+used in patients with suspected COVID-19. The role of CT to diagnose COVID-19 has been critically debated, and
+∗
+
+contributed equally
+
+A PREPRINT - JANUARY 26, 2021
+
+currently there is consensus that CT should not be used in place of RT-PCR [4]. Nevertheless, CT remains an important
+tool for assessing pulmonary infiltrates associated with COVID-19 and for estimating the severity of the disease [5]. On
+CT imaging, COVID-19 typically shows multifocal ground glass opacities as well as consolidations in predominantly
+peripheral and basal distribution [6]. Although the relationship is not strictly linear, a larger affected lung area is
+associated with more severe disease. Therefore, knowing how much of the lung is affected by COVID-19 may allow a
+more accurate assessment of disease severity.
+Manual segmentation of the affected lung area is a tedious task. In their recent work, Ma et al. manually segmented
+20 openly available CT scans of patients affected by COVID-19 an reported a mean duration of 400 minutes per CT
+volume [7]. Clearly, this amount of time is too high to be implemented in routine clinical practice, and research is being
+conducted on methods to automate these tasks. One of the most promising techniques for automatic segmentation is
+deep neural networks, in particular the U-Net architecture [8].
+U-Nets consist of a down-sampling block that extracts features from input images and an up-sampling part that generates
+segmentation masks form the previously extracted features. Spatial information decreases in the deeper layers of a
+convolutional neural network; therefore, the U-Net has skip connections that allow the up-sampling block to use both the
+feature information of the deeper layers as well as the spatial information from earlier layers to generate high-resolution
+segmentation masks [8]. An advantage of the U-Net architecture is the relatively small amount of data required to
+obtain accurate results, which is especially important in medical imaging where data are usually sparse [8][9]. However,
+a drawback is the higher memory requirements of the U-Net, since multiple copies of feature maps must be kept in
+memory to enable the skip connections, so that training a U-Net either requires access to multiple graphics processing
+units (GPUs) to perform distributed training with a larger batch size, or the batch size must be greatly reduced. This is
+even more important when U-Nets are extended to three-dimensional space, since each item in a batch of 3D data is
+even larger. Another method to increase the accuracy of a model on limited data is to use transfer learning, where a
+model architecture is first trained on another task, and then fine-tuned on a novel task [10].
+In this work, we developed and evaluated an approach to effectively train a fully three-dimensional U-Net in a single
+GPU achieving state-of-the-art accuracy by using transfer learning.
+
+2
+2.1
+
+Materials and Methods
+Datasets and Annotations
+
+Three openly available datasets of CT scans from patients affected by COVID-19 are used in this work. These include
+the following:
+• RSNA International COVID-19 Open Radiology Database (RICORD) [11]
+• MosMedData [12]
+• COVID-19 CT Lung and Infection Segmentation Dataset [7]
+RICORD is a multi-institutional and multi-national, expert annotated dataset of chest CT and radiographs. It consists of
+three different collections:
+• Collection 1a includes 120 CT studies from 110 patients with COVID-19, in which the affected lung areas
+were segmented pixel by pixel.
+• Collection 1b contains 120 studies of 117 patients without evidence of COVID-19
+• Collection 1c contains 1,000 radiographs from 361 patients with COVID-19
+Only collection 1a was included in the present work.
+The MosMedData contains data from a single institution. Overall, 1,110 studies are included in the dataset. Pixel-wise
+segmentation of COVID-19-associated pulmonary infiltrates is available for 50 studies in the MosMedData, which we
+used for our work.
+The COVID-19 CT Lung and Infection Segmentation Dataset consists of ten CT volumes from the Coronacases
+Initiative and ten CT volumes extracted from Radiopaedia, for which the authors have added a pixel-wise segmentation
+of infiltrates. Because the ten CT volumes extracted from Radiopaedia have already been windowed and converted to
+PNG (Portable Network Graphics) format, we included only the ten Coronacases Initiative volumes in this study.
+2.2
+
+Data Preparation
+
+The RICORD data are provided as DICOM (Digital Imaging and Communications in Medicine) slices for the different
+CT images, and the annotations are available in JSON format. We used SimpleITK to read the DICOM slices, scale the
+2
+
+A PREPRINT - JANUARY 26, 2021
+
+images according to the rescale intercept and rescale slope, and clip the pixel-values to the range of -2000 and +500
+[13]. The annotations were converted from JSON (JavaScript Object Notation) to a pixel array and matched to the
+respective DICOM slice using the study- and SOP instance UID. Both the original volume and annotations were then
+stored in NIfTI (Neuroimaging Informatics Technology Initiative) format.
+The MosMedData and COVID-19 CT Lung and Infection Segmentation Dataset were already available in NIfTI format,
+so no further preprocessing was performed.
+2.3
+
+Model Architecture
+
+The 3D U-Net architecture was implemented using PyTorch (version 1.7.0) [14] and fastai (version 2.1.10) [15]. We
+used a fully three-dimensional U-Net architecture for CT volume segmentation. The encoder part consisted of an
+18-layer 3D ResNet, as described by Tran et al., pretrained on the Kinetics-400 dataset [16]. We removed the fully
+connected layers from the 3D ResNet and added an additional 3D convolutional layer and four upscaling blocks.
+Each upscaling block consisted of one transposed convolutional layer and two normal convolutional layers. Each
+convolutional layer was followed by a rectified linear unit (ReLU) as activation function. Instance normalization was
+applied to the lower layer features before the double convolution was performed. The final block of the U-Net consisted
+of a single residual block without dilation and a single convolutional layer with a kernel size and stride of one for
+pooling of the feature maps. The model architecture is visualized in the Figure 1.
+
+Figure 1: A schematic overview of the network architecture. As the encoder was pre-trained on color images, the expected input
+size was B x 3 x D x H x W, where B is the batch dimension, D the number of slices and H and W the height and width of each slice.
+To meet this requirement, the input images were tripled and stacked on the color channel. The encoder consisted out of a basic stem
+with single convolution, batch normalization and a rectified linear unit. Then, four 3D Residual Block (ResBlock) were sequentially
+connected to extract the image features. After each ResBlock, a skip connection to the upscaling blocks was implemented. The
+lower-level features were passed from the last encoder block to a double convolutional layer and then to four sequentially connected
+upscaling blocks. Each upscaling block consisted of a transposed convolution, which increased the spatial resolution of the feature
+maps and a double convolutional layer which received the output from the transposed convolution along with the feature maps from
+the skip connection. The final block of the decoder was again a ResBlock, which reduced the number of feature maps to the specified
+number of output classes.
+
+3
+
+A PREPRINT - JANUARY 26, 2021
+
+2.4
+
+Model Training
+
+We randomly split the RICORD dataset into a training (85%) and a tuning (15%) dataset and used both the MosMedData
+and COVID-19 CT lung and infection segmentation datasets as hold-out datasets to only evaluate the trained model.
+A progressive resizing approach was used in which we first trained the U-Net on volumes consisting of 18 slices with a
+resolution of 112 x 112 px per slice, allowing to use a batch size of 6. In a second training session, we increased the
+resolution to 256 x 256 px for 20 slices and used a batch-size of 1.
+During training, we used various augmentations, including perspective distortion, rotation, mirroring, adjusting contrast
+and brightness, and adding random Gaussian noise to the volumes. For the loss function, we used a combination of the
+dice loss (as described by Milletari et al. [17]) and pixel-wise cross-entropy loss.
+Regarding the learning rate, we used the cyclic learning rate approach described by Leslie Smith, as implemented in
+fastai [18]. Here, one specifies a base learning rate at the beginning of the training, which is then varied cyclically
+during each epoch. In addition, the first epochs of the training were warm-up epochs, in which only a fraction of the
+final learning rate is used.
+For the first training session, the weights of the pretrained encoder were not allowed to change for the first 10 epochs,
+and only the randomly initialized weights of the decoder part of the U-Net were trained. To do this, we used a base
+learning rate of 0.01. We then trained the model for 200 more epochs with a base learning rate of 0.001 and a weight
+decay of 1e-5. During training, the Dice score on the tuning data was monitored and the checkpoint of the model that
+achieved the highest dice score was reloaded after training.
+For the second training session on the higher resolution input data, we set the learning rate to 1e-4 and the weight decay
+to 1e-5, training for 200 epochs and saving the checkpoint with the highest Dice score.
+All training was performed on a single GPU (NVIDIA GeForce RTX 2080ti) with 11 GB of available VRAM.
+
+3
+
+Results
+
+The 3D U-Net was trained on the RICORD data (n = 117 CT volumes) which was randomly split into a training dataset
+consisting out of 100 volumes (85%) and a tuning dataset of 17 volumes (15%). The total training duration was 10
+hours and 49 minutes with an average duration of 45 seconds per epoch for the lower input resolution and 2:30 minutes
+for the higher image resolution. While at the beginning of each training session the loss on the training data was higher
+than on the tuning data, the overall training loss showed a faster decline so that after 200 epochs it was slightly lower
+than the loss on the tuning data. After 200 epochs, however, we found no obvious signs of overfitting, as the average
+valid loss was still slowly decreasing
+3.1
+
+Dice score
+
+The Dice score was used to compare the original segmentation mask with the predicted mask. There are several
+implementations of the Dice score available that may affect the calculated score and thus limit comparability. We used
+the implementation by Ma et al., for which the code is freely available [7].
+Because the lung areas affected by COVID-19 can differ substantially from case to case, we calculated the Dice score for
+each patient and then macro-averaged the scores. This resulted in slightly poorer scores compared with micro-averaging
+across the entire data set but is more similar to clinical feasibility.
+We obtained the highest scores on the tuning dataset with a mean Dice score of 0.679 and a standard deviation of 0.13.
+When applied to new datasets, the performance of the segmentation model decreased with a mean Dice score of 0.648 ±
+0.132 for the Coronacases from the COVID-19 CT Lung and Infection Segmentation Dataset, and 0.405 ± 0.213 for the
+MosMed dataset. A summary of the Dice scores achieved on the datasets is shown in Table 1.
+Table 1: Volumetric Dice scores
+
+Dataset
+
+CT scans (n)
+
+Dice score
+Mean and std.
+
+Dice score
+Lowest
+
+Dice score
+Highest
+
+RICORD
+Coronacases
+MosMedData
+
+17
+10
+50
+
+0.679 ± 0.130
+0.648 ± 0.132
+0.405 ± 0.213
+
+0.398
+0.362
+0.008
+
+0.846
+0.783
+0.675
+
+Overview of the Dice scores obtained for the task of segmenting lung tissue affected
+by COVID-19 from healthy lung tissue. Abbreviation: Std = standard deviation.
+
+4
+
+A PREPRINT - JANUARY 26, 2021
+
+3.2
+
+Shape similarity
+
+Because the normal Dice score is insensitive to shape, we also used the normalized surface Dice (NSD) to assess model
+performance based on shape similarity [19]. To ensure comparability of our results, we again used the implementation
+of the metric of Ma et al. [7]. Again, the highest scores were achieved on the tuning dataset with a mean NSD of 0.781
+± 0.124. On MosMed, the NSD was lowest with a score of 0.597 ± 0.270. On the ten images of the Coronacases dataset,
+the model achieved an NSD of 0.716 ± 0.135. A summary of the NSD can be found in Table 2.
+Example images of the segmentation maps generated by the model compared to the ground truth are shown in Figures
+2, 3 and 4. Table 3. provides an overview of the results we obtained and those reported in the published literature.
+Table 2: Normalized surface Dice scores
+
+Dataset
+
+CT scans (n)
+
+NSD
+Mean and std.
+
+NSD
+Lowest
+
+NSD
+Highest
+
+RICORD
+Coronacases
+MosMedData
+
+17
+10
+50
+
+0.781 ± 0.124
+0.716 ± 0.135
+0.597 ± 0.270
+
+0.480
+0.457
+0.060
+
+0.911
+0.862
+0.926
+
+Overview of the achieved normalized surface Dice scores (NSD) as a measurement of shape similarity between two regions. Abbreviation: Std = standard
+deviation.
+
+Table 3: Overview of the results from previous studies
+
+Publication
+
+Dataset
+
+Dice score
+Tuning data
+
+Our approach
+
+0.698
+
+Müller et al1 [9]
+
+RICORD
+Coronacases
+MosMedData
+RICORD
+
+Yan et al [20]
+Ma et al2 [7]
+Pu et al3 [21]
+
+Dice score
+Hold-out data
+
+Training time
+
+Hardware
+
+10h, 49min
+
+1 GeForce RTX 2080ti
+(11GB VRAM)
+
+0.761
+
+0.623
+0.403
+-
+
+130h
+
+proprietary
+
+-
+
+0.726
+
+-
+
+1 Nvidia Quadro P6000
+(24 GB VRAM)
+6 Nvidia TITAN RTX
+(24 GB VRAM)
+
+Coronacases
+MosMedData
+proprietary
+
+0.642
+
+0.443
+0.81
+
+-
+
+-
+
+-
+
+1
+
+Müller et al. report the accuracy for 5-fold cross-validation; we report the mean of 5 folds.
+Ma et al. defined different tasks for segmentation, of which we report the accuracy of subtasks 3, as it is the most similar to
+our methods and thus most comparable.
+3
+Pu et al. report the Dice score only for lung areas > 200mm3 and rated each infiltration separately.
+2
+
+4
+
+Discussion
+
+In the present study, we propose a transfer learning approach using a 3D U-Net for segmenting pulmonary infiltrates
+associated with COVID-19 implemented on a single GPU with 11 GB VRAM. We used a transfer learning approach
+with an 18-layer 3D ResNet pretrained on a video classification dataset serving as encoder for the 3D U-Net, and
+obtained state-of-the-art results within comparably short training times.
+There have been previous efforts to automatically segment pulmonary infiltrates using U-Nets, but few used fully
+three-dimensional models, while most studies applied a layer-by-layer approach. In our opinion, the metrics obtained
+from these two approaches are not comparable because the slice-wise approach may introduce selection bias into the
+data by excluding slices that do not show lung or infiltrates. For 3D models, the input volume shows the entire lung,
+including healthy and diseased lung tissue, as well as portions of the neck and abdomen that do not contain lung tissue.
+Müller et al. proposed a fully 3D U-Net, with an architecture similar to our model [9]. Because of limited training data,
+they used 5-fold cross-validation during training and reported a mean Dice score of 0.761 on the 5 validation folds. The
+model of Müller et al. was trained for 130h (more than 10 times longer than the model presented in this work) on a
+GPU with twice as much VRAM (Nvidia Quadro P6000). However, since the models were evaluated on a proprietary
+dataset, the obtained Dice scores cannot be compared without reservations, as differences in segmentation ground-truth
+may exist.
+5
+
+A PREPRINT - JANUARY 26, 2021
+
+Figure 2: Example images taken from the three datasets used in this study with segmentation masks from a human annotator (red)
+and the corresponding predicted masks from our model (green). The CT from the MosMed dataset was originally acquired in prone
+position but images were flipped for this figure.
+
+Lessmann et al. developed CORADS-AI, a deep learning algorithm for predicting the CO-RADS grade on noncontrast CT images [22]. CO-RADS (COVID-19 Reporting and Data System) is a categorical score between 1-5
+that indicates the likelihood of pulmonary involvement, with a CO-RADS score of 1 corresponding to a very low
+probability of pulmonary involvement and a score of 5 representing a very high probability [23]. Interestingly, the
+interrater agreement on CO-RADS is only moderate, with a Fleiss kappa value of 0.47. CO-RADS grading differs from
+manual segmentation of pulmonary infiltrates in patients with proven COVID-19 and the kappa values are therefore
+not transferable. Nevertheless, the question is whether there is also a significant interrater difference in segmentation
+and how this would affect model performance and comparability between studies. For the RICORD dataset and the
+dataset provided my Ma et al., each CT volume was annotated by multiple experts, including at least one board-certified
+radiologist, to reduce bias coming from poor interrater agreement. However, for the MosMed dataset the number of
+annotators per CT volume is not available.
+Ma et al. also developed a data-efficient 3D U-Net model that achieved a mean Dice score of 0.642 in the 5-fold cross
+validation and a Dice score of 0.443 during interference on the MosMed dataset.
+The highest Dice score achieved with a 3D U-Net architecture was published by Pu et al. with a value of 0.81 for
+infiltration greater than 200 mm3 on a proprietary dataset [21]. It is important to note, however, that the measurement
+of Pu et al. differs from other published results as well as from ours because the Dice score is calculated at a per-lesion
+level and then averaged, rather than at a per-patient level.
+Yan et al. proposed a novel adaption of the U-Net architecture to increase segmentation performance for COVID-19
+[20]. Their COVID-SegNet achieved a Dice score of 0.726 on the independent hold-out dataset. To achieve this, they
+used a proprietary dataset of 861 patients (8 times larger than the RICORD dataset and 40 times larger than the Ma et
+al.data) and trained their model on six Nvidia Titan RTXs with 24 GB VRAM each.
+By comparison, the model developed in this study achieved a higher Dice score than Ma et al. and had substantially
+shorter training times and lower hardware requirements than previously published studies. However, this comparison
+should be taken with caution because the datasets, training methods and calculation of metrics differed. Nonetheless,
+this study demonstrates the added benefit of using a pre-trained encoder for 3D U-Nets, as one can quickly achieve
+state-of-the-art results with lower hardware requirements and shorter training times. Transfer learning may help to
+provide better access and use of 3D segmentation models for the diagnostic community and for researches without
+access to high performance computing clusters.
+
+References
+[1] Fedaa Ali, Amal Kasry, and Muhamed Amin. The new sars-cov-2 strain shows a stronger binding affinity to ace2
+due to n501y mutation. arXiv preprint arXiv:2101.01791, 2021.
+[2] Kyong Ran Peck. Early diagnosis and rapid isolation: response to covid-19 outbreak in korea. Clinical
+Microbiology and Infection, 2020.
+[3] Victor M Corman, Olfert Landt, Marco Kaiser, Richard Molenkamp, Adam Meijer, Daniel KW Chu, Tobias
+Bleicker, Sebastian Brünink, Julia Schneider, and Marie Luisa Schmidt. Detection of 2019 novel coronavirus
+(2019-ncov) by real-time rt-pcr. Eurosurveillance, 25(3):2000045, 2020.
+6
+
+A PREPRINT - JANUARY 26, 2021
+
+[4] Geoffrey D Rubin, Christopher J Ryerson, Linda B Haramati, Nicola Sverzellati, Jeffrey P Kanne, Suhail Raoof,
+Neil W Schluger, Annalisa Volpi, Jae-Joon Yim, and Ian BK Martin. The role of chest imaging in patient
+management during the covid-19 pandemic: a multinational consensus statement from the fleischner society.
+Chest, 2020.
+[5] Kai-Cai Liu, Ping Xu, Wei-Fu Lv, Xiao-Hui Qiu, Jin-Long Yao, and Gu Jin-Feng. Ct manifestations of coronavirus
+disease-2019: a retrospective analysis of 73 cases by disease severity. European journal of radiology, page 108941,
+2020.
+[6] Harrison X Bai, Ben Hsieh, Zeng Xiong, Kasey Halsey, Ji Whae Choi, Thi My Linh Tran, Ian Pan, Lin-Bo Shi,
+Dong-Cui Wang, and Ji Mei. Performance of radiologists in differentiating covid-19 from viral pneumonia on
+chest ct. Radiology, page 200823, 2020.
+[7] Jun Ma, Yixin Wang, Xingle An, Cheng Ge, Ziqi Yu, Jianan Chen, Qiongjie Zhu, Guoqiang Dong, Jian He, and
+Zhiqiang He. Towards data-efficient learning: A benchmark for covid-19 ct lung and infection segmentation.
+Medical physics, 2020.
+[8] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-net: Convolutional networks for biomedical image
+segmentation. In International Conference on Medical image computing and computer-assisted intervention,
+pages 234–241. Springer, 2015.
+[9] Dominik Müller, Iñaki Soto Rey, and Frank Kramer. Automated chest ct image segmentation of covid-19 lung
+infection based on 3d u-net. arXiv preprint arXiv:2007.04774, 2020.
+[10] Mahbub Hussain, Jordan J Bird, and Diego R Faria. A study on cnn transfer learning for image classification. In
+UK Workshop on Computational Intelligence, pages 191–202. Springer, 2018.
+[11] Emily B Tsai, Scott Simpson, Matthew Lungren, Michelle Hershman, Leonid Roshkovan, Errol Colak, Bradley J
+Erickson, George Shih, Anouk Stein, and Jaysheree Kalpathy-Cramer. The rsna international covid-19 open
+annotated radiology database (ricord). Radiology, page 203957, 2021.
+[12] SP Morozov, AE Andreychenko, NA Pavlov, AV Vladzymyrskyy, NV Ledikhova, VA Gombolevskiy, Ivan A
+Blokhin, PB Gelezhe, AV Gonchar, and V Yu Chernina. Mosmeddata: Chest ct scans with covid-19 related
+findings dataset. arXiv preprint arXiv:2005.06465, 2020.
+[13] Bradley Christopher Lowekamp, David T Chen, Luis Ibáñez, and Daniel Blezek. The design of simpleitk.
+Frontiers in neuroinformatics, 7:45, 2013.
+[14] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen,
+Zeming Lin, Natalia Gimelshein, and Luca Antiga. Pytorch: An imperative style, high-performance deep learning
+library. In Advances in neural information processing systems, pages 8026–8037, 2019.
+[15] Jeremy Howard and Sylvain Gugger. Fastai: A layered api for deep learning. Information, 11(2):108, 2020.
+[16] Du Tran, Heng Wang, Lorenzo Torresani, Jamie Ray, Yann LeCun, and Manohar Paluri. A closer look at
+spatiotemporal convolutions for action recognition. In Proceedings of the IEEE conference on Computer Vision
+and Pattern Recognition, pages 6450–6459, 2017.
+[17] F Milletari, N Navab, SAV Ahmadi, and V-Net. Fully convolutional neural networks for volumetric medical image
+segmentation. In Proceedings of the 2016 Fourth International Conference on 3D Vision (3DV), pages 565–571,
+2016.
+[18] Leslie N Smith. Cyclical learning rates for training neural networks. In 2017 IEEE Winter Conference on
+Applications of Computer Vision (WACV), pages 464–472. IEEE, 2015.
+[19] Stanislav Nikolov, Sam Blackwell, Ruheena Mendes, Jeffrey De Fauw, Clemens Meyer, Cían Hughes, Harry
+Askham, Bernardino Romera-Paredes, Alan Karthikesalingam, and Carlton Chu. Deep learning to achieve
+clinically applicable segmentation of head and neck anatomy for radiotherapy. arXiv preprint arXiv:1809.04430,
+2018.
+[20] Qingsen Yan, Bo Wang, Dong Gong, Chuan Luo, Wei Zhao, Jianhu Shen, Qinfeng Shi, Shuo Jin, Liang Zhang,
+and Zheng You. Covid-19 chest ct image segmentation–a deep convolutional neural network solution. arXiv
+preprint arXiv:2004.10987, 2020.
+[21] Jiantao Pu, Joseph K Leader, Andriy Bandos, Shi Ke, Jing Wang, Junli Shi, Pang Du, Youmin Guo, Sally E
+Wenzel, and Carl R Fuhrman. Automated quantification of covid-19 severity and progression using chest ct
+images. European Radiology, 31(1):436–446, 2021.
+[22] Nikolas Lessmann, Clara I Sánchez, Ludo Beenen, Luuk H Boulogne, Monique Brink, Erdi Calli, Jean-Paul
+Charbonnier, Ton Dofferhoff, Wouter M van Everdingen, and Paul K Gerke. Automated assessment of co-rads
+and chest ct severity scores in patients with suspected covid-19 using artificial intelligence. Radiology, 2020.
+7
+
+A PREPRINT - JANUARY 26, 2021
+
+[23] Mathias Prokop, Wouter van Everdingen, Tjalco van Rees Vellinga, Jet Quarles van Ufford, Lauran Stöger, Ludo
+Beenen, Bram Geurts, Hester Gietema, Jasenko Krdzalic, and Cornelia Schaefer-Prokop. Co-rads–a categorical
+ct assessment scheme for patients with suspected covid-19: definition and evaluation. Radiology, page 201473,
+2020.
+
+8
+
+
