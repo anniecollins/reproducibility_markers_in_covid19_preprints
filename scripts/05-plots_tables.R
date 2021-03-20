@@ -138,5 +138,5 @@ open_data_time <- glm(is_open_data ~ date, family = binomial, data = med_open_da
 summary(open_data_time)
 
 typeof(med_open_data_results$date)
-pub_model <- glm(published ~ is_open_code + is_open_data, family = binomial, data = med_open_data_results)
+pub_model <- glm(published ~ as.factor(is_open_code) + as.factor(is_open_data), family = binomial, data = med_open_data_results)
 summary(pub_model)

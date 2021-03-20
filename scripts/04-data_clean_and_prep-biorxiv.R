@@ -35,9 +35,19 @@ bio_text_sentences <-
 bio_open_data_results <- 
   oddpub::open_data_search(bio_text_sentences)
 
-# INTERIM SAVE
-class(bio_open_data_results)
-write_csv(bio_open_data_results, 'outputs/data/bio_open_data_results.csv')
+# Join bio_sample to bio_open_data_results and save as bio_open_data_results
+bio_open_data_results$join_id <- str_sub(bio_open_data_results$article, 10, -5)
+bio_sample$join_id <- str_sub(bio_sample$doi, start = 9)
+bio_open_data_results <- merge(bio_sample, bio_open_data_results, by = "join_id")
+
+# Reassign published values to 0 or 1 based on presence of publication
+bio_open_data_results$published[!is.na(bio_open_data_results$published)] <- 1
+bio_open_data_results$published[is.na(bio_open_data_results$published)] <- 0
+
+# Convert TRUE/FALSE in ODDPub output to 1/0
+bio_open_data_results$is_open_code <- as.integer(bio_open_data_results$is_open_code)
+bio_open_data_results$is_open_data <- as.integer(bio_open_data_results$is_open_data)
+
 
 # TODO: Maybe want to see if we can re-write this to run faster?
 # Example starts here
