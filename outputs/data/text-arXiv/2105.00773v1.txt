@@ -1,0 +1,4419 @@
+April 2021
+
+Preprint
+
+Approximate Bayesian Computation for an Explicit-Duration
+Hidden Markov Model of COVID-19 Hospital Trajectories
+
+arXiv:2105.00773v1 [stat.AP] 28 Apr 2021
+
+Gian Marco Visani∗
+
+gian_marco.visani@tufts.edu
+
+Alexandra Hope Lee∗
+
+alexandra.lee@tufts.edu
+
+Cuong Nguyen∗ , M.S.
+
+cuong.nguyen@tufts.edu
+
+David M. Kent1 , M.D., C.M., M.Sc.
+John B. Wong2 , M.D.
+Joshua T.
+
+Cohen3 ,
+
+jwong@tuftsmedicalcenter.org
+
+Ph.D.
+
+jcohen@tuftsmedicalcenter.org
+
+Michael C. Hughes∗ , Ph.D.
+∗
+1
+2
+3
+
+dkent1@tuftsmedicalcenter.org
+
+michael.hughes@tufts.edu
+
+Dept. of Computer Science, Tufts University, Medford, MA, USA
+Predictive Analytics and Comparative Effectiveness Center, Tufts Medical Center, Boston, MA
+Division of Clinical Decision Making, Tufts Medical Center, Boston, MA
+Center for the Evaluation of Value and Risk in Health, Tufts Medical Center, Boston, MA
+
+Abstract
+We address the problem of modeling constrained hospital resources in the midst of the
+COVID-19 pandemic in order to inform decision-makers of future demand and assess the
+societal value of possible interventions. For broad applicability, we focus on the common
+yet challenging scenario where patient-level data for a region of interest are not available.
+Instead, given daily admissions counts, we model aggregated counts of observed resource
+use, such as the number of patients in the general ward, in the intensive care unit, or on
+a ventilator. In order to explain how individual patient trajectories produce these counts,
+we propose an aggregate count explicit-duration hidden Markov model, nicknamed the
+ACED-HMM, with an interpretable, compact parameterization. We develop an Approximate Bayesian Computation approach1 that draws samples from the posterior distribution
+over the model’s transition and duration parameters given aggregate counts from a specific location, thus adapting the model to a region or individual hospital site of interest.
+Samples from this posterior can then be used to produce future forecasts of any counts
+of interest. Using data from the United States and the United Kingdom, we show our
+mechanistic approach provides competitive probabilistic forecasts for the future even as
+the dynamics of the pandemic shift. Furthermore, we show how our model provides insight
+about recovery probabilities or length of stay distributions, and we suggest its potential to
+answer challenging what-if questions about the societal value of possible interventions.
+
+1. Introduction
+The ongoing COVID-19 pandemic has imposed immense costs to human health, quality
+of life, and the economy. There remains a pressing need for forecasting models that can
+reliably predict demand for scarce hospital resources, such as general-ward beds, ICU beds,
+ventilators, and clinical staff. It is especially important that models are likely to extrapolate
+to the future rather than simply repeat the past, as the pandemic evolves through new
+1. Code: https://www.github.com/tufts-ml/aced-hmm-hospitalized-patient-trajectory-model
+
+© April 2021 G.M. Visani, A.H. Lee, C. Nguyen, D.M. Kent, J.B. Wong, J.T. Cohen & M.C. Hughes.
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+waves, new treatments, new disease variants, and the introduction of vaccines. This need
+naturally favors mechanistic models that try to capture how patients actually move through
+the hospital, rather than purely predictive models. Mechanistic forecasts with well-calibrated
+uncertainty may avoid the failures of previous COVID-19 forecasting (Ioannidis et al., 2020).
+In addition to their obvious utility to hospital administrators, improved forecasting
+for hospital resources can also be used to assess the societal value of possible interventions. Throughout this pandemic, many interventions have been considered to improve
+outcomes for infected and hospitalized individuals, such as screening strategies, pharmaceuticals (Beigel et al., 2020; Chen et al., 2021), physical treatments (Koeckerling et al., 2020),
+and more (Zhang et al., 2020; Ahamad et al., 2021). However, estimating the societal value
+of interventions remains challenging, as they can impact many different stages of care.
+Our motivating problem is to assess which interventions might avoid short-term future
+demand exceeding hospital capacity, as aggressive shut-downs harm other aspects of health,
+reduce quality of life, and restrict economic activity (Neumann et al., 2020). Policy makers,
+pharmaceutical companies, and funding agencies can use forecasting models to identify interventions to prioritize; such models can also inform health technology assessment and hence
+questions of reimbursement. But a forecast can shed light on these issues only if the model
+supports “what-if ” queries about how an intervention would change patient trajectories and
+if the model can be adapted to the hospital dynamics in the region of interest.
+In this work, we develop and evaluate a mechanistic probabilistic model of a COVID-19
+patient’s trajectory through stages of care in the hospital. This model can be used to make
+data-driven forecasts of the future daily census counts at different stages of care. That
+is, we can model the total count of patients in general ward, in the intensive care unit
+(ICU), or in the ICU on a ventilator. Importantly, the parameters driving this forecast are
+interpretable in the sense that they directly correspond to underlying mechanisms, such as
+transitions between stages of care and dwell-time distributions. Further, we show how our
+model supports asking what-if queries, such as “what if the average stay on the ventilator
+decreased by 2 days?”, and how it quantitatively answers such questions via downstream
+forecasts of daily demand for hospital beds or ventilators. These forecasts could be used at
+a regional or hospital level to assess if utilization will exceed crucial thresholds.
+Desiderata. A key design goal for our model is that it must be portable to health systems
+across the globe, so that it could accurately assess the value of an intervention in a given
+region or country. Healthcare system heterogeneity means that in different regions of interest, diverse data may be available due to logistical obstacles and legal concerns. To achieve
+portability, we assume no patient-level data are available (not even individualized length of
+stay information). Instead, our models rely only on aggregated daily count data.
+A second goal is to explicitly capture uncertainty given limited data by learning a posterior distribution over parameters rather than a point estimate. We take a Bayesian approach
+by expressing our prior beliefs, updating those beliefs given some observed data, and then
+making the best possible predictions and decisions given remaining uncertainty (Gelman
+et al., 2013). Usually, fitting a posterior requires either optimization methods based on
+variational inference (VI) (Wainwright and Jordan, 2008), or sampling methods based on
+Markov chain Monte Carlo (MCMC) (Andrieu et al., 2003). However, for our model and
+many like it, VI and MCMC have high derivation and implementation costs even for statis-
+
+2
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+tical learning experts, requiring months of researcher effort. These requirements make VI
+and MCMC difficult to use for those who need our models the most (data scientists situated
+inside healthcare organizations). Thus, to learn posterior distributions in ways that are
+accessible and extensible, we turn to simulation methods based on Approximate Bayesian
+Computation (ABC) (Marjoram et al., 2003; Marin et al., 2012; Cranmer et al., 2020). ABC
+is easy to implement given a simulation that samples from the model. Furthermore, ABC
+allows us to design a flexible distance function to assess fit, which we tailor to our application
+in ways that would be difficult with an explicit likelihood in VI and MCMC.
+Contributions. This study makes three key contributions.
+• First, we develop a new model capable of forecasting the daily counts of patients at
+various stages of care (general ward, intensive care unit (ICU), on ventilation in the
+ICU, death) when given the daily admissions counts. The model parameters are fully
+specified by fewer than 20 numbers, each one interpretable by practicing clinicians
+because they correspond directly to how patients move through typical hospitals.
+• Second, we develop routines for fitting posterior distributions over the model’s parameters given only aggregated daily count data from a region of interest. Building on Approximate Bayesian Computation (ABC) extensions of Metropolis-Hastings
+MCMC (Marjoram et al., 2003), we show how well-chosen distance metrics prioritizing
+later stages of care and recent counts, plus carefully designed annealing schedules for
+thresholds, enable accurate fits and forecasts for data from a target region. We further show how to scale this training to data representing tens of thousands of hospital
+stays. Because our ABC approach is simpler to implement than other possibilities,
+other researchers can adopt our work without advanced expertise in Bayesian learning.
+• Third, we validate our model and posterior estimation procedures on several realworld examples from both the United States and the United Kingdom. We show
+that the model can provide competitive forecasts of daily counts for both a single
+hospital and for an entire geographic region, even when the “training” period shows
+rising numbers but the “testing” period exhibits falling counts due to underlying shifts
+in policy and population behavior. Beyond accuracy, we show that our approach can
+deliver insight into the parameters, can scale up to a simulation of patient pathways
+for all admissions in the state of California, and can be interrogated with “what-if ”
+scenarios to understand the likely quantitative impact of possible interventions.
+Generalizable Insights about Machine Learning in the Context of Healthcare
+Many healthcare modeling problems are beset by two challenges. First, it is difficult to
+acquire large volumes of patient-level data (due to privacy concerns or logistical obstacles).
+However, relevant aggregated data with no patient-specific information are often publicly
+available. Second, it is usually easy to specify a mechanistic probabilistic model that can
+simulate individual patient trajectories and produce aggregated counts, but difficult to learn
+the posterior distribution over model parameters. Our work can be seen as a case study
+of lessons learned in how to apply an under-utilized methodology – Approximate Bayesian
+Computation (ABC) – to address both concerns in a healthcare context.
+3
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+2. Related Work
+Projecting the spread of COVID-19 and its impact on hospital utilization has been widely
+pursued. We briefly survey several threads of related work: regional modeling, local modeling
+(at either the hospital-level or patient-level), combinations of regional and local models, and
+efforts to assess societal value.
+Regional modeling. Many studies have forecasted hospital utilization within a large
+geographic region (Murray et al., 2020; Jewell et al., 2020; Reiner et al., 2021). Some
+regional models use Susceptible-Infected-Recovered (SIR) models to predict regional case
+rates (Zou et al., 2020; Li et al., 2020), which can then inform bed usage and ventilator
+usage. Others (Murray et al., 2020) focus on predicting mortality rates given observed
+deaths, then use an internal simulation to estimate hospital utilization given fatalities.
+A common limitation of regional models is their simplified and inflexible characterizations
+of the care pathways within hospitals. For example, CHIME2 (Weissman et al., 2020) allows
+users to specify the proportions of patients requiring ICU care and mechanical ventilation,
+as well as the average length of stay in the hospital and in the ICU. But the model does not
+accommodate distributions for the “dwell times” at each level of care; nor does it allow for
+different durations among patients who recover and who deteriorate. The Imperial College
+model (Flaxman et al., 2020) connects deaths to key epidemiological parameters, but does
+not capture hospital resources. The published forecasts of the popular “IHME model” (Reiner
+et al., 2021), maintained by the Institute for Health Metrics and Evaluation (IHME) at the
+University of Washington, rely on rigid assumptions about how patients progress through
+the hospital (IHME COVID-19 Forecasting Team, 2020, Suppl. Sec. 8). For example,
+length-of-stay is not probabilistic but fixed for each class of patients (details in App. F).
+Users of these forecasts cannot easily modify these internal parameters or learn them for a
+location of interest; instead, the IHME itself must release updates. While the IHME model
+has at times performed well at its target task of accurate forecasting of mortality (Friedman
+et al., 2020), arguably it has been outperformed by other efforts (Gu, 2020).
+Hospital-level modeling. At the hospital level, Lee et al. (2021) develop a non-mechanistic
+prediction model for univariate counts of COVID-19 patients at a specific hospital site based
+on auto-regressive statistical models. While this work is portable, we expect our mechanistic
+model to generalize better (as confirmed in later experiments).
+Epstein and Dexter (2020) developed a mechanistic model for making hospital-specific
+short-term predictions of daily census counts. Given access to previous length-of-stay (LOS)
+information at that hospital from previous patients, they can learn distributions and forecast
+the length-of-stay of current patients at various stages of severity. The LOS data requirement
+limits portability compared to our approach.
+Patient-level modeling. At the patient level, Roimi et al. (2021) developed a model to
+forecast an individual’s hospital trajectory using personal covariates such as age and sex
+from thousands of patients. They built a multi-state survival model that accounts for how
+the patient moves day-by-day between clinical states (critical, severe, or moderate) to make
+local predictions for hospital resource demand in Israel. Importantly, their model accounts
+2. https://penn-chime.phl.io
+
+4
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+for many important characteristics, such as right censoring and time-dependent covariates.
+Our proposed model is simpler, and of course does not depend on any detailed patient-level
+data. Unlike our approach, it would be difficult to transfer Roimi et al. (2021)’s model
+across sites or regions because acquiring the necessary data is challenging.
+Multi-level modeling. Recent efforts by Qian et al. (2020) present an integrated probabilistic modeling approach for COVID-19 modeling at the national, regional, hospital and
+individual levels, targeted at the United Kingdom. Their system, called COVID-19 Capacity
+Planning and Analysis System (CPAS), makes detailed hospital stay forecasts for current
+patients via models that utilize patient-level covariates (e.g. age, sex, comorbidities). They
+can further simulate the durations of future patients by sampling from an agent-based simulation, using a regional-level trend forecaster to predict admission volumes. While admirable,
+this kind of modeling would only be possible in a nationalized health system with access to
+patient-level data. For many regions of interest we simply cannot access such data.
+Efforts to Assess Societal Value. A limited number of health technology assessments
+of COVID-19 interventions include hospital utilization projections. We have identified three.
+Congly et al. (2020) evaluated the administration of either remdesivir or dexamethasone to
+various groups of patients hospitalized to treat their COVID 19 infections. Assumptions for
+the model came from the literature. Gandjour (2021) assessed the addition of ICU capacity
+in German hospitals, using assumptions derived from information released by the German
+Ministry of Health. Finally, Jo et al. (2020) examined use of remdesivir and dexamethasone
+in South Africa. The assessment relied on clinical trial results to project therapeutic impact
+on length of stay and clinical outcomes. But the analysis did not explicitly describe its
+modeling of patient progression in the hospital setting. We emphasize that none of these
+analyses performed any kind of learning or calibration of their models to ensure consistency with observed data from the regions or sites of interest. Thus, our study advances
+the state-of-the-art for assessing societal value by applying modern Approximate Bayesian
+Computation methods to ensure that models accurately explain data from the target site.
+
+3. Model
+We now describe our proposed probabilistic model for an individual COVID patient’s trajectory through the hospital. We call our model the Aggregate Counts Explicit Duration
+Hidden Markov Model, or “ACED-HMM” for short. While we specialize to modeling hospitalized patients with confirmed cases of COVID-19 here, the model could conceptually be
+used for any disease with appropriate changes to the stages of care considered as well as
+modified assumptions about transitions and durations.
+Our proposed model represents the patient’s current health state and stage of care in the
+hospital over a period of T days, indexed by t ∈ {1, 2, . . . T }. There are 5 possible stages,
+each indicated by a unique symbol. We assume each individual patient occupies exactly
+one stage on each day. Fig. 1 diagrams the possible pathways and associated probabilities
+through these stages. There are 3 intermediate stages: stage G indicates the patient is
+the general ward, stage I indicates the patient is in the intensive care unit (but not yet on
+mechanical ventilation), and stage V indicates the patient is actively receiving mechanical
+
+5
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+“R”: Recovered
+
+recovering
+“G” : General Ward
+
+recovering
+“I”: Intensive Care Unit
+
+recovering
+“V”: On Ventilator in ICU
+
+“S”
+start
+
+declining
+
+declining
+
+declining
+
+“T”: Died
+
+Figure 1: Diagram of the proposed Markovian model for a COVID-19 patient’s trajectory through
+the hospital. Rectangles indicate possible states, defined by the patient’s current stage of care s
+(general ward G, off ventilator in ICU I, on ventilator in ICU V) as well as health trajectory h
+(recovering or declining). Small circles indicate stochastic binary choices, with one path marked by
+transition probability. Recovery transition parameters ρk give the chance of switching to a recovery
+path, while early death probabilities dk mark the chance of dying early. Based on clinical advice,
+the early death probabilities dG and dI are modeled as very small under the prior. Each state has
+an explicit duration distribution (not shown).
+
+ventilation in intensive care. There are additionally 2 possible absorbing or terminal stages:
+“terminal death” T or “fully recovered” R.
+For each patient, indexed by n, our model generates a sequence of care segments indexed
+by `, with total length Ln (not all patients will experience the same number of segments).
+Each segment is defined by a “stage” category indicator sn` ∈ {G, I, V, R, T}, a “health”
+binary indicator hn` ∈ {0, 1} corresponding to a “declining” or “recovering” trajectory within
+that segment, and a “duration” integer ∆n` ∈ {1, 2, . . . D} representing the number of days
+spent in that care segment. Our model generates patient n’s sequence of stage indicators
+sn,1:Ln , health indicators hn,1:Ln , and durations ∆n,1:Ln via the random process defined
+below. We drop the patient index n below when it is clear we are talking about one patient
+to keep notation simple.
+We stress that our model assumes that for each patient, we are given an integer an ∈
+{1, 2, . . . , T } indicating the day the patient was admitted to the hospital. Throughout this
+paper, we assume all patients begin in the general ward on their first day. However, in
+principle it is easy to capture incoming patients that directly begin in the ICU stage I or on
+the ventilator V, which might realistically happen for a transfer patient referred to a large
+facility with more specialty care or available ICU beds.
+3.1. The ACED-HMM Generative Model
+Generating stage indicators. We always start in the general ward, and generate the
+new stage indicator s` ∈ {G, I, V, R, T} for each subsequent segment ` ∈ 2, 3, . . . given the
+previous health indicator h`−1 via:
+(
+T
+w. prob. ds`−1 if h`−1 = 0
+s1 ← G, s` ←
+(1)
+next_stage(s`−1 , h`−1 ) otherwise
+
+6
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+where parameters dG and dV define the chance of early death, and the deterministic
+next_stage procedure always advances in order [G, I, V, T] if health is declining (h`−1 = 0),
+and to advance in order [V, I, G, R] if health is recovering (h`−1 = 1). See Fig. 1 for visual
+illustration of these stage pathways. Once we reach either absorbing stage (R or T), we
+halt all further generation (this event defines the sequence length Ln ).
+Generating health indicators. We generate the health indicator for segment `, h` ∈
+{0, 1}, given the previous health indicator h`−1 and the new stage s` . After each declining
+segment (h = 0), we switch to recovery with a stage-specific recovery probability ρk ∈ [0, 1],
+but otherwise keep declining. Once on a path to recovery (indicated by h = 1), we assume
+the patient stays there and continues to recover:
+(
+1 if h`−1 = 1
+` ∈ {1, 2, . . .}.
+(2)
+h` ←
+u if h`−1 = 0, u ∼ Bern(ρs` ),
+The parameters here are the recovery probabilities ρk for each intermediate stage k ∈ K
+where K ∈ {G, I, V}.
+Generating durations. We generate the duration (in days) ∆` for segment ` as:
+s` ,h`
+∆` |s` , h` ∼ Cat(π1s` ,h` , . . . πD
+).
+
+(3)
+
+where probability vector
+defines a categorical probability mass function over the first
+D integers {1, 2, . . . D}. This vector defines the distribution over possible durations spent at
+stage k ∈ K while in health state h ∈ {0, 1}. Notably, this model flexibly allows recovering
+(h = 1) and declining (h = 0) patients to have different duration distributions at each stage.
+Here, for tractability we must define the maximum number of days D allowed in each
+segment. To balance reasonable computation times while matching some of the long stays
+observed for this disease, we set D = 22. Designation of this value as our maximum duration at any segment of hospital care reflects statistics from the U.S. CDC as of September
+2020 (CDC, 2020, Table 2). The CDC data indicates that for patients admitted to the ICU,
+the 75th percentile estimated for total hospital length of stay (which corresponds to many
+segments of our model) ranges from 20 days to 25 days across age groups. For patients not
+admitted to the ICU, stays are typically much shorter. Thus, truncation of stage-specific
+durations at 22 days affects few real-world patients and should still yield accurate forecasts.
+π k,h
+
+Tractable parameterization of durations. As written above, we need to learn a separate D−dimensional probability vector π k,h for each state (indexed by stage k and health
+h). We decide to explore a simpler formulation with only two scalar parameters per state:
+mode location λk,h > 0 and temperature ν k,h > 0:
+
+
+log PoiPMF(1|λk,h )
+log PoiPMF(D|λk,h )
+k,h
+k,h
+[π1 , . . . , πD ] ← softmax
+,...,
+.
+(4)
+ν k,h
+ν k,h
+where PoiPMF denotes the probability mass function of the Poisson distribution. See Figure 2 to see how the distribution π over D days depends on these two parameters. Intuitively,
+λk,h controls the location of the mode. Large temperatures ν k,h  0 makes the distribution
+π k,h more uniform, while as ν k,h → 0 the distribution becomes peaked at the mode. This
+flexible parameterization encodes two valuable inductive biases: similar stay-lengths have
+similar probabilities, and the overall distribution is either unimodal or flat. This 2-parameter
+
+7
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+formulation has been previously used for supervised modeling of ordinal outcomes (Beckham
+and Pal, 2017), but to our knowledge is new for durations in a semi-Markov model.
+Joint Probability Distribution. Each patient’s entire observable experience can be captured by sequences of stage indicators, health indicators, and durations s1:Ln , h1:Ln , ∆1:Ln ,
+with joint probability:
+Ln
+Ln
+Y
+Y
+p(s1:Ln , h1:Ln , ∆1:Ln ) = pτ (s1 , h1 )
+pτ (s` , h` |s`−1 , h`−1 ) ·
+pξ (∆` |s` , h` )
+(5)
+`=2
+
+`=1
+
+Here we’ve gathered all transition probabilities into τ , such that τ = {d, ρ} and all duration parameters are denoted ξ = {λ, ν} for simplicity. Notably, this model structure
+can be mapped to the semi-Markov model known as an explicit-duration (hidden) Markov
+model (Ferguson, 1980; Mitchell and Jamieson, 1993; Yu, 2010), by mapping the health
+and stage indicator variable sequences h1:Ln , s1:Ln to a discrete state sequence z1:Ln with 9
+possible states: the start state S, the two absorbing states T, R, and 6 intermediate states
+G0, G1, I0, I1, V0, V1 where the 0 (1) suffix in the state name represents the declining (recovering) variant of each stage, respectively. The transition probability parameters for this
+HMM are specified in Supplementary Table C.1. Throughout the rest of the paper, we use
+the compact notation zn = z1:Ln below to capture the state sequence for patient n, which
+can be easily mapped back to the stage sequence and health sequence.
+3.2. Prior beliefs about transition and duration parameters
+Priors on transition parameters. We can use published statistics to inform our prior
+beliefs about transition probability parameters τ = {ρ, d}. Published probability statistics
+from the U.S. Centers for Disease Control (CDC) (see Table 2 of CDC (2020)) indicate
+the fraction of hospitalized COVID-19 patients who are admitted to ICU, placed on the
+ventilator, and eventually die, for each of three age groups (18-49, 50-64, and 65+). We
+translate these into Beta priors for each ρk that try to match the mean of these statistics
+while covering the overall possible range across age groups. See Appendix C.2 for details.
+We next set the early death probabilities. Based on conversations with clinical experts,
+we expect the chance of early death in the general ward is very low (E[dG ] ≈ 1%) and the
+chance of early death in the ICU is only slightly larger (E[dI ] ≈ 2%). We again set Beta
+priors to match these means and produce little uncertainty around them (such that the 95th
+percentile is below 0.05) to reflect our confidence that early death is possible but rare.
+Priors on duration parameters. To determine priors over the durations spent in each
+state (indexed by s, h), we draw relevant parameters independently from a common prior:
+λs,h ∼ N (µs,h , (σ s,h )2 , lower = 0, higher = D), log10 ν s,h ∼ N (0.5, 0.52 ).
+(6)
+Visuals of our prior’s imposed distribution on durations in each state can be seen in Fig. 5.
+Our truncated normal prior for the mode location λs,h of each state reflects that these
+quantities are difficult to know without reliable data about previous patient experience in
+the region or site of interest. We select a mean of µs,h = 8 days with a high standard
+deviation σ s,h = 3, such that our Normal prior’s range of likely values (µs,h ± 3σ s,h , covering
+over 99% of probability mass) could plausibly set the duration mode from 1 to 17 days.
+
+8
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ Q X     
+ O R J  Q X       
+ Q X     
+ O R J  Q X       
+
+   
+
+ Q X     
+ O R J  Q X      
+
+   
+
+ Q X     
+ O R J  Q X      
+
+   
+
+ Q X      
+ O R J  Q X      
+
+   
+
+ Q X      
+ O R J  Q X      
+
+   
+
+ Q X       
+ O R J  Q X      
+
+ O D P      
+   
+
+   
+
+ O D P      
+
+ O D P       
+
+ O D P       
+
+ O D P       
+
+   
+   
+
+   
+   
+
+   
+   
+
+   
+   
+
+   
+   
+
+   
+   
+
+   
+   
+
+ 
+
+  
+
+ ' D \ V
+
+  
+
+ 
+
+  
+
+ ' D \ V
+
+  
+
+ 
+
+  
+
+ ' D \ V
+
+  
+
+ 
+
+  
+
+ ' D \ V
+
+  
+
+ 
+
+  
+
+ ' D \ V
+
+  
+
+Figure 2: Visualization of possible duration distributions under our proposed tractable 2-parameter
+family. Parameter λ > 0 (x-axis) controls the location of the mode, while the temperature parameter
+ν > 0 (y-axis) controls the entropy around this mode.
+
+Our prior for each state’s temperature ν s,h assumes the log of this value will be normally
+distributed. By using a prior for log10 ν s,h with mean 0.5 and standard deviation 0.5, we
+allow plausible temperatures to span both high and low entropy distributions.
+
+4. Learning
+In order to train our model so its parameters reasonably explain hospital trajectories in a
+specific region or site of interest, we assume we have access to some observed daily counts
+k }
+y1:T = {y1:T
+k∈K during the training time period of interest. Here the set of observed stages
+K could include any of the intermediate or terminal stages; typically K = {G, I, V, T}. We
+also assume knowledge of the admission counts a1:T for the training
+P period, which represent
+a total of N patients who enter the hospital system, with N = Tt=1 at .
+Given observed counts y1:T , a1:T , we wish to be able to draw samples from the posterior
+p(τ, ξ, z1:N , ∆1:N |y1:T , a1:T ). Samples from this distribution allow us to properly understand
+the range of possible values for the model’s transition parameters τ and duration parameters
+ξ = {λ, ν}. Samples of parameters can further allow us to produce forecasts, as we can draw
+samples of counts yT +1:T +F for a “testing” period of F days – T + 1, . . . T + F – by taking
+some assumed admissions aT +1:T +F for this period drawing samples forward.
+For our model, it is easy to simulate patient care sequences and to produce aggregate
+counts from these sequences (simply counting the total number of patients simulated in
+each stage at each day). However, it is cumbersome to define an explicit probability mass
+function for both the individual patient care sequences zn , ∆n and the observed aggregate
+counts y1:T . This would only become more difficult if we explore more complex versions
+
+9
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+of our model down the road (e.g. add age-dependent transition or duration probabilities).
+We would like to be able to simply define a simulation that produces samples of aggregate
+counts, and then be able to (approximately) fit its distribution to observed count data.
+4.1. Approximate Bayesian Computation
+To achieve this desired goal, we turn to Approximate Bayesian Computation (ABC) (Marjoram et al., 2003; Marin et al., 2012; Cranmer et al., 2020), a method for fitting models that
+are naturally expressed as simulations. ABC has found applications in ecology (Beaumont,
+2010), population genetics (Beaumont et al., 2002), and epidemiology (Blum and Tran,
+2010). ABC is useful in cases like ours, where standard Markov chain Monte Carlo methods
+would require an explicit ability to compute the likelihood of observed counts arising from
+our individual simulations. ABC offers a simpler approach: we need only the ability to
+simulate counts and the ability to decide if simulated counts are “close enough”.
+Our approach is based on the ABC MCMC algorithm presented by Marjoram et al.
+(2003). We iteratively propose new candidate values for parameters τ, ξ, and then decide
+to accept or reject these based on an acceptance criterion designed to ensure the overall
+sequence of sampled parameters converges to the target posterior distribution. This looks
+superficially similar to conventional Metropolis-Hastings MCMC (Metropolis et al., 1953;
+Andrieu et al., 2003). However, the test for acceptance uses an evaluation of a distance
+function d between observed data y1:T and our simulation’s sampled counts ỹ1:T . This
+distance threshold check replaces the evaluation of an explicit likelihood (which would require
+specification of a probability mass function and the ability to evaluate it efficiently).
+An advantage of our ABC approach is we do not need to compute or even define an
+explicitly probability distribution for the likelihood p(y1:T |z1:N , ∆1:N ). This allows us to
+avoid a potentially detrimental misspecified parametric form chosen for computational convenience. Furthermore, another advantage of ABC is that we can easily customize the
+distance function to meet application-specific needs; specifying a full likelihood distribution
+that acheives the same goals might be more challenging. For example, our chosen distance
+below encodes an emphasis on fitting the most recent daily counts in the training period
+(so our forecasts will generalize to the future well) and an emphasis on later stages of the
+model (since those are harder to estimate well).
+Distance computation. Given the set of K observed stages, let K denote the number of
+stages K = |K|. Then ytk denotes the observed count at time t observed from stage k, and
+ỹtk denotes the simulation’s sampled count. We define the distance as a normalized weighted
+mean-absolute-error:
+T K
+1 XX
+|ytk − ỹtk |
+d(y1:T , ỹ1:T ) =
+wtk
+(7)
+k , ỹ k )
+K ·T
+max(y
+t
+t
+t=1 k=1
+
+where wtk is a scalar weight that determines the relative “importance” of matching the
+counts at time t and stage k. We define wtk as a product of a time-specific weight vt and
+a stage-specific weight uk . For timestep weight vt , we apply a recency bias: we linearly
+interpolate between v1 = 0.5 at day 1 and vT = 1.5 at day T , so that our model is better at
+making forecasts after day T (and the average timestep weight is 1). We use stage-specific
+weights uk because preliminary experiments suggested that counts for the later stages of
+
+10
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+the model are harder to fit (since all N patients enter the general ward, but only a smaller
+fraction will reach the ICU and the ventilator). Thus, we set uk values so later stages are
+worth more. Our recency emphasis via weights vt and later-stage emphasis via weights uk
+are both important for good forecasting results in our application, and would be difficult to
+encode in an explicit likelihood as in traditional MCMC. See Appendix D for details and
+further discussion of our chosen distance.
+Proposal distributions q. Our ABC algorithm requires a procedure to draw a new plausible parameter value given a current value. For each type of parameter (transition probabilities, duration modes, duration temperatures), we define a simple “random walk” proposal
+distribution q with the mean at the ”old” value and a variance that encourages modest
+exploration. See Appendix D for parameter-specific details.
+ABC algorithm. Initial values of the transition parameters τ and duration parameters ξ
+are samples from our chosen priors p(τ ) and p(ξ) defined above. Then, until convergence, the
+algorithm visits each individual parameter in turn (e.g. either a specific transition probability
+parameter ρk or dk within τ , or a state-specific duration mode λs,h or temperature ν s,h within
+ξ). At each visit, a new candidate value is proposed from our chosen distribution q (defined
+above). Then, we decide whether to “accept” or “reject” that value. For simplicity, we
+denote the current set of parameters as τ, ξ, and the new candidate parameters (with one
+entry updated) as τ ∗ , ξ ∗ .
+There are two stages of acceptance. First, counts are simulated from our ACED-HMM
+progression model for the entire training period using the proposed parameters τ ∗ , ξ ∗ , generating ỹ1:T . Then, we compute the distance d between the samples ỹ1:T and true counts y1:T .
+If the distance d is below a chosen distance tolerance threshold ε, the algorithm moves on
+to the second stage of acceptance, otherwise the proposed parameters are rejected. Second,
+the proposed parameters are accepted
+if a random uniform draw between 0 and 1 is less
+∗ ,ξ ∗ )q(τ ∗ ,ξ ∗ →τ,ξ)
+than the acceptance ratio α = p(τ
+p(τ,ξ)q(τ,ξ→τ ∗ ,ξ ∗ ) . The first stage of acceptance checks the
+fit to the data (replacing the likelihood used in conventional MCMC), whereas the second
+stage further filters the acceptance via information from the prior and from the proposal to
+maintain the validity of the target distribution of the Markov chain (Marjoram et al., 2003).
+Scheduling the distance tolerance threshold. Because random initial parameters are
+unlikely to explain observed data well, we find it useful to start from a lenient value of the
+data-agreement threshold ε. i.e. one that accepts all proposals. We then decay ε across
+iterations to a value that better ensures a match to observed data. In the Supplement
+Sec. D, we describe two phases for our ABC algorithm: a burn-in phase and a sampling
+phase. In burn-in, we gradually decay the value of ε over many iterations to reach a good
+explanation of the data. Then, in sampling we hold ε fixed and collect parameter samples,
+which are treated as representative of the target posterior distribution. During burn-in, we
+find it helpful to periodically increase ε sharply and then decay gradually to escape local
+optima. See Fig. D.1 for a visual representation of escaping a local optima using this idea.
+Ensembling. In order to obtain robust estimates of the posterior, we combine samples
+from multiple independent runs of our ABC algorithm into an ensemble. For any given
+dataset, we expect there might be several different parameter configurations that explain
+the training counts well (due to the flexibility of the model and possible identifiability issues
+11
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+given limited counts). Ensembling allows us to capture more of these configurations than
+a single run of ABC might recover. By aggregating, we gain statistical strength in the
+forecasts as well as a deeper understanding of the uncertainty in learned parameter values.
+Synthetic validation. We conducted several experiments on synthetic “toy” datasets
+(generated by our model) to verify that our ABC procedures can (approximately) recover
+plausible posterior distributions. See Appendix B.3 for a thorough description.
+
+5. Data for Case Studies
+We consider fitting our proposed model to pursue two possible applications over a range
+of geographic scales. First, as a primary use case we consider performing regional forecasts, specifically for several states in the United States. State-level modeling allows us
+to make forecasts that interest policy makers and public-health officials within that state.
+We’ll also show how these forecasts might be used to assess societal value. Second, we
+consider performing site-level forecasts for specific hospitals in the United Kingdom (UK).
+These experiments allow us to assess potential utility to hospital administrators for planning
+purposes.
+Below, we describe the data acquired for training and evaluating our forecasting model
+in both cases. Each dataset is assumed to provide census counts for the training period,
+denoted as days 1, 2, . . . T , for some subset or additive combination of the stages of our
+model (general ward G, off-ventilator in ICU I, on-ventilator in ICU V, terminal death T).
+To evaluate forecasts against a “ground truth”, we further require the same counts for the
+future period of interest, starting on day T + 1 and ending on T + F .
+In order to assess our proposed hospital progression model, during both training and
+forecasting we assume access to true daily admissions counts to the general ward. For a
+real forecast after day T , these counts will not be known. In this case, we could use handdesigned counts representing plausible future admission count scenarios provided by clinical
+experts. Alternatively, we could use any forecasting model to produce future admission
+counts (such as the model by Qian et al. (2020)). In this work, we assume admissions are
+all directly into the general ward. This could be easily changed if desired (e.g. to simulate
+the impact of transfers from an external hospital directly into the target hospital’s ICU).
+5.1. U.S. state hospital data for regional forecasts
+We obtain hospital utilization counts for four US states: Massachusetts (MA), Utah (UT),
+South Dakota (SD), and California (CA). We use counts from November 11th, 2020 to January 11th, 2021 as training data, and forecast one month into the future. These chosen
+states were selected to represent diverse geographic regions as well as diverse hospital utilization dynamics and policy responses to the pandemic during the selected time period.
+For example, hospitalizations in SD peaked in late November, in MA in early January, and
+in UT in late January.
+For all states, we use data from the COVID Tracking Project (The Atlantic Monthly
+Group, 2021)3 and the U. S. Dept. of Health and Human Services (2021)4 . See Appendix A
+3.
+4.
+
+https://covidtracking.com/data
+https://healthdata.gov/Hospital/COVID-19-Reported-Patient-Impact-and-Hospital-Capa/g62h-syeh
+
+12
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+for details on how we collected the data. At the end of data collection, for each state we
+have access to a daily time series of General Ward (G) counts, counts in the ICU off the
+ventilator (I), counts on the ventilator (V) and terminal death counts (T). For Utah and
+California in particular, we have access only to aggregate ICU counts (I + V) that do not
+distinguish between on and off the ventilator. For all states, we found that smoothing the
+terminal counts produced more sensible data (in the raw data, some weekends and holidays
+report implausibly low counts for deaths that reflect imperfect reporting processes).
+5.2. United Kingdom hospital data for site-level forecasts
+We obtain daily occupancy counts at different care stages from two U.K. hospitals: South
+Tees and Oxford University, made available to the public by the UK National Health Service5 . We use counts from November 3rd to January 3rd as training data, and forecast one
+month into the future (counts past February 3rd were unavailable when we ran the experiments). We selected these two hospitals because they represented large daily volumes and
+appeared to have higher-quality data with fewer irregularities than other alternatives. After
+data collection (see details in Appendix A), for each site we had access to counts of total
+beds used (G + I + V), counts on the ventilator (V), and daily counts of recovered patients
+discharged from the hospital (stage R of our model).
+
+6. Results of Case Studies
+Below, we describe a range of experimental results that assess our model’s qualitative and
+quantitative performance as well as scalability, sensitivity to available data, and ability to
+answer what-if questions.
+6.1. Forecast assessment: Can this model capture qualitative trends?
+We show our method’s forecasted distribution over daily counts for the entire US state of
+Massachusetts in Fig. 3. Importantly, we see that our ACED-HMM mechanistic model
+(blue lines), trained only on periods of rising case numbers, can reasonably forecast during
+the downward trend in hospital counts seen in MA after mid-January 2021. In contrast,
+a baseline non-mechanistic auto-regressive prediction model (red line, App. E), inspired by
+Lee et al. (2021), does not generalize well in the testing period.
+We further examine a forecast for a specific hospital site in the UK (“South Tees”)
+in Fig. 4. Here, we see how our method can accurately capture rising trends during the
+evaluation period for both overall occupied beds (the sum of several stages: G+I+V) as well
+as for the number of ventilators in use (stage V), despite the fact that during the training
+period the counts were mostly flat and had only recently begun to rise. These results indicate
+that our model’s learned transition and duration distributions can successfully translate
+several weeks into the future in some cases. Again, we do stress that we provided our model
+the true admission counts for the testing period. However, accurate ventilator demand
+prediction depended on and hence implies accurate transition and duration modeling.
+5.
+
+https://www.england.nhs.uk/statistics/statistical-work-areas/covid-19-hospital-activity/
+
+13
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ & H Q V X V  & R X Q W V
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+ W U X H
+ D X W R  U H J U H V V L Y H
+ $ % &
+
+    
+    
+    
+
+ 
+    
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8
+
+ W U X H
+ D X W R  U H J U H V V L Y H
+ $ % &
+
+    
+
+ & H Q V X V  & R X Q W V
+
+ 
+
+    
+   
+   
+   
+   
+ 
+
+ 
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+Figure 3: Fit and forecasts on General Ward (G) and Total ICU (I + V) counts for Massachusetts. We use our ABC procedure to estimate an approximate posterior over our progression
+model’s parameters, using 2 months of counts (left of the vertical dashed line). We stress that our
+ABC method is also provided true daily admission counts for all days (0 - 92). We also include a
+forecast from a baseline competitor model fit to the last 28 days of the training period (a statistical
+autoregressive model with Poisson likelihood, See E), to highlight advantages of our mechanistic
+model. Shaded intervals show the 2.5th and 97.5th percentiles of 2000 posterior samples.
+ 1 X P E H U  R I  2 F F X S L H G  % H G V
+ W U X H
+ $ % &
+
+   
+   
+   
+   
+   
+  
+ 
+
+  
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y   U G
+ 1 X P E H U  R I  3 D W L H Q W V  R Q  W K H  9 H Q W L O D W R U  L Q  W K H  , & 8
+
+ W U X H
+ $ % &
+
+  
+  
+  
+  
+ 
+
+ 
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y   U G
+
+Figure 4: Fit and forecasts on Occupied Beds and Ventilator counts for South Tees
+hospital in the UK. Parameters were selected via ABC to fit 2 months of counts (November
+3rd to January 3rd, left of the vertical dashed line). Shaded intervals show the 2.5th and 97.5th
+percentiles of 2000 posterior samples.
+
+14
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+6.2. Quantitative assessment: How accurate are forecasts?
+We quantitatively evaluate the quality of our method’s forecasts for 3 US states and 2 UK
+hospitals. For all U.S. states, we compare to forecasts from the IHME model (Reiner et al.,
+2021). For one US state and one UK hospital, we also compare our method’s forecasts to
+two baselines: a statistical autoregressive model with Poisson likelihood, and our prior over
+ACED-HMM’s parameters. We consider two quantitative evaluation metrics, highlighting
+the results of each below.
+First, we compute Mean Absolute Error (MAE), to assess the error between each method’s
+mean prediction and the observed daily counts in the testing period. See MAE results for
+the US (Tab. B.1) and the UK (Tab. B.2) in Appendix B.1. For MA (a larger state with over
+5.5 million adult residents), the key takeaway is that our ABC method achieves state-wide
+MAE below 65 across all stages, while other methods are considerably larger in most cases
+(for general ward, our MAE is 65 while others are all above 490; for ICU our MAE is 15.7
+while others are above 100). While IHME achieves slightly better MAE on ventilator counts
+from MA than our method, it overshoots the general ward counts considerably. For the two
+smaller states (SD and UT, each with fewer than 3 million adult residents), our mean absolute error (MAE) across all stages remained below 21, while other methods are considerably
+worse (e.g. the IHME baseline exceeds 100 MAE for the ICU in UT and exceeds 71 MAE
+for the general ward in SD). The results illustrate that our method can produce forecasts
+with small deviation from the ground truth across several diverse scenarios.
+Second, we assess the coverage of the learned posterior distribution across the 50%,
+80% and 95% centered intervals of the posterior. For an ideal, well-calibrated posterior, we
+should observe that X% of the actual counts in the testing period fall within an interval
+chosen to cover X% of the distribution’s mass. See results for the US (Tab. B.3) and the
+UK (Tab. B.4) in Appendix B.2. We find the coverage of our ACED-HMM is more plausible
+than baselines, though there is still room to improve as we might expect from knowing our
+model is an approximation of reality.
+6.3. Interpretation of learned posteriors over parameters
+In Fig. 5, we show the learned posterior distributions over all relevant model parameters
+after fitting on the Massachusetts data. Several insights regarding hospital dynamics in
+MA can be drawn. For instance, the learned probability of recovering in I is significantly
+lower than that indicated by the prior, indicating a potential deviation in hospital dynamics
+or in the patient age distribution in MA compared to the US as a whole. The learned
+posterior indicates, with high confidence, that the average length of stay in I (ICU not on
+the ventilator) is very low, both for recovering (h = 1) and especially for declining (h = 0)
+patients, indicating that a patient who is on a declining path in the ICU is very quickly
+moved to the ventilator. Last, patients on the ventilator seem to stay there for shorter
+periods of time when declining rather than when recovering. However, we note that the
+duration posterior for recovering on the ventilator closely matches the prior and is bimodal,
+indicating we may not be confident that the posterior has recovered the ”ideal” parameter.
+This result is not surprising, as very few of all admitted patients recover from the ventilator,
+and thus given limited data it is the most difficult of all parameters to recover.
+
+15
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B , Q * H Q H U D O : D U G
+    
+
+  
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+    
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B , Q * H Q H U D O : D U G
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+    
+
+  
+
+   
+
+   
+
+  
+
+   
+
+   
+
+   
+
+   
+
+   
+
+  
+
+   
+
+  
+
+   
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 I I 9 H Q W , Q , & 8
+
+  
+
+  
+  
+
+ 
+
+  
+
+ 
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 Q 9 H Q W , Q , & 8
+  
+
+ 
+
+ 
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 Q 9 H Q W , Q , & 8
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+   
+
+   
+
+ 
+
+   
+
+   
+
+   
+
+  
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+ 
+
+   
+
+ 
+ 
+
+   
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+  
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+    
+    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+ 
+ 
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+Figure 5: Posterior distributions over parameters for Massachusetts (Nov. 11 - Jan. 11).
+We show transition parameters (left) and duration parameters (right) after fitting on 2 months of
+counts, where each day we used available census counts for G, I, V, and T. The colored interval of
+duration plots shows the 2.5 - 97.5th percentile intervals of 2000 samples (10 runs, each with 200
+samples). The prior is also shown for comparison.
+
+In Fig. B.1 in the Appendix, we further visualize the learned posteriors for the South
+Tees hospital site in the UK. As expected, we observe much higher variance in these learned
+posteriors than the posteriors for the (much larger) Massachusetts dataset above. Naturally,
+for a single hospital site we expect to be more uncertain (less confident). However, we notice
+some potentially valuable differences compared to MA. Duration distributions appear to be
+longer, and patients appear to be more likely to recover both in the General Ward and in
+the ICU.
+6.4. Data ablation study: How does learning from different sets of counts
+affect the learned posterior?
+Public data sources may differ in terms of the granularity of available counts. For example,
+for U.S. states we can usually gather separate counts of for each of the G, I, and V intermediate stages as well as the terminal stage T, while for the U.K. we only have counts of
+all beds (G + I + V), patients on ventilation (V), and recovered (R). Other sites may yet
+offer other different subsets of {G, I, V, T, R}.
+To assess the model’s sensitivity to data granularity, we trained the ACED-HMM on
+the Massachusetts data we used in our other experiments, but with a key manually imposed
+difference in available data: instead of fitting to the finest granularity of available counts – G,
+I, V and T separately – we instead aggregate all intermediate stages and fit the parameters
+
+16
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Exact
+
+5x Scaling
+ Q B , Q * H Q H U D O : D U G
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+    
+
+ & H Q V X V  & R X Q W V
+
+    
+
+ W U X H
+ $ % &
+
+ W U X H
+ $ % &
+
+    
+
+    
+
+    
+
+    
+
+    
+
+   
+
+   
+   
+
+   
+
+   
+
+   
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ & H Q V X V  & R X Q W V
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ Q B , Q , & 8
+ W U X H
+ $ % &
+
+   
+
+ W U X H
+ $ % &
+
+   
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8
+   
+
+   
+
+   
+
+   
+
+   
+   
+
+   
+
+   
+
+   
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+Figure 6: Scalability assessment for MA data. We show the predictions for our ABC method
+using all admissions recorded in the training period (left), as well as our proposed scaling procedure
+with a 5x scale factor (right). The scaling simulates only 20% of observed admissions but then
+scales all counts by 5. The scaling procedure allows simulations to run 5 times faster with the same
+qualitative trend recovery and only modest increases in uncertainty intervals.
+
+to daily counts of all beds (G + I + V) and death (T) only. See Fig. B.2 for fits and forecasts
+to G, I, V and G + I + V counts, and Fig. B.3 for the learned model parameters.
+We find that, while the model trained with less-granular data can fit the aggregate “all
+beds” counts well in both training and test periods, the model could not recover individual
+stage counts from the G and I stages well. In particular, the algorithm converged to parameters that undershot G counts and overshot I counts. The differing signs of these errors
+roughly cancel out and thus aggregate counts are predicted well. Interestingly, the model
+managed better predictions of V. We believe this is due to the presence of T counts at
+training time, as these values provide a more direct signal for what the V counts should be.
+This experiment shows that, as expected, forecasts on fine-grained counts that the model
+was not trained on are generally not reliable, unless some closely-related counts is provided
+(e.g. T is provided as a signal for V or R is provided as a signal for G). Stronger, more
+informative priors about the intermediate stages may also improve performance when finegrained signals are not available.
+6.5. Scalability assessment: How well does this model scale?
+A key design requirement of our procedure is scaling up our simulations to handle data from
+large regions or even entire countries. We propose a simple but effective scaling procedure
+for ABC algorithm: given a scaling factor r > 1, we simulate only a fraction 1r of all
+admissions (at a fraction the computational cost). Then we multiplicatively rescale the
+resulting aggregate counts produced by the simulation appropriately: rỹtk . In expectation,
+this should be an unbiased estimator of simulated counts from the full admitted population.
+In Fig. 6, we show that our proposed scaling procedure is effective. Simulating only 20% of
+admissions in MA and rescaling, we see a qualitatively similar recovered forecast with only
+modestly increased uncertainty. With exact simulation of Massachusetts already feasible,
+by applying 10-x or 20-x scaling we can easily forecast for any U.S. state of interest.
+
+17
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+6.6. What-if scenario assessment: Can we assess the impact of interventions?
+We now consider using our model to make data-driven decisions to assess the value of possible
+interventions. One of the strengths of our mechanistic ACED-HMM model is that we can
+consider possible changes or interventions to either the model parameters or assumptions
+about admissions. Below, we imagine two possible scenarios for the state of California, which
+chose to enact significant restrictions in late November and early December 2020 in light of
+rising hospital numbers and especially rising ICU utilization. After fitting our progression
+model to California count data, we forecast what would happen under two possible what-if
+scenarios. All forecasts were made with 30-x scaling.
+We stress that we fit model parameters over counts between November 11th and January 11th (reusing an existing ABC fit for convenience), so the forecasts shown are to be
+interpreted as a retrospective analysis of what might have happened to the peak of the wave
+had the interventions considered been successfully deployed and extensively used. However,
+we emphasize that our method can also forecast into the future if desired.
+What-if Scenario 1: Intervention that lowers hospitalization rates. Recent advances in pharmaceuticals have shown promising advances in monoclonal antibodies that
+might reduce hospitalizations (and deaths). A recent Phase 3 trial suggests that two drugs
+(bamlanivimab and etesevimab) together reduced hospitalizations and death by 87% when
+given to severely ill COVID-19 patients before they needed the hospital (Eil Lilly and Company, 2021). Suppose that policy makers were able to aggressively roll this treatment out
+over 30 days across the state of California, before the large wave of rising cases in late 2020.
+In Fig. 7, we show our model’s fit to several scenarios: what actually happened (no reduction in admissions), an ideal retrospective rollout (a linear ramp up to a full 87% reduction
+in hospital admissions after 30 days), and two more realistic targets of a 50% and a 25%
+reduction. Given Fig. 7 plus knowledge of capacity limits, policy makers could use such
+quantitative forecasts to decide which rollout strategies to prioritize.
+What-if Scenario 2: Pharmaceutical that lowers recovery times in the hospital.
+We next consider an intervention that changes the number of days spent when recovering
+in the hospital, motivated by a promising new treatment possibility. A recent clinical trial
+described by Beigel et al. (2020) suggests that the drug remdesivir reduced time to recovery
+from a median of 15 days (placebo) to a median of 10 days (treatment) for hospitalized
+patients with advanced cases of COVID-19. The study also reported a similar improvement
+among patients with severe disease, with recovery time reduced from a median of 18 days to
+a median of 11 days. We thus consider a scenario that assumes a 25% reduction in recovery
+time, as this would be a conservative assessment of such a therapy.
+To operationalize this intervention in our model, for each segment ` of patient n’s trajectory, we impose a 25% reduction in the sampled duration ∆n` when the patient is recovering
+(when health indicator hn` = 1). Durations in the model’s declining health states are not
+modified. When we reduce durations, we round up or down to an integer number of days in
+a probabilistic way that preserves the expected value (e.g. if the scaled duration is 9.75, we
+return 10.00 75% of the time and 9.00 25% of the time). We further adjust to account for
+the fact that stays of length one cannot be reduced further.
+Fig. 8 shows the difference between the standard and 25% reduction in recovering durations. As expected, we see noticable differences in the populations in the general ward.
+18
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+ W U X H
+ 3 U H G L F W H G
+ 1 R  L Q W H U Y H Q W L R Q
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+
+ & H Q V X V  & R X Q W V
+
+     
+     
+    
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  2 F W    W K
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8
+
+ W U X H
+ 3 U H G L F W H G
+ 1 R  L Q W H U Y H Q W L R Q
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+      D G P L V V L R Q V
+ R Y H U     G D \ V
+
+    
+
+ & H Q V X V  & R X Q W V
+
+ 
+
+    
+    
+    
+    
+    
+ 
+
+ 
+
+ 
+
+  
+
+ ' D \ V  V L Q F H  2 F W    W K
+
+Figure 7: Forecasted demand for General Ward (top) and ICU (bottom) beds in California under Scenario 1 (Sec. 6.6).
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+ W U X H
+ 1 R  L Q W H U Y H Q W L R Q
+     G H F U H D V H
+ L Q  G X U D W L R Q V  I R U
+ U H F R Y H U L Q J  S D W L H Q W V
+
+     
+
+ W U X H
+ 1 R  L Q W H U Y H Q W L R Q
+     G H F U H D V H
+ L Q  G X U D W L R Q V  I R U
+ U H F R Y H U L Q J  S D W L H Q W V
+
+    
+
+ & H Q V X V  & R X Q W V
+
+ & H Q V X V  & R X Q W V
+
+     
+
+    
+
+    
+    
+    
+    
+    
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+  
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+ 1 R  L Q W H U Y H Q W L R Q
+     G H F U H D V H
+ L Q  G X U D W L R Q V
+
+     
+     
+     
+    
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ 1 R  L Q W H U Y H Q W L R Q
+     G H F U H D V H
+ L Q  G X U D W L R Q V
+
+    
+
+ & H Q V X V  & R X Q W V
+
+ & H Q V X V  & R X Q W V
+
+     
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+
+    
+    
+    
+ 
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+Figure 8: Forecasted demand for General Ward beds (left) and ICU beds (right) using
+actual future counts (top) and a worst-case projection of counts (bottom) in California
+under What-if Scenario 2 (Sec. 6.6).
+
+However, the model suggests the ICU counts would not change much (probably because the
+ICU is unfortunately dominated by declining rather than recovering patients).
+
+7. Discussion
+We have contributed a new probabilistic model, developed a scalable ABC algorithm to
+draw samples from the (approximate) posterior distribution over model parameters, and
+validated these contributions on several datasets relevant to hospital demand modeling.
+Limitations. Our proposed ACED-HMM model has several limitations. A major one is
+that it assumes the availability of admission counts when making forecasts, when of course
+for a real forecast into the future these counts are not known. We hope in future work
+to explore integrating models for forecasting future admissions, such as the model used
+by Qian et al. (2020). Another major limitation is that we currently assume that the values
+19
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+of most parameters are static over time. In reality, we know that many factors are all
+changing over time, including properties of the disease (e.g. variants with different infection
+dynamics), characteristics of the infected population (e.g. age distributions), and hospital
+care practices. In the language of statistics, we know the real progression of patients through
+the hospital is neither homogenous nor Markov, so we should not expect our forecasts to be
+accurate far into the future. We could allow the model to learn how recovery probabilities or
+duration distributions might change over time. Finally, our model would likely be improved
+by capturing age as a key prognostic covariate that informs both the recovery probabilities
+and the duration probabilities. Naturally this would require more information, such as
+estimates of the age distribution on each day in the target region. However, if available this
+information could increase the model’s power as an explanatory tool.
+Further limitations can be ascribed to our proposed ABC methodology. Though our
+ABC procedure is simple and scalable, it is inefficient in the way it proposes samples via a
+random walk, with rather high rejection rates. In the future, we may consider Hamiltonian
+ABC (Meeds et al., 2015) methods to use gradient information to improve proposals and
+accelerate posterior exploration.
+Advantages. Towards our twin goals of being able to provide reasonable forecasts and
+assess societal value, the extreme portability of our approach is a key advantage. The model
+requires only daily count data that are available from public health agencies throughout
+the world. There is no requirement for patient-level data. We further emphasize that the
+model and learning procedures are easily extended. Changing the model (such as adding
+age-dependent duration probabilities) would simply require editing the simulation code that
+generates a patient’s sequential trajectory of states zn,1:Ln and durations ∆n,1:Ln , and specifying relevant prior and proposal distributions for any additional parameters.
+Overall, we hope this study and our open-source code release leads to an improved ability to make hospital demand forecasts that are portable (by requiring only aggregate count
+data), interpretable and extrapolate-able (by using a mechanistic model), accurate (by fitting
+model parameters to local conditions via our ABC algorithm), and appropriately uncertain
+(by producing posterior distributions rather than point estimates). Although further work
+is needed to properly assess the societal value of possible interventions with this model, we
+believe our work represents a promising first step.
+
+Acknowledgements
+Authors GMV, CN, JTC, and MCH gratefully acknowledge funding support from a consortium of industry partners for this project – AstraZeneca, Bristol-Myers Squibb, Eli Lilly,
+Gilead Sciences, Janssen, Merck, Pfizer, and Regeneron – via an agreement with the Center
+for the Evaluation of Value and Risk in Health (CEVR) at Tufts Medical Center.
+Authors MCH and DMK thank the Office of the Vice Provost for Research at Tufts
+University for support for this project under a “Tufts Springboard” award.
+We thank Jinny Park (RA at Tufts Medical Center) for early assistance with literature
+surveys.
+We thank several other graduate students in the Tufts Dept. of Computer Science who
+assisted with various early efforts on this project: Preetish Rath, Zhe Huang, and Panos
+20
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Lymperopoulos (early model prototyping efforts) as well as Gabriel Appleby, Diana Eastman,
+and Ab Mosca (visualization efforts).
+
+References
+S. Ahamad, S. Branch, S. Harrelson, M. K. Hussain, M. Saquib, and S. Khan. Primed for
+global coronavirus pandemic: Emerging research and clinical outcome. European Journal
+of Medicinal Chemistry, 209:112862, 2021.
+C. Andrieu, N. De Freitas, A. Doucet, and M. I. Jordan. An introduction to MCMC for
+machine learning. Machine Learning, 50(1-2):5–43, 2003.
+M. A. Beaumont. Approximate Bayesian Computation in Evolution and Ecology. Annual
+Review of Ecology, Evolution, and Systematics, 41(1):379–406, 2010. https://doi.org/
+10.1146/annurev-ecolsys-102209-144621.
+M. A. Beaumont, W. Zhang, and D. J. Balding. Approximate Bayesian Computation in
+Population Genetics. Genetics, 162(4), 2002. https://www.genetics.org/content/162/
+4/2025.
+C. Beckham and C. Pal. Unimodal probability distributions for deep ordinal classification. In
+International Conference on Machine Learning, 2017. http://proceedings.mlr.press/
+v70/beckham17a.html.
+J. H. Beigel, K. M. Tomashek, L. E. Dodd, A. K. Mehta, B. S. Zingman, A. C. Kalil,
+E. Hohmann, H. Y. Chu, A. Luetkemeyer, et al. Remdesivir for the Treatment of Covid19 — Final Report. New England Journal of Medicine, 383(19):1813–1826, 2020.
+M. G. B. Blum and V. C. Tran. HIV with contact tracing: A case study in approximate
+Bayesian computation. Biostatistics, 11(4):644–660, 2010.
+U. S. CDC. COVID-19 Pandemic Planning Scenarios. Technical report, U. S. Centers for
+Disease Control, 2020. https://www.cdc.gov/coronavirus/2019-ncov/hcp/planningscenarios.html#table-2.
+P. Chen, A. Nirula, B. Heller, R. L. Gottlieb, J. Boscia, J. Morris, G. Huhn, J. Cardona,
+B. Mocherla, et al. SARS-CoV-2 Neutralizing Antibody LY-CoV555 in Outpatients with
+Covid-19. New England Journal of Medicine, 384(3):229–237, 2021.
+S. E. Congly, R. A. Varughese, C. E. Brown, F. M. Clement, and L. Saxinger. Treatment
+of Moderate to Severe Respiratory COVID-19—A Cost-Utility Analysis. medRxiv, 2020.
+https://www.medrxiv.org/content/10.1101/2020.09.21.20199182v2.
+K. Cranmer, J. Brehmer, and G. Louppe. The frontier of simulation-based inference. Proceedings of the National Academy of Sciences, 117(48), 2020. https://www.pnas.org/
+content/117/48/30055.
+Eil Lilly and Company.
+Lilly’s bamlanivimab and etesevimab together reduced hospitalizations and death in Phase 3 trial for early COVID-19.
+2021.
+21
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+https://investor.lilly.com/news-releases/news-release-details/lillysbamlanivimab-and-etesevimab-together-reduced.
+R. H. Epstein and F. Dexter. A Predictive Model for Patient Census and Ventilator Requirements at Individual Hospitals During the Coronavirus Disease 2019 (COVID-19)
+Pandemic: A Preliminary Technical Report. Cureus, 12(6), 2020.
+J. D. Ferguson. Variable duration models for speech. In Proceedings of the Symposium on
+the Application of Hidden Markov Models to Text and Speech, Princeton, NJ, USA, 1980.
+S. Flaxman, S. Mishra, A. Gandy, H. J. T. Unwin, T. A. Mellan, H. Coupland, C. Whittaker,
+H. Zhu, T. Berah, et al. Estimating the effects of non-pharmaceutical interventions on
+COVID-19 in Europe. Nature, 584(7820):257–261, 2020.
+J. Friedman, P. Liu, E. Gakidou, and I. C. M. C. Team. Predictive performance of international COVID-19 mortality forecasting models. medRxiv, page 2020.07.13.20151233,
+2020.
+A. Gandjour. How Many Intensive Care Beds are Justifiable for Hospital Pandemic Preparedness? A Cost-effectiveness Analysis for COVID-19 in Germany. Applied Health
+Economics and Health Policy, 19(2):181–190, 2021.
+A. Gelman, J. B. Carlin, H. S. Stern, D. B. Dunson, A. Vehtari, and D. B. Rubin. Bayesian
+Data Analysis. CRC Press, 2013.
+Y. Gu. Concerns with the IHME Model, 2020. https://covid19-projections.com/about/
+#concerns-with-the-ihme-model.
+M. D. Hoffman and A. Gelman. The No-U-Turn Sampler: Adaptively Setting Path Lengths
+in Hamiltonian Monte Carlo. Journal of Machine Learning Research, page 31, 2014.
+http://jmlr.org/papers/volume15/hoffman14a/hoffman14a.pdf.
+IHME COVID-19 Forecasting Team. Supplementary Information: Modeling COVID-19
+scenarios for the United States. Supplementary Material, Nature Medicine, 2020. https:
+//doi.org/10.1038/s41591-020-1132-9.
+J. P. Ioannidis, S. Cripps, and M. A. Tanner. Forecasting for COVID-19 has failed. International Journal of Forecasting, 2020.
+N. P. Jewell, J. A. Lewnard, and B. L. Jewell. Predictive Mathematical Models of the
+COVID-19 Pandemic: Underlying Principles and Value of Projections. JAMA, 323(19):
+1893–1894, 2020.
+Y. Jo, L. Jamieson, I. Edoka, L. Long, S. Silal, J. R. C. Pulliam, H. Moultrie, I. Sanne,
+G. Meyer-Rath, et al. Cost-effectiveness of remdesivir and dexamethasone for COVID-19
+treatment in South Africa. medRxiv: The Preprint Server for Health Sciences, 2020.
+D. Koeckerling, J. Barker, N. L. Mudalige, O. Oyefeso, D. Pan, M. Pareek, J. P. Thompson,
+and G. A. Ng. Awake prone positioning in COVID-19. Thorax, 75(10):833–834, 2020.
+
+22
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+A. H. Lee, P. Lymperopoulos, J. T. Cohen, J. B. Wong, and M. C. Hughes. Forecasting
+COVID-19 Counts at a Single Hospital: A Hierarchical Bayesian Approach. In ICLR
+2021 Workshop on Machine Learning for Preventing and Combating Pandemics, 2021.
+https://arxiv.org/abs/2104.09327.
+M. L. Li, H. T. Bouardi, O. S. Lami, N. Trichakis, M. F. Zarandi, and D. Bertsimas.
+Overview of DELPHI Model V3. Technical report, COVIDAnalytics, 2020. https://
+covidanalytics.io/DELPHI_documentation_pdf.
+J.-M. Marin, P. Pudlo, C. P. Robert, and R. J. Ryder. Approximate Bayesian computational
+methods. Statistics and Computing, 22(6):1167–1180, 2012. https://doi.org/10.1007/
+s11222-011-9288-2.
+P. Marjoram, J. Molitor, V. Plagnol, and S. Tavaré. Markov chain Monte Carlo without
+likelihoods. Proceedings of the National Academy of Sciences, 100(26), 2003. https:
+//www.pnas.org/content/100/26/15324.
+E. Meeds, R. Leenders, and M. Welling. Hamiltonian ABC. arXiv:1503.01916 [cs, q-bio,
+stat], 2015. http://arxiv.org/abs/1503.01916.
+N. Metropolis, A. W. Rosenbluth, M. N. Rosenbluth, A. H. Teller, and E. Teller. Equation
+of State Calculations by Fast Computing Machines. The Journal of Chemical Physics, 21
+(6):1087–1092, 1953.
+C. D. Mitchell and L. H. Jamieson. Modeling duration in a hidden Markov model with the
+exponential family. In 1993 IEEE International Conference on Acoustics, Speech, and
+Signal Processing, volume 2, pages 331–334, 1993.
+C. J. Murray, others, and the IHME COVID-19 health service utilization forecasting team.
+Forecasting the impact of the first wave of the COVID-19 pandemic on hospital demand
+and deaths for the USA and European Economic Area countries. medRxiv, 2020. https:
+//www.medrxiv.org/content/10.1101/2020.04.21.20074732v1.
+P. J. Neumann, J. T. Cohen, D. D. Kim, and D. A. Ollendorf. Consideration Of Value-Based
+Pricing For Treatments And Vaccines Is Important, Even In The COVID-19 Pandemic.
+Health Affairs, 40(1):53–61, 2020.
+Z. Qian, A. M. Alaa, and M. van der Schaar. CPAS: The UK’s national machine learningbased hospital capacity planning system for COVID-19. Machine Learning, pages 1–21,
+2020.
+R. C. Reiner, R. M. Barber, J. K. Collins, P. Zheng, C. Adolph, J. Albright, C. M. Antony,
+A. Y. Aravkin, S. D. Bachmeier, et al. Modeling COVID-19 scenarios for the United
+States. Nature Medicine, 27(1):94–105, 2021.
+M. Roimi, R. Gutman, J. Somer, A. Ben Arie, I. Calman, Y. Bar-Lavie, U. Gelbshtein,
+S. Liverant-Taub, A. Ziv, et al. Development and validation of a machine learning model
+predicting illness trajectory and hospital utilization of COVID-19 patients-a nationwide
+study. Journal of the American Medical Informatics Association: JAMIA, 2021.
+23
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+J. Salvatier, T. V. Wiecki, and C. Fonnesbeck. Probabilistic programming in Python using
+PyMC3. PeerJ Computer Science, 2:e55, 2016.
+The Atlantic Monthly Group. The COVID tracking project - Data API, 2021. https:
+//covidtracking.com/data/api.
+U. S. Dept. of Health and Human Services. COVID-19 reported patient impact and hospital capacity by state timeseries, 2021. https://healthdata.gov/Hospital/COVID-19Reported-Patient-Impact-and-Hospital-Capa/g62h-syeh.
+M. J. Wainwright and M. I. Jordan. Graphical Models, Exponential Families, and Variational
+Inference. Foundations and Trends® in Machine Learning, 1(1–2):1–305, 2008.
+G. E. Weissman, A. Crane-Droesch, C. Chivers, T. Luong, A. Hanish, M. Z. Levy, J. Lubken,
+M. Becker, M. E. Draugelis, et al. Locally Informed Simulation to Predict Hospital
+Capacity Needs During the COVID-19 Pandemic. Annals of Internal Medicine, 2020.
+S.-Z. Yu. Hidden semi-Markov models. Artificial Intelligence, 174(2):215–243, 2010.
+J. Zhang, B. Xie, and K. Hashimoto. Current status of potential therapeutic candidates for
+the COVID-19 crisis. Brain, Behavior, and Immunity, 87:59–73, 2020.
+D. Zou, L. Wang, P. Xu, J. Chen, W. Zhang, and Q. Gu. Epidemic Model Guided
+Machine Learning for COVID-19 Forecasts in the United States. medRxiv, page
+2020.05.24.20111989, 2020.
+
+24
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Appendix A. Datasets
+In our public code release, we include CSV files of the datasets we used for both the US and
+UK. Below, we describe how we obtained and preprocessed this data from original sources.
+A.1. U.S. data.
+Data representing state-level counts came from the U. S. Dept. of Health and Human
+Services (2021) and the Covid Tracking Project (CTP, The Atlantic Monthly Group (2021))6 .
+We accessed the data in February 2021. These sources provide data for all 50 states, we
+selected a subset of states of interest: California (CA), Massachusetts (MA), South Dakota
+(SD), and Utah (UT). HHS data provided daily counts of hospital admissions and general
+ward occupancy counts (stage G), while CTP data provided ICU counts (I and V), as well
+as deaths (stage T).
+As much as possible, we validated the consistency of these 2 public data sources by
+assuring that these counts matched with available corresponding data provided directly by
+state government public health agencies. For example, we verified the MA data matched
+counts released by the Massachusetts Department of Public Health7 .
+In summary, our US predictive models all use standardized counts representing adult
+hospitalizations for confirmed COVID-19 cases. We are certain that our data for the general
+ward (G) accounts for the adult population while excluding pediatric cases. Through dataconsistency checks across the 2 data sources, we convinced ourselves that CTP’s I, V, and
+T data can be assumed as a good representation of adult populations (even though CTP
+reports uncertainty about whether their numbers include pediatric cases).
+HHS fields used. HHS data descriptions are found on the clickable columns of the data
+web page8 . We used the following data fields, with quoted definitions extracted from the
+data source.
+• previous day admission adult covid confirmed : “Number of patients who were
+admitted to an adult inpatient bed on the previous calendar day who had confirmed
+COVID-19 at the time of admission in this state” (We considered previous day admissions as a feasible current day admission because admissions rates were not abruptly
+changing in orders of magnitudes between days. We recommend considering making
+the 1 day adjustment in future use of this data field.)
+• total adult patients hospitalized confirmed covid : “Reported patients currently
+hospitalized in an adult inpatient bed who have laboratory-confirmed COVID-19. This
+include those in observation beds”
+• staffed icu adult patients confirmed covid : “Reported patients currently hospitalized in an adult ICU bed who have confirmed COVID-19 in this state”
+6. https://api.covidtracking.com/v1/states/daily.csv
+7. https://www.mass.gov/info-details/archive-of-covid-19-cases-in-massachusetts
+8. https://healthdata.gov/Hospital/COVID-19-Reported-Patient-Impact-and-Hospital-Capa/
+g62h-syeh/data
+
+25
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+CTP fields used. CTP data descriptions are found in the ’historic values for all states’
+section of the data API webpage page9 . We used the following data fields, with quoted
+definitions extracted from the data source.
+• inIcuCurrently : “Individuals who are currently hospitalized in the Intensive Care
+Unit with COVID-19. Definitions vary by state / territory, and it is not always clear
+whether pediatric patients are included in this metric. Where possible, we report
+patients in the ICU with confirmed or suspected COVID-19 cases”
+• onVentilatorCurrently : “Individuals who are currently hospitalized under advanced
+ventilation with COVID-19. Definitions vary by state / territory, and it is not always
+clear whether pediatric patients are included in this metric. Where possible, we report
+patients on ventilation with confirmed or suspected COVID-19 cases.”
+• deathIncrease : ”Daily increase in death, calculated from the previous day’s value.”
+We note that as of 2021-04-14, the CTP website relates the following message: ”The
+COVID Tracking Project has ended all data collection as of March 7, 2021. These files are
+still available, but will only include data up to March 7, 2021. We’ll be publishing research
+through May, and then we will—fully and accessibly—archive our work and be done.”
+Obtaining stage-specific counts from raw data fields.
+• Counts for daily admissions to the general ward were obtained from field previous
+day admission adult covid confirmed.
+• G : Daily counts for general ward occupancy were obtained from field total adult patients hospitalized confirmed covid subtracting field staffed icu adult patients
+confirmed covid
+• I : Daily counts for ICU-off-ventilator were obtained from field inIcuCurrently subtracting field onVentilatorCurrently
+• V : Daily counts for ICU-on-ventilator were obtained from field onVentilatorCurrently
+• T : Daily counts obtained from field deathIncrease
+Variable data granularity across states. Not all states report counts from all stages.
+For example, UT and CA only provide aggregate ICU counts, and thus do not distinguish
+between on and off the ventilator. We thus take the provided count as the sum of the two
+ICU stages I, V of our model, and adapt our ABC accordingly to evaluate a distance on
+this combined stage.
+Smoothing terminal counts. For all states, we find the daily counts for the terminal
+death stage T to be both noisy and unreliable due to human factors in the reporting process.
+In particular, the reported counts often drop to unrealistic values at or close to zero during
+holidays and weekends (e.g. in some states we observed zero deaths on Thanksgiving and
+Christmas). Thus, we smooth these counts by replacing each day’s raw value with the
+centered moving average across 5 days, being careful to not leak test-counts information
+into the moving average of training counts.
+9. https://covidtracking.com/data/api
+
+26
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+A.2. UK data.
+We selected two hospital sites in England, United Kingdom with consistent data availability
+and a large volume of cases. We used public data sourced from the UK National Health
+Service (NHS)10 , which provided the count of beds occupied by COVID-19 patients on each
+day at each hospital. We used the following data fields:
+• mechanical ventilators used for covid patients (V)
+• total number of beds used for covid patients (G + I + V)
+• patients discharged from covid hospitalization (R)
+• patients admitted with covid
+• patients diagnosed in-hospital with covid but who were not admitted as covid patients
+In our experiments, we aggregated daily covid admissions and daily in-hospital covid diagnoses to form the daily admissions in G that are then fed into ACED-HMM. The two
+hospital sites we selected had the same available counts. Unlike for US data, we did not find
+the need to smooth any count.
+
+Appendix B. Additional Results
+B.1. Quantitative assessment: How accurate are the forecasted counts?
+We next assess how accurate the forecasted counts are, in terms of mean absolute error from
+the observed counts in the test set. In Table B.1, we show mean absolute errors for our
+proposed ACED-HMM + ABC (averaged over all days in the forecasting period) for 3 US
+states. We further perform the same assessment on 2 single hospital sites from the UK in
+Table B.2.
+On select datasets, we compare to several reasonable baselines. (We did not try all
+methods on all datasets due to limited computational resources and the expected poor
+performance of most baselines). First, we consider “ACED-HMM + Prior”, which makes
+forecasts using the prior distribution over our model’s parameters, rather than the posterior
+fit via ABC. This could indicate how reliable our model would be if we did not adapt
+parameters to the specific region of interest but instead chose values for transition and
+duration probabilities from a reasonable literature survey (as our prior is chosen). This
+could also indicate how important other factors (such as the provided admission counts in
+testing period) are to the forecast. Second, we compare to “AR-Poisson”, a non-mechanistic
+probabilistic autoregressive model with a Poisson likelihood that forecasts each univariate
+count time-series individually, inspired by Lee et al. (2021). This is a custom univariate
+forecasting model fit to each stage separately. It does not use admission counts at all. See
+Appendix E for details.
+For all U.S. states we compare against the January 15th public release of IHME model
+forecasts (Reiner et al., 2021). These forecasts were produced by the IHME team by training
+on data available before January 12th, thus matching the start of our testing period almost
+exactly. This model does not make use of admission counts from the testing period. See
+Appendix F for details.
+10. https://www.england.nhs.uk/statistics/statistical-work-areas/covid-19-hospital-activity/
+
+27
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+G InGeneralWard I + V
+Method
+MAE
+lower - upper
+MAE
+ACED-HMM + ABC
+65.0
+61.5 68.9 15.7
+ACED-HMM + Prior 868.6
+779.6 - 945.8 293.6
+MA
+AR-Poisson 498.0
+438.3 - 553.6 162.2
+IHME 1066.1 *543.4 - 1754.9 104.0
+Mean Test y 1141.6
+392.5
+ACED-HMM + ABC
+9.2
+8.5 10.1
+4.5
+SD
+IHME
+71.8
+*6.6 - 166.4 17.7
+Mean Test y 102.5
+34.9
+ACED-HMM + ABC
+20.8
+20.2 21.3 18.2
+UT
+IHME 332.9 *142.6 - 578.4 105.0
+Mean Test y 272.9
+164.3
+
+lower
+14.5
+272.6
+148.6
+*15.6
+4.3
+*4.2
+17.4
+*35.7
+
+InICU
+V OnVentInICU
+- upper
+MAE
+lower - upper
+- 16.9 34.0
+32.6 - 35.7
+- 313.3 119.6
+113.8 - 124.8
+- 173.5 128.3
+118.5 - 138.6
+- 257.9 25.7
+*41.4 - 106.5
+249.1
+4.8
+4.8
+4.5 5.1
+- 46.0
+5.9
+*6.3 - 20.6
+23.6
+- 19.2
+NA
+- 213.9
+NA
+NA
+
+T sm.
+Death
+MAE lower - upper
+8.0
+7.8 - 8.3
+40.7
+39.1 - 42.2
+34.8
+28.4 - 42.0
+21.6
+*8.7 - 49.7
+66.5
+2.8
+2.7 - 2.9
+2.5
+*3.6 - 5.0
+7.8
+2.4
+2.3 - 2.5
+7.4
+*2.7 - 15.7
+11.7
+
+Table B.1: Quantitative error assessment on 3 U.S. states. We measure error on the testing period
+(Jan. 11 - Feb. 11, 2021) with respect to the observed counts at each possible care stage: general
+ward G, in ICU (including on and off ventilator) I + V, on ventilator in ICU V, and smoothed death
+counts T sm.). For all states and stages, we report the mean count y across the testing period to
+give a sense of scale. Cells marked NA were not available for that state (see discussion in App. A).
+AR-Poisson baseline is described in App. E, IHME baseline in App. F. We communicate uncertainty
+by reporting lower and upper estimates of the MAE. To obtain these intervals for all variants of
+our ACED-HMM as well as our AR-Poisson baseline, we repeat all MAE computations across 100
+separate batches of posterior samples. We compute and report the 2.5th and 97.5th percentiles
+across these batches. For the IHME baseline, a distribution of forecasted samples is not available.
+Thus, we report the MAE computed using the mean estimate forecast, as well as the MAE computed
+using the provided lower and upper estimates count values. This second kind of interval (marked
+with *) should not be directly compared to the first, as they capture different aspects of uncertainty.
+
+For both versions of ACED-HMM and for the autoregressive model, we compute the
+MAE and its confidence interval as follows. We draw 100 samples from the posterior (prior
+for ACED-HMM + Prior) distribution over the model parameters, we produce individual
+forecasts for each sample, and compute the MAE using the mean of these forecasts. We
+repeat the process 100 times, and we report the average MAE with the 2.5th - 97.5th
+percentile range across these batches as confidence interval. The public release of forecasts
+from IHME only provides three daily forecast values - a mean estimate, a lower bound and
+an upper bound - thus making it impossible to compute a confidence interval analogous
+to that which we compute for the other three models. Thus, we simply report the MAE
+computed using each of the three estimates. The IHME uncertainty intervals (marked with
+*) are given for completeness, but should be recognized as different from the other intervals
+and not directly compared.
+B.2. Quantitative Assessment: Posterior Coverage
+Below, we consider the coverage of the estimated posteriors produced by our procedure.
+In Tab. B.3 and B.4, we show the 50%, 80% and 95% coverage fractions. Ideal probabilistic models that are well-calibrated would have an empirical fraction of observations exactly
+equal to the target fraction. However, fractions of observations greater than the target fraction are more desirable than those lower, as that indicates a better fit to the observations
+by the median of the forecasts. We see that all models could be better calibrated. However,
+our ACED-HMM trained with ABC has a great fit to the G + I + V counts and V counts
+on both UK hospitals, as well as a near-perfect fit to the I + V counts on US states, counts
+28
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Method
+ACED-HMM + ABC
+ACED-HMM + Prior
+South Tees
+AR-Poisson
+Mean Test y
+ACED-HMM + ABC
+Oxford
+Mean Test y
+
+G+I+V
+MAE
+8.7
+118.4
+49.2
+199.5
+18.0
+274.7
+
+All Beds
+V OnVentInICU
+R
+Recovered
+lower - upper
+MAE lower - upper
+MAE lower - upper
+7.7 - 10.2
+4.6
+3.9 5.1 5.7
+5.5 5.8
+109.8 - 125.9 10.7 10.0 11.4 5.9
+5.7 6.2
+40.3 - 60.5 417.3 15.8 - 2209.5 49.2
+9.7 - 518.7
+31.1
+20.8
+15.4 - 22.4
+6.3
+5.5 6.9 13.4 13.2 - 13.6
+37.7
+33.1
+
+Table B.2: Quantitative error assessment for predictions for two UK hospital sites during the testing
+period (Jan. 11 - Feb. 11, 2021). We assess mean absolute error (MAE) at each stage where we
+have available “ground-truth” count data for these sites: total hospital bed count G + I + V, count
+of patients on ventilator in ICU V, and counts of patients who recovered R. For all sites and stages,
+we report the mean count y across the testing period to give a sense of scale. AR-Poisson baseline
+is described in App. E. We communicate uncertainty by reporting lower and upper estimates on the
+MAE, which we obtain by repeating all MAE computations across 100 separate batches of posterior
+samples. We compute and report the 2.5th and 97.5th percentiles across these batches.
+
+that have been the metric most commonly used by US states’ legislatures to determine the
+imposition of social-distancing measures. We wish to emphasize that coverages need to be
+put in the context of their MAEs as well. For instance, while ACED-HMM has worse 95%
+coverage than AR-Poisson on G counts, that is because AR-Poisson has much worse MAE
+with a very high uncertainty interval, effectively making AR-Poissons’s predictions less useful than those of ACED-HMM. That being said, ACED-HMM appears to be too confident
+in its predictions. However, we note that the scalability approximation that we propose
+provides more conservative uncertainty estimates.
+B.3. Synthetic Data Assessment: Can we recover “ideal” model parameters?
+We assessed the ability of our procedure to recover ”ideal” model parameters under different
+admissions regimes. We selected a set of parameters that deviated significantly, though not
+excessively from the prior we derived from CDC data. Then, we simulated sets of counts
+using these parameters and a fixed random seed under 4 admissions regimes, respectively
+with 1-x, 3-x, 6-x and 9-x the amounts of true admissions at South Tees Hospitals between
+November 3rd and February 3rd. We note that the 9-x admissions regime is comparable
+to that of Massachusetts in terms of total admitted patients, and it thus can be considered
+a regional-level regime. We then used ABC with the same prior to learn 5 sets of model
+parameters to fit each of the 5 simulated counts, respectively. We used all possible counts
+for training: R, G, I, V and T.
+ABC was able to identify parameters that provided a close-to-optimal fit to the training
+counts as well as high-quality forecasts on test counts. While the parameters learned were
+optimal in their ability to explain the training data, in no case were they ”ideal”, i.e. the
+true parameters. In particular, we observed that, the higher the number of total admitted
+patients, the closer the learned parameters are to the true ones, as can be seen by comparing
+Fig. B.4 and Fig. B.5, which show the posterior distributions for the 1-x (hospital-level) and
+9-x (regional-level) regimes, respectively. Under the regional-level regime, 5 parameters are
+fully recovered (i.e. mean of posterior matches true parameters), 2 parameters are partially
+recovered (i.e. posterior shifts from prior towards true parameter), 3 parameters are not
+
+29
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Coverage (%)
+ACED-HMM + ABC 95
+South Dakota
+80
+50
+ACED-HMM + ABC 95
+Utah
+80
+50
+AR-Poisson 95
+80
+50
+ACED-HMM + Prior 95
+Massachusetts
+80
+50
+ACED-HMM + ABC 95
+80
+50
+
+G
+87
+52
+42
+71
+39
+19
+81
+45
+29
+52
+6
+6
+68
+48
+32
+
+I V I+V T T sm.
+77 81 100 45
+77
+48 71
+97 23
+68
+26 32
+55
+6
+32
+NA NA 100 55
+100
+NA NA 100 32
+87
+NA NA
+61 23
+39
+100 45
+61 100
+100
+90 26
+35 68
+87
+35 13
+13 32
+10
+39 61
+71 42
+23
+35 42
+39 26
+23
+19 19
+23 23
+19
+65 42
+97 55
+84
+45 16
+94 39
+74
+16
+3
+74 16
+58
+
+Table B.3: Coverage assessment for forecasts based on methods fit on U.S. state-level data. This
+metric assesses how reliably calibrated the forecasted distributions each method produces may be
+on future unseen data. Given many samples from a predicted distribution, we obtain a centered
+interval of specified coverage fraction by computing the relevant percentiles of the samples (e.g. for
+the 80% coverage fraction our interval is defined by the 10th to 90th percentiles). We report the
+observed fraction of daily count data within the testing period at each stage that fall within that
+predicted interval. Ideally, the observed fraction should be close to the intended coverage fraction.
+
+recovered (i.e. no shift from prior towards true parameters).
+Under our modeling assumptions, higher admissions regimes generate counts which are reproducible by fewer sets of parameters. In other words, the space of ”optimal” parameters
+shrinks. Thus, on higher admissions regimes, our procedure converges closer to the true
+parameters.
+Furthermore, we observed that certain parameters are easier to recover than others. For
+instance, parameters that have a direct effect on R and T counts seem to be among the
+first to be recovered, this includes the duration probabilities recovering in G and declining
+in V. By contrast, the parameters at the interface between hospital stages seem harder to
+recover.
+We believe another useful experiment using synthetic data to be one that answers the question How informative does the prior need to be for the posterior to recover all the ”ideal”
+parameters?. We leave the answering of this question for future work.
+
+Appendix C. Details of Progression Model
+C.1. View of our model as Hidden Markov Model
+In the main paper, we discuss how our proposed model can be seen as an explicit duration hidden Markov model with 9 states: S, G0, G1, I0, I1, V0, V1, T, R. We provide the
+transition matrix for this model in Table C.1.
+30
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Coverage (%) R G+I+V V
+AR-Poisson 95 90
+100 100
+80 52
+100 100
+50 3
+58 74
+ACED-HMM + Prior 95 77
+100 84
+South Tees
+80 58
+13 42
+50 29
+10 26
+ACED-HMM + ABC 95 77
+100 97
+80 48
+100 87
+50 26
+97 39
+ACED-HMM + ABC 95 55
+100 100
+Oxford
+80 19
+100 77
+50 10
+87 35
+Table B.4: Coverage assessment for forecasts based on fits to two U.K. individual hospital sites.
+This metric assesses how reliably calibrated the forecasted distributions each method produces may
+be on future unseen data. Given many samples from a predicted distribution, we obtain a centered
+interval of specified coverage fraction by computing the relevant percentiles of the samples (e.g. for
+the 80% coverage fraction our interval is defined by the 10th to 90th percentiles). We report the
+observed fraction of daily count data within the testing period at each stage that fall within that
+predicted interval. Ideally, the observed fraction should be close to the intended coverage fraction.
+
+prev. state
+
+R
+
+G1
+ρG
+
+I1
+
+V1
+
+S
+G1 1
+I1 rI 1 − rI
+V1 rV
+1 − rV
+G0
+ρI (1 − dG )
+I0
+ρV (1 − dG )
+V0
+
+next state
+G0
+1 − ρG
+
+I0
+
+(1 − ρI )(1 − dG )
+
+V0
+
+T
+
+dG
+(1 − ρV )(1 − dI ) dI
+1
+
+Table C.1: State transition probabilities assumed by the explicit-duration HMM equivalent of our
+model: rows correspond to the previous state and columns indicate possible next states. Blank
+entries all have zero probability, but are kept blank for visual clarity. It is not possible to transition
+into the start state S or out of the terminal states R and T, so these rows/columns are omitted.
+
+C.2. Recovery probabilities
+We reproduce the relevant numbers from the CDC’s Table 2 in Table C.2, and then describe
+how these estimates are turned into a prior over ρ. We first convert these estimates to
+single, age-independent estimates by computing the average across age groups weighted by
+the US country-level age distribution of hospital patient provided by the CDC 11 during
+the week of November 7th. We show the computed average on the right-most column of
+Table C.2. Then, assuming fixed values for the probabilities of dying d and given these
+numbers, we derive the probability of recovering at each stage. Let p(I) be the percent of
+patients transferred to the ICU, p(V) the percentage of patients who receive ventilation,
+and p(T) the percent of patients who die, we compute the mean the priors for ρG , ρI and
+11. https://gis.cdc.gov/grasp/covidnet/COVID19_3.html
+
+31
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B , Q * H Q H U D O : D U G
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+  
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+  
+
+  
+
+   
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+    
+
+    
+
+    
+
+    
+
+  
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+   
+
+   
+
+   
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+ 
+
+  
+  
+
+ 
+
+  
+  
+
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+    
+
+    
+
+    
+
+   
+
+    
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 Q 9 H Q W , Q , & 8
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ 
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+ 
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+   
+
+                    
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+Figure B.1: Posterior distributions over parameters for South Tees hospital in the UK
+(Nov. 3rd - Jan. 3rd). We show transition parameters (left) and duration parameters (right)
+after fitting on 2 months of counts, where each day we used available census counts for R, G + I + V,
+and V. The colored interval of duration plots shows the 2.5 - 97.5th percentile intervals of 2000
+samples (10 runs, each with 200 samples). The prior is also shown for comparison.
+ 1 X P E H U  R I  2 F F X S L H G  % H G V
+ W U X H
+ $ % &
+
+    
+
+ & H Q V X V  & R X Q W V
+
+ & H Q V X V  & R X Q W V
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  * H Q H U D O  : D U G
+
+ W U X H
+ $ % &
+
+    
+    
+    
+    
+   
+
+    
+    
+   
+   
+   
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+ 
+
+  
+
+  
+
+ 1 X P E H U  R I  3 D W L H Q W V  L Q  , & 8   Q R W  R Q  W K H  9 H Q W L O D W R U
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ W U X H
+ $ % &
+
+   
+
+ & H Q V X V  & R X Q W V
+
+ & H Q V X V  & R X Q W V
+
+  
+
+ 1 X P E H U  R I  3 D W L H Q W V  R Q  W K H  9 H Q W L O D W R U  L Q  W K H  , & 8
+
+ W U X H
+ $ % &
+
+   
+
+  
+
+   
+   
+   
+
+   
+   
+   
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ 
+
+ 
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+ ' D \ V  V L Q F H  1 R Y    W K
+
+  
+
+  
+
+Figure B.2: Fit and forecasts on MA data for ACED-HMM trained to match counts that
+combine multiple stages of care. Here, the ACED-HMM was trained to match the total number
+of hospital beds (G + I + V) as well as terminal counts (T) for MA state-level data. (Compare
+to Fig. 3, which fit on counts for individual stages G, I, V, and T). The model is able to fit
+and forecast the total bed counts accurately (upper-left), but did not recover the counts at some
+individual compartments (G : lower left, I upper right) well. The ventilator counts (V : lower right)
+are near-optimally recovered as they have a very direct influence over the observed T counts.
+
+ρV by solving for them in the following equations:
+1 − p(I) = ρG + ((1 − ρG )dG )
+p(V) = p(I)(1 − ρI )(1 − dI )
+
+32
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B , Q * H Q H U D O : D U G
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+  
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+  
+
+  
+
+  
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+ 
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 I I 9 H Q W , Q , & 8
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+   
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 I I 9 H Q W , Q , & 8
+
+ 
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+   
+
+   
+
+  
+
+   
+
+   
+
+  
+
+   
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ 
+ 
+ 
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 Q 9 H Q W , Q , & 8
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ 
+   
+
+   
+
+   
+
+   
+
+ 
+
+   
+
+   
+
+ 
+
+   
+
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+Figure B.3: Posterior distributions over parameters for Massachusetts (Nov. 11th - Jan.
+11th) using aggregate bed counts for training. We show transition parameters (left) and
+duration parameters (right) after fitting on 2 months of counts, where each day we used census
+counts for G + I + V, and T. The colored interval of duration plots shows the 2.5 - 97.5th percentile
+intervals of 2000 samples (10 runs, each with 200 samples). The prior is also shown for comparison.
+
+Age
+18-49 50 - 64
+Percent transfered to ICU
+23.8 36.1
+Percent who receive ventilation 12.0 22.1
+Percent who die
+2.4
+10.0
+
+65+
+35.3
+21.1
+26.6
+
+Avg.
+34.3
+20.4
+19.3
+
+Table C.2: Reproduced from Table 2 of CDC (2020), when accessed on March 19, 2021. We added
+the right-most column.
+
+p(T) = p(V)(1 − ρV ) + p(I)(1 − ρI )dI + dG
+The found values for ρG , ρI and ρV denote the ratios of parameters for the beta priors.
+To set the variance for the priors, we set the beta parameters for the prior over each ρ by
+multiplying ρ and 1 − ρ by a scalar value r. For ρG , we empirically set rG = 100. Then, we
+set rI = rG (1−ρG ) and rV = rI (1−ρI ). This increases the uncertainty in prior in proportion
+to the influx of patients in the different stages expected under the regime specified by the
+prior mean probabilities.
+For both probabilities of death, we set r = 200 to indicate strong confidence in the low value
+that we set and discourage exploration towards unrealistic values.
+
+33
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B , Q * H Q H U D O : D U G
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+    
+    
+    
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+  
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B , Q * H Q H U D O : D U G
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+    
+  
+
+   
+
+  
+
+   
+
+  
+
+   
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+ 
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+ 
+
+ 
+
+ 
+    
+
+   
+
+   
+
+    
+
+    
+
+   
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ 
+
+ 
+
+                    
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 Q 9 H Q W , Q , & 8
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+ 
+
+ 
+
+ 
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+ 
+
+ 
+
+ 
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+   
+
+   
+
+   
+
+   
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+   
+
+   
+
+ 
+
+   
+
+   
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+ 
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 Q 9 H Q W , Q , & 8
+  
+
+ 
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+  
+
+   
+
+    
+
+  
+
+ 
+
+   
+
+    
+
+  
+
+ 
+
+   
+
+    
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ 
+ 
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+Figure B.4: Posterior distributions over parameters for synthetic data with hospital-level
+admissions. We show transition parameters (left) and duration parameters (right) after fitting on
+61 days of counts, where each day we used available simulated census counts for R, G, I, V, and T.
+The colored interval of duration plots shows the 2.5 - 97.5th percentile intervals of 2000 samples (10
+runs, each with 200 samples). The prior is also shown for comparison.
+
+34
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B , Q * H Q H U D O : D U G
+
+  
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+  
+
+  
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B , Q * H Q H U D O : D U G
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+ 
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B , Q * H Q H U D O : D U G
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+  
+
+ 
+ 
+
+  
+
+ 
+
+  
+
+ 
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+    
+
+  
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+ 
+
+    
+
+    
+
+    
+
+ S U R E D B ' L H B D I W H U B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 I I 9 H Q W , Q , & 8
+
+  
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+  
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 I I 9 H Q W , Q , & 8
+
+   
+
+  
+
+ 
+
+  
+  
+
+ 
+
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ S U R E D B 5 H F R Y H U L Q J B J L Y H Q B 2 Q 9 H Q W , Q , & 8
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+ S P I B G X U D W L R Q B 5 H F R Y H U L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+  
+
+   
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+ W U X H
+ S U L R U
+ S R V W H U L R U
+ D F U R V V     U X Q V
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+                    
+
+ S P I B G X U D W L R Q B ' H F O L Q L Q J B 2 Q 9 H Q W , Q , & 8
+
+   
+
+ 
+ 
+ 
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+   
+
+ 
+
+ 
+
+ 
+
+ 
+
+                    
+
+Figure B.5: Posterior distributions over parameters for synthetic data with regional-level
+admissions. We show transition parameters (left) and duration parameters (right) after fitting on
+61 days of counts, where each day we used available simulated census counts for R, G, I, V, and T.
+The colored interval of duration plots shows the 2.5 - 97.5th percentile intervals of 2000 samples (10
+runs, each with 200 samples). The prior is also shown for comparison.
+
+35
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Appendix D. Details of ABC Learning Procedure
+Biasing the distance computation. For every dataset, we set weight uk for each count
+type k such that counts that are generated at stages farther away from admissions are worth
+more, and such that their average is 1.0, so that the upper bound on the distance is preserved
+at 1.0. The rationale behind this is that counts generated farther away from admissions are
+generally harder to recover, as indicated by the greater uncertainty of ABC in predicting
+those counts that we see in our experiments.
+For MA and SD, where G, I, V and T-smoothed counts are available, we set uG = 0.7,
+uI = 0.9, uV = 1.1 and uT = 1.3. For UT and CA, where G, I + V and T-smoothed counts
+are available, we set uG = 0.8, uI+V = 1.0 and uT = 1.2. For the data ablation experiment
+on MA, we set uG+I+V = 0.8 and uT = 1.2. For both UK hospitals, we set uR = 0.8,
+uG+I+V = 1.0 and uT = 1.2. For the experiments on synthetic data, we set uG = 0.8,
+uR = 0.9, uI = 1.0, uV = 1.1 and uT = 1.2.
+Justification of the maximum-normalized distance computation. At an individual
+timestep t, we assess distance via a mean absolute error normalized by the maximum between
+individual entries (which keeps this value on a unit scale). A side-effect of this normalization
+is that parameters that overestimate the true counts are preferred over parameters that
+underestimate the true counts by the same margin. For example, if true count ytk = 20
+1
+and simulated count ỹtk = 22, then the relevant distance will be |20−22|
+= 11
+. Instead,
+22
+|20−18|
+1
+k
+= 10
+. This
+if ỹt = 18, the relevant unweighted portion of the distance will be 20
+asymmetry enforces a pessimistic bias that in our experimental circumstances would be
+appropriate - e.g., when developing forecasts that will be used to determine what resources
+a hospital will need to meet future demand. In any case, the scheme at most moderately
+favors over prediction of utilization, compared to under utilization. Alternative distances
+could be easily considered.
+Scheduling the decay. We draw samples from a burn-in phase and a sampling phase.
+During the burn-in phase, we anneal ε across iterations with the goals of 1) making it
+converge to an optimal value for sampling, and 2) dragging the parameters to the highdensity region of the parameter space. Then, during the sampling phase, we stop the
+annealing, and draw samples in standard ABC MCMC as described in Marjoram et al.
+(2003), where ε is held fixed across iterations.
+Crucially, in the sampling phase, we raise ε by a small value compared to the best value
+found during the burn-in phase, so that we accept slightly more diverse samples than it
+would have otherwise.
+In the burn-in phase, we anneal ε in the following way. The upper-bound on our distance
+d allows us to initialize ε to 1.0. In practice, we find that ε can often be safely initialized
+to a lower value, thus reducing the number of iterations needed for convergence. We anneal
+ε exponentially after each parameter proposal using hyperparameter γ. Crucially, we never
+allow ε to take a value below the last accepted distance dbest , thus allowing the algorithm to
+naturally converge to a value of ε that is optimal for sampling, as it is low enough that most
+proposals get rejected for not being able to provide a better match to the training data. We
+apply one more change to the annealing schedule: at regular intervals during the burn-in
+phase, we increase ε by a fixed value p. This allows the algorithm to “escape” a local optima
+36
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+that might have been encountered along the way. We found this to be particularly useful
+for fitting parameters to datasets containing fewer patients, such as single-hospital datasets.
+Indeed, with fewer patients to model, the variance in the counts generated by a given set
+of parameters is higher, thus it is more likely that a given set of proposed parameters gets
+accepted due to a particularly "lucky" simulation, which had assigned an unusually low
+distance to the proposed parameters.
+Specific tuning of the decay schedule. In all our experiments, we initialize ε to 0.7,
+as we find such value to be always greater than the distance generated using samples from
+the prior. We fix the number of burn-in iterations to 24,000 (where one iteration makes
+and evaluates a proposal for each of the 17 parameters in turn, for a total of 408,000 total
+single-parameter iterations), p to 0.05, and f to 0.15. To set the annealing parameter γ,
+we consider the following. The optimal, convergence value of ε varies by dataset. In particular, due to the design of our distance function, datasets with higher counts have a lower
+convergence value. An approximate lower bound to the convergence value can be quickly
+found for any dataset by computing the average distance between multiple sets of counts
+generated with the dataset’s admissions and a fixed set of parameters, and a single representative of such counts. Though our annealing schedule is designed to be likely to escape
+local optima, we find it desirable, especially for lower-counts datasets, to set γ such that
+ε does not excessively undershoot the approximate lower bound by the end of the training
+iterations. Concretely, this translates to lower-counts datasets having higher γ, and thus
+slower annealing, in our experiments.
+Details of proposal distributions. For each transition probability τk , we propose a new
+value τk∗ by sampling from a Beta distribution whose mean is the old value and with a scaling
+parameter r > 0 that determines the variance: τk∗ ∼ Beta(rτk , r(1 − τk )). We set r = 100
+for the recovering probabilities and to r = 200 (lower entropy) for death probabilities.
+For the mode of each duration probability λs,h , we propose a new value λ∗s,h by sampling
+from a truncated normal distribution with mean at λs,h and a variance of 0.25: λ∗,s,h ∼
+TruncNorm(λs,h , 0.25, [1, D]). For the log of each temperature parameter ν s,h , we sample
+a new value from a normal distribution centered at the old value, with a variance of 0.01:
+ν ∗s,h ∼ Norm(ν s,h , 0.01).
+Warm start. At the start of the simulated training period, it is unrealistic to assume
+that the initial patients in each hospital stage have only just been admitted to said stage
+(i.e. they are all at day zero of their stay). Thus, in an effort to more realistically model
+the progression through the hospital of the initial population, we apply a simple ’warm
+start’ heuristic, in which we simulate the admission of the initial population in each state by
+uniformly distributing them during 5 days previous to day zero. We increase the admissions
+by 3% in both G and V to account for any patients who exit the hospital before the official
+start of the training period.
+Details of ensembling. For all experiment, we collect 200 samples each from 10 different
+runs of the algorithm, resulting in 2000 total samples. We only use runs which we have
+verified to have converged to similar values of ε, and thus produce samples that explain the
+training counts equally well.
+
+37
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Figure D.1: Trend of accepted distanced on one run of ABC for ACED-HMM on South
+Tees hospital data. Each data point indicates a set of parametrs that has surpassed the first
+stage of acceptance (distance below ε). Around iteration 230,000 the algorithm got stuck in a local
+optimum, where few proposals were getting accepted. The resetting of ε after iteration 300,000
+helped the algorithm get unstuck from the local optimum.
+
+Appendix E. Details of Baseline Autoregressive-Poisson forecasting
+model
+We consider a simple probabilistic model for univariate counts, the latent autoregressive
+Poisson or just AR-Poisson for short.
+Model Setup. Suppose across T days we observe a univariate time series y1:T = [y1 , y2 , . . . yT ],
+where yt ∈ {0, 1, 2, . . .} indicates the count of patients in a particular stage on day t. Our
+goal is to develop forecasts for the next F days, given all previous observations, using a
+conditional probabilistic model p(y(T +1):(T +F ) | y1:T ).
+We consider an order-1 autoregressive process as our latent variable model, where each
+timestep has a latent real value ft ∈ R. We capture dependency across time in the latent
+series f1:T , and model each count yt as conditionally independent given ft :
+T
+T
+Y
+Y
+p(f1:T , y1:T ) =
+p(ft | ft−1 ) ·
+p(yt | ft ).
+(8)
+t=1
+
+t=1
+
+For most timesteps t > 1, we generate the latent value ft using the previous value ft−1 :
+p(ft | ft−1 ) = Normal(β0 + β1 ft−1 , σ 2 ), t ∈ 2, 3, . . .
+(9)
+The very first value f1 is generated with mean β0 :
+p(f1 ) = Normal(β0 , σ 2 )
+(10)
+The latent-generating parameters are coefficient vector β = [β0 , β1 ] and standard deviation
+σ > 0.
+We then generate each observed count yt using a Poisson likelihood, setting the mean
+parameter by transforming the latent ft to a positive value via the exponential:
+p(yt | ft ) = Poisson(exp(ft )).
+(11)
+
+38
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+Forecasting Method. We wish to first sample from the posterior over parameters β, σ,
+and latent values f : p(β, σ, f1:T | y1:T ). We place the follow vague priors over the parameters:
+β0 ∼ Normal(0, 0.1),
+(12)
+β1 ∼ Normal(1, 0.1),
+
+(13)
+
+σ ∼ HalfNormal(0.1).
+(14)
+We then use the No-U-Turn sampler (Hoffman and Gelman, 2014) to perform Markov chain
+Monte Carlo approximation of the posterior. Our NUTS sampler is implemented using the
+PyMC3 toolbox (Salvatier et al., 2016).
+s ,
+Given a single posterior sample indexed by s, with parameters β s , σ s and latents f1:T
+we can then use the generative model to draw a forecast of latents f and counts y for the
+next F days:
+fTs +τ ∼ Normal(β0s + β1s fTs +τ −1 , σ s ),
+τ ∈ 1, . . . F
+(15)
+yTs +τ ∼ Poisson(exp(fTs +τ )),
+τ ∈ 1, . . . F
+(16)
+We typically draw a forecast of S distinct samples, using S = 1000 or more to be sure
+we’re capturing the full distribution.
+Results. In Fig. 3, we use the AR-Poisson as a baseline comparison for our ABC model.
+Given the series of counts from the last 28 days of training data, we forecast ahead F = 31
+days. We draw S = 1000 forecast samples and depict the 2.5th , 50th , and 97.5th percentiles
+of those samples. We can see that our ABC model has clear advantages over the AR-Poisson,
+which is limited to capturing linear trends and makes the assumption that the future is like
+the past.
+
+Appendix F. Details of IHME Baseline forecasts for U.S. States
+As a baseline, we consider the public forecasts produced by the IHME COVID-19 forecasting
+project (Reiner et al., 2021). These forecasts are available online12 and contain predicted
+daily occupancy count values for each U.S. state for several stages of hospital care: total
+beds, ICU beds, ventilators, and deaths.
+The core IHME model is targeted at forecasting deaths for each U. S. state, using an
+SEIR compartment model that accounts for a number of local factors. Historical daily death
+counts represent the primary training data used, though other observed information such
+as testing and mobility are included. Unlike our approach, the IHME model is not adapted
+to fit to the observed bed occupancy counts in hospitals in the region of interest. The
+methodology behind IHME’s forecasts for hospital resource use (total bed usage, ventilator
+usage, etc.) is described in Section 8 of the Supplementary Information (IHME COVID19 Forecasting Team, 2020) released alongside their published research article on overall
+forecasting in the United States (Reiner et al., 2021).
+To forecast hospital resource utilization, the IHME team performs a “microsimulation”
+that starts at deaths and works backwards. For each death, they assume the patient stayed
+the previous 6 days in the ICU. They further simulate for each death, a predicted age bin
+using local age distribution data, and simulate a number of individuals in the same age
+group as having also entering the hospital on the same day but surviving. Most of this
+12. https://www.healthdata.org/covid/data-downloads
+
+39
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+“age-hospital-cohort” stay in the general ward (outside the ICU) for 8 days total. A small
+fraction of this “age-hospital-cohort” (6.3%) are assumed to be admitted to the ICU and stay
+for 20 days total (the middle 13 in the ICU). 85% of individuals in the ICU are assumed to
+need the ventilator. These parametric assumptions are reasonably informed by the literature
+from a specific location (New York state).
+Compared to this approach, we argue that our approach of adapting a flexible hospital
+model with learnable transition probabilities and durations to a region of interest, rather
+than simply making fixed assumptions for all states, has substantial benefits.
+Comparison of IHME forecasts to our methods. Several factors make it difficult
+to perform a fair head-to-head comparison between our model and the published IHME
+forecasts. First, the data signals used to train each method differ: while our method uses
+counts from all available stages, the IHME model relies primarily on daily deaths. Second,
+our forecasts require an admission count time series for the test period, while IHME does
+not. Finally, while our model is open source and can be customized to any training period
+and any region of interest provided the requisite data, we could not find a way to easily get
+produce customized forecasts from IHME, so we rely on their published numbers. Thus,
+any comparison between our methods and IHME should be more of a sanity check than a
+true comparison of equals. We expect that our method, because it is provided more detailed
+training data for the region of interest and especially given admissions for the testing period,
+should outperform the IHME baseline.
+Acknowledging these challenges, we try to set up as fair a comparison as possible by
+taking the IHME forecasts released during our target testing period (Jan. 11 - Feb. 11,
+2021), which are the ones dated 2021-01-15 on the IHME website. Manual inspection of
+the CSV files released on this date indicates that these models had access to death counts
+until Jan. 11 but not afterwards. We suggest this because before this date values of the
+“deaths_mean” field in the released spreadsheet are whole numbers, after this date values
+are fractional indicating an expected value forecast rather than an actual observed count.
+Raw forecast information from IHME website. We used the “reference” forecast
+released by the IHME for 2021-01-15, which provides daily count forecasts of hospital usage
+for each state of interest. IHME also releases best-case or worst-case projections (imagining
+different levels of mask usage or movement restrictions), but we did not use these, taking
+the “reference” forecasts as a reasonable projection of the status quo.
+Each field in the released forecast has a “mean”, “lower”, and “upper” value indicating
+the expected value as well as lower and upper values to suggest an interval of uncertainty.
+We used the following fields of IHME “reference” forecasts.
+• admis(mean/lower/upper) : hospital admissions by day
+• allbed(mean/lower/upper) : total covid beds needed by day
+• ICUbed(mean/lower/upper) : ICU covid beds needed by day
+• InvVen(mean/lower/upper) : invasive ventilation needed by day
+• deaths(mean/lower/upper) : daily covid deaths
+
+40
+
+ABC for an Explicit-Duration HMM of COVID-19 Hospital Trajectories
+
+We used the PDF file IHME_COVID_19_Data_Release_Information_Sheetṗdf included
+in the ZIP file downloaded from IHME as a “data dictionary” to understand these field
+names and values.
+Standardizing IHME forecasts our data format. We transformed the raw data daily
+counts to obtain values for our stages by performing the following element-wise subtractions/additions of the above raw data fields:
+• General Ward G : allbed - ICUbed
+• In ICU without ventilator I: ICUbed - InvVen
+• In ICU on ventilator V: InvVen
+• In ICU total I + V: ICUbed
+• Terminal T: deaths
+MAE computation. To obtain an MAE estimate from IHME at a specific stage (G, I, V, T)
+for a given state, we look in the testing period simply evaluate the MAE for the mean forecast of that stage compared to our ground-truth count values of that stage (as described in
+App. A).
+Intervals To obtain some estimates of uncertainty, we compute the MAE between the true
+counts and the lower and upper estimates. This is all we can do given only mean/lower/upper
+values at each day (rather than a proper distribution).
+We emphasize the IHME reported interval is not comparable to the intervals produced
+by our models. Our model’s intervals are more easily interpreted in the standard way: they
+provide a range of plausible values for what the MAE would be given another similar-sized
+sample from the posterior.
+
+41
+
+

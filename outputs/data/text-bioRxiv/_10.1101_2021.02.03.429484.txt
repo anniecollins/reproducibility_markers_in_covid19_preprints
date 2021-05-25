@@ -1,0 +1,1482 @@
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+1
+2
+3
+
+4
+5
+
+DEEPDRIM: A DEEP NEURAL NETWORK TO RECONSTRUCT
+CELL-TYPE-SPECIFIC GENE REGULATORY NETWORK USING
+SINGLE-CELL RNA-SEQ DATA
+JIAXING CHEN, CHINWANG CHEONG, LIANG LAN, XIN ZHOU, JIMING LIU, AIPING LYU,
+WILLIAM K CHEUNG, AND LU ZHANG
+
+15
+
+Abstract. Single-cell RNA sequencing is used to capture cell-specific gene expression, thus allowing reconstruction of gene regulatory networks. The existing algorithms struggle to deal with
+dropouts and cellular heterogeneity, and commonly require pseudotime-ordered cells. Here, we
+describe DeepDRIM a supervised deep neural network that represents gene pair joint expression
+as images and considers the neighborhood context to eliminate the transitive interactions. DeepDRIM yields significantly better performance than the other nine algorithms used on the eight cell
+lines tested, and can be used to successfully discriminate key functional modules between patients
+with mild and severe symptoms of coronavirus disease 2019 (COVID-19).
+Keywords. single-cell RNA sequencing, gene regulatory network, deep neural network, transitive
+interactions
+
+16
+
+Background
+
+17
+
+Reconstruction of gene regulatory networks (GRNs) is critical to understand the mechanisms
+of synergic gene effects and context-specific transcriptional dynamics. High-throughput technologies such as chromatin immunoprecipitation (ChIP)-chip and ChIP-seq can directly capture the
+transcription factor (TF) binding sites of targeted genes; however, these techniques are costly and
+TF-specific, and are therefore unsuitable for use on a whole-genome scale [45]. As a consequential observation, the fact that the co-expression of TFs and their target genes has been adopted
+to reconstruct GRNs [22, 17, 32, 26] as a means of reverse engineering. In the last two decades,
+microarrays and bulk RNA sequencing (RNA-seq) have been the two mainstream technologies used
+to capture gene expression profiles from diverse tissues. Both techniques have been widely applied
+to identify differentially expressed genes and reconstruct GRNs [43, 25]. However, microarrays and
+RNA-seq inappropriately assume that gene expression is homogeneous among cells and ignore cellular heterogeneity. Indeed, tissue consists of a diverse range of cell types with distinct GRNs [20] and
+biological functions [7]. Several studies have sought to reconstruct GRNs using bulk gene expression
+data [24, 53], but the cell-type-specific GRNs remain largely unexplored. Single-cell RNA sequencing (scRNA-seq) offers an opportunity to capture cell-specific gene expression, which in turn could
+provide deeper insights into the cellular heterogeneity and cell-type-specific gene activities[51].
+
+6
+7
+8
+9
+10
+11
+12
+13
+14
+
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+
+(Jiaxing Chen, ChinWang Cheong, Liang Lan, Jiming Liu, William K Cheung, Lu Zhang) Department of
+Computer Science, Hong Kong Baptist University, Hong Kong
+(Xin Zhou) Department of Biomedical Engineering, Vanderbilt University, USA
+(Aiping Lyu) School of Chinese Medicine, Hong Kong Baptist University, Hong Kong
+E-mail addresses: jxchen@comp.hkbu.edu.hk, cwcheong@comp.hkbu.edu.hk, lanliang@comp.hkbu.edu.hk,
+maizie.zhou@vanderbilt.edu, jiming@comp.hkbu.edu.hk, aipinglu@hkbu.edu.hk, william@comp.hkbu.edu.hk,
+ericluzhang@hkbu.edu.hk.
+1
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+
+Most of the available algorithms for GRN reconstruction are designed for bulk gene expression,
+and function by resolving two computational challenges. In this context, unique difficulties arise if
+scRNA-seq data are adopted instead. First, putative TF-gene interactions are derived by examining
+their co-expression. Bulk gene expression data are commonly normalized to a standard Gaussian
+distribution, such that the TF-gene correlation can be quantified by methods such as mutual information (MI) [37], Pearson correlation coefficient (PCC) [48, 40]. The scRNA-seq gene expression
+data are zero-inflated due to the imbalanced transcript sampling. Although it is possible to impute
+zero entries before calculating the TF-gene co-expression, this may introduce unpredictable noise
+and bias [4], given that most of the imputation algorithms make use of gene-gene co-expression.
+Second, the TF-gene pairs with strong co-expression due to transitive interactions (e.g., those
+bridged by one or more intermediate genes) should be eliminated (Additional file 1: Figure S1).
+Several strategies have been designed to remove these transitive interactions by conditioning on
+the other confounding genes; examples include the Gaussian graphical model [3], conditional MI
+[62], context-based normalization and edge removal [17], and tree-based ensemble methods [26].
+Unfortunately, these algorithms were originally developed to analyze bulk gene expression data,
+and are unsuitable for modeling scRNA-seq data [10]. Many algorithms have recently been proposed to cater for the unique characteristics of scRNA-seq for GRN reconstruction. SCODE [38]
+infers cell-specific pseudo-time and reconstructs the GRN by solving ordinary differential equations.
+PIDC [9] adopts partial information decomposition to break down the TF-gene correlation into redundant, synergistic, and unique effects. SINCERITIES [44] utilizes regularized linear regression
+to infer GRNs from time-stamped scRNA-seq data by referring to temporal changes in the gene
+expression distributions. GENIE3 [26] is a tree-based ensemble method that was initially developed
+for bulk gene expression data. Aibar et al. later applied GENIE3 to reconstruct the global GRN
+for scRNA-seq and developed AUCell to score the active gene signatures for each cell [1]. Although
+these dedicated strategies have been designed to deal with the inherent issues in scRNA-seq data,
+none of them yield acceptable results benchmarked by cell-type-specific ChIP-seq data, and some
+are even close to random guessing [46].
+CNNC [60] is a supervised deep neural network that represents the joint expression of a gene
+pair as an image and uses convolutional neural networks (CNNs) to predict gene-gene co-expression
+from scRNA-seq data. CNNC is robust to dropouts and can infer the interaction causalities using
+the information from cell-type-specific ChIP-seq data. We generated synthetic GRNs and their corresponding gene expression data (Methods and Fig.1) to examine whether CNNC could effectively
+distinguish direct and transitive interactions. We noted that a substantial number of the false positives obtained with CNNC were centered in the gene pairs with strong Pearson correlations (Fig.1
+A).
+Yet considering the image of the target TF-gene pair (primary image) as the only input for the
+prediction is insufficient (Fig.1 A). Inspired by an approach named context likelihood of relatedness
+(CLR) [17] which have been used to remove the transitive interactions by normalizing the MI of the
+target TF-gene pairs to z-scores with their corresponding neighborhood, one can in fact consider
+both the target TF-gene pair (primary image) and the images from the gene pairs that share one
+gene with the target pair (neighbor images) as the input to the model (Fig.1 and 2).
+Here we propose DeepDRIM (deep learning-based direct regulatory interaction model), a supervised deep neural network that can reconstruct highly accurate cell-type-specific GRNs from
+scRNA-seq data by considering both primary and neighbor images. The rationale and workflow
+of DeepDRIM are shown in Fig.2. DeepDRIM first transforms the primary and neighbor images
+(Fig.2 A and B) into low-dimensional embeddings using multiple convolutional layers, where their
+2
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+96
+
+embeddings are then concatenated as the input to a multiple-layer perceptron to calculate the regulatory confidence scores (Fig.2 C). We compared the effectiveness of DeepDRIM with PCC, MI,
+GENIE3, and CNNC for the analysis of eight real scRNA-seq datasets. Our results demonstrated
+that DeepDRIM yielded the best performance with respect to both the area under the receiver operating characteristic curve (AUROC) and the area under the precision-recall curve (AUPRC), and
+significantly outperformed CNNC (Fig.3 A-D). We also compared DeepDRIM with six effective algorithms that were recently highlighted for reconstructing GRN on scRNA-seq data [46]. The results
+demonstrated that DeepDRIM substantially outperformed these algorithms on the five scRNA-seq
+datasets with the pseudotime-ordered cells (Fig.3 E-F). Further simulation demonstrated that the
+performance of DeepDRIM could be improved by involving more neighbor images, and was robust
+to the dropout rate, the cell number, and the size of the training set (Fig.4 A-D).
+We applied DeepDRIM to the scRNA-seq data collected from the bronchoalveolar lavage fluid of
+patients with mild and severe symptoms of coronavirus disease 2019 (COVID-19) [34] to discover
+the changes in B cell-specific GRNs. As a result, we observed that a large number of differentially
+expressed TFs (DETFs) were “activated” in patients with severe disease (Fig.5 A and B). Furthermore, in patients with severe COVID-19 symptoms, the functions of the target genes were enriched
+in apoptosis, response to decreased oxygen levels, and microtubules (Fig.5 C, Fig.6 A and B), all of
+which have been previously shown to be associated with COVID-19 [8, 57] and virus infection [18].
+
+97
+
+Results
+
+98
+
+Effectiveness of neighbor images in removing transitive interactions.
+We generated simulated data and attempted to train CNNC using the two types of input, one with
+only the primary images and the other with the augmented images (combined primary and neighbor
+images, Methods). We observed that the overall proportion of false positives and those due to
+transitive interactions were remarkably decreased by 40.4% and 55.4%, when considering the neighbor images in the model (Fig.1 B). The rationale behind this observation can be regarded as taking
+a “normalization” on the primary image over their neighborhood to alleviate the overestimation
+of the strength of interaction. In addition, Fig.1 C and D clearly illustrate that the consideration
+of neighbor images will not undermine the power in predicting the direct interactions (e.g., gene
+1 ⇒ gene 2 in Fig.1 C, and gene 1 ⇒ gene 3 in Fig.1 D). In Fig.1 E, gene 2 connects to gene 3
+via the indirect edges gene 2 ⇒ gene 4 ⇒ gene 3. Furthermore, we noticed that the correlations
+of both {gene 2, gene 4} (|PCC| = 0.81) and {gene 4, gene 3} (|PCC| = 0.83) were stronger than
+the target {gene 2, gene 3} (|PCC| = 0.67), which provided explicit evidence that {gene 2, gene
+3} should be marked as a false positive. By considering neighbor images, the model reduce the
+predicted confidence score of {gene 2, gene 3} from 0.672 to 0.001, with a similar situation observed
+in Fig.1 F. These findings consolidate the importance of considering the local neighborhood in GRN
+construction to eliminate false positives due to transitive interactions.
+
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+
+Overview of DeepDRIM.
+DeepDRIM is proposed to reconstruct cell-type-specific GRNs from scRNA-seq data with high precision and a low false positive rate. Fig.2 illustrates how DeepDRIM can be used to predict the
+interaction between gene a and gene b. First, DeepDRIM converts the joint gene expression of
+gene a and gene b into a two-dimensional histogram with 32 by 32 bins (primary image, Fig.2 A),
+where the intensity of each bin refers to the number of cells falling within it. Second, DeepDRIM
+constructs 2n + 2 neighbor images, where the 2n images that refer to the n genes have top positive
+covariance with gene a (a, i) or gene b (b, j) and the 2 images represent the self-images (a, a) and
+3
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+124
+125
+126
+127
+128
+129
+130
+131
+132
+
+(b, b). These neighbor images are given to the model to capture the neighborhood context of the
+primary image (Fig.2 B), which provides the key information required to distinguish the direct and
+transitive interactions. We organize the neighbor images as a tensor rather than an augmented
+image to achieve better performance on real data (Additional file 1: Figure S2). Third, two CNNs
+are used to process the primary image (Network A) and the neighbor image tensor (32 by 32 by
+2n+2) (Network B), respectively (Fig.2 C, Methods and Additional file 1: Figure S3). The neural
+networks are trained by known TF-gene interactions taken from publicly available cell-type-specific
+ChIP-seq data. Finally, the unknown interactions are predicted by the directed edges with confidence scores (between 0 and 1, Fig.2 D).
+
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+
+DeepDRIM outperforms the existing algorithms for reconstructing cell-type-specific
+GRNs.
+We collected the scRNA-seq datasets from eight cell lines (see Methods for the definitions of their
+abbreviations) and their corresponding ChIP-seq data from two sources [46, 60] to compare DeepDRIM with the existing methods (Table 1) using TF-aware three-fold cross-validation (Methods).
+We first assessed DeepDRIM with PCC, MI, CNNC, and GENIE3; GENIE3 is one of the best
+algorithms for reconstructing GRNs on scRNA-seq [46] and bulk gene expression data [19, 36].
+Our results demonstrate that DeepDRIM outperformed all four methods in the eight cell types,
+and was significantly better than the second best CNNC (Fig.3 A-D, Additional file 1: Table S1
+and S2) with respect to both AUROC (p-values ∈ [1.46E − 3, 7.63E − 6]) and AUPRC (p-values
+∈ [3.42E − 3, 7.63E − 6]). We also showed that DeepDRIM efficiently eliminated false positives
+from CNNC in all the eight scRNA-seq datasets (Additional file 1: Figure S4).
+To further evaluate the effectiveness of DeepDRIM, we collected six algorithms that have been
+recently identified with the highest median AUPRC in synthetic networks and Boolean models from
+BEELINE [46]. Because some of these algorithms require pseudotime-ordered cells, we selected five
+eligible cell types (Table 1 and found the six algorithms perform differently for each of them (Additional file 1: Table S3 and S4). We compared the efficiency of DeepDRIM to these algorithms and
+found that DeepDRIM significantly outperformed all six tested algorithms (Fig.3 E-F). DeepDRIM
+achieved an average median AUROC of 0.789 and an AUPRC of 0.809 across the five cell types,
+while the second best methods only achieved an AUROC of 0.591 (Additional file 1: Table S3) and
+an AUPRC of 0.657 (Additional file 1: Table S4). The TF-specific AUROC and AUPRC are shown
+in Additional file 2-4.
+
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+
+DeepDRIM is robust to the quality of scRNA-seq data and the size of the training
+set.
+The performance of DeepDRIM can be affected by the quality of scRNA-seq data (the dropout
+rate and cell number), the number of involved neighbor images, and the size of the training set. To
+evaluate the robustness of DeepDRIM toward these factors, we first selected the scRNA-seq data
+from bone marrow-derived macrophages [2] as a template and simulated a series of scRNA-seq data
+with a range of parameters (Methods). Seven scRNA-seq gene expression datasets were generated by subsampling the involved cell numbers (from 20 to 4,000 cells), which in turn changed the
+resolution of both the primary and neighbor images. We found DeepDRIM to be robust to the
+low-resolution images when the number of cells was greater than 100 (Fig.4 A). Next, we imputed
+the dropouts in the template using MAGIC [55] and then randomly masked the entries as dropouts
+with a range of dropout rates (Methods). As shown in Fig.4 B, DeepDRIM demonstrates stable
+performance in diverse dropout configurations. Third, we compared the performance of DeepDRIM
+4
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+170
+171
+172
+173
+174
+175
+176
+177
+178
+
+by varying the number of neighbor images input into the model. As a result, we found that the
+more neighbor images that were involved, the better the performance of DeepDRIM (Fig.4 C). In
+practice, involving more images would be more computationally costly. In our study, we chose the
+top 10 genes with the strongest positive covariance with the target TF or gene; thus involving a
+total of 22 neighbor images (if not specified) to balance the two factors. In addition, to evaluate
+the effect of the size of the training set, we subsampled 20%, 40%, 60%, 80%, and 100% of the
+benchmarked TF-gene pairs for training. Our results revealed that the size of the training set did
+not significantly affect the performance of DeepDRIM (Fig.4 D), and almost reached a plateau
+when 40% of the training set (including 20,101 TF-gene pairs) was applied.
+
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+
+Uncovering the variation of B cell-specific GRNs between the patients with mild and
+severe COVID-19.
+Patients diagnosed with COVID-19 can have mild or severe acute respiratory distress syndrome,
+although the underlying molecular mechanisms responsible for these differences remain unknown.
+We performed a case study to elucidate the differences in B cell-specific GRNs between the patients
+with mild and severe COVID-19, because the immune responses have been reported to be distinct
+between the two situations [6]. To this end, we downloaded scRNA-seq data from the bronchoalveolar lavage fluid of six patients with severe symptoms, three patients with mild symptoms, and
+three healthy controls [34]. The cell type clusters were obtained by SC3[30] and the one belonged
+to B cells was recognized according to the marker genes provided by the original paper [34]. We
+extracted validated TF-gene pairs in B cells from the Gene Transcription Regulation Database [58]
+as the positive pairs, and combined them with the negative pairs from the same TFs and the gene
+expression from the healthy controls as the training set (Methods).
+We observed a clear difference in the GRNs between the two types of patients, and also found
+that the target genes of the DETFs were highly correlated with severe acute respiratory syndrome
+coronavirus 2 (SARS-CoV-2) infection. First, we observed that DETFs had significantly more
+targets (p-values = 8.50E − 4, Wilcoxon rank sum test) in the patients with severe symptoms, suggesting that these DETFs are more “active” in working with their target genes (Methods and Fig.5
+A-B). Indeed, the DETFs in the patients with severe symptoms had 1.9 times more targets with
+high confidence (confidence scores ∈ [0.967, 1]; the last bar in Fig.5 A) than the patients with mild
+symptoms. Next, we focused on the GRNs of DETFs that were unique to the patients with severe
+symptoms (Fig.5 C, Fig.6 A and B). The informative target genes were selected based on the following two criteria: 1. They should belong to the top 5,000 genes with the highest expression variance
+in B cells; and 2. they should be ranked in the top 0.1% of the confidence scores of the patients
+with severe symptoms. The eligible genes were annotated with PageRank scores [21] (Methods
+and Additional file 5) and gene ontology (GO) modules by gene set enrichment analysis (GSEA)
+[59](Methods and Additional file 6). We identified four GO modules that were associated with
+two common symptoms in patients with COVID-19, hypoxemia and lymphopenia (Fig.5 C, Fig.6
+A): 1. response to decreased oxygen levels (GO:0036293; P M AIP 1, CASP 3, P SM B3, CCN B1,
+p-values=4.80E − 3); 2. DNA damage response (GO:0030330; P M AIP 1, CCN B1, RP S27L, pvalues=1.51E −2); 3. negative regulation of the mitotic cell cycle (GO:0045930; P SM B3, CCN B1,
+RP S27L, p-values=1.22E − 2); and 4. the intrinsic apoptotic signaling pathway (GO:0097193;
+P M AIP 1, CASP 3, RP S27L, p-values=6.29E − 3). The patients were reported to have low oxygen levels or hypoxemia without dyspnea [54, 15], both of which were strongly correlated with
+the GO modules “response to decreased oxygen level” and associated with “the intrinsic apoptotic
+5
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+228
+
+signaling pathway” [50]. Cao et al. [8] reported that genes related to apoptosis could lead to lymphopenia in patients with COVID-19. Xiong et al. [57] identified differentially expressed genes in
+peripheral blood mononuclear cells of patients with COVID-19 and healthy controls. These genes
+were enriched in apoptosis and p53 signaling pathways, both of which could lead to lymphopenia.
+Among the genes in these four GO modules, P M AIP 1 [28, 47], CASP 3 [16, 35], P SM B3 [56],
+and CCN B1 [57] have been reported to be associated with COVID-19 individually (Additional file
+1: Table S5).
+In addition to these main findings, we also noted that there were four genes with top PageRank
+scores in the patients with severe symptoms in which unique GRNs could be related to SARSCoV-2 infection. Three of them (DY N LRB1, HN RN P U , and CCN B1) belong to GO:0005815
+(microtubule organizing center, p-values=5.33E − 3), which has been reported to be a major facilitator of virus infection [18] due to its ability to provide invading pathogens with directed transport
+(Fig.6 B). The other gene DN M T 1 is related to ACE2 [49], which is a known co-receptor for the
+SARS-CoV-2 [42].
+
+229
+
+Discussion
+
+230
+
+Understanding the GRNs is fundamental to the advancement of molecular biology research. Gene
+expression profiles from high-throughput sequencing enable computational algorithms to reconstruct
+GRNs by examining TF-gene co-expression. Bulk RNA-seq hides the gene activities at single-cell
+resolution and will be replaced by scRNA-seq in the near future. However, the gene expression
+distribution from scRNA-seq data is not consistent with the assumptions made by most of the
+existing methods, which leads to their poor performance in reconstructing GRNs on the scRNA-seq
+data [33]. In addition, the widely spread dropouts cause bias in calculating gene-gene co-expression,
+even after imputation [12].
+In this study, we propose DeepDRIM, a supervised deep neural network, to reconstruct GRNs
+on scRNA-seq data. Comprehensive evaluation of the performance of DeepDRIM on different
+cell types demonstrated that it outperformed the existing algorithms designed for either bulk or
+scRNA-seq gene expression data. It is inadvisable to calculate TF-gene interactions on scRNAseq data using classical correlation-based methods due to the ubiquitous cellular heterogeneity and
+dropouts (Fig.3 A-D). To avoid these limitations, DeepDRIM converts the numerical representation
+of TF-gene expression to an image and applies a CNN to embed it into a lower dimension. This
+strategy also avoids data normalization and does not presume any distribution. DeepDRIM requires
+validated TF-gene pairs for use as a training set to highlight the key areas in the embedding space
+that can distinguish the direct interactions and false positives.
+We trained and tested DeepDRIM using data from the same cell type. As there is sometimes
+an insufficient number of cells or validated TF-gene pairs in the training set, we were interested in
+training the model using one cell type and then applying it to another. We trained DeepDRIM using
+bone marrow-derived macrophages and then applied it to mESC(1) and vice versa (Additional file
+1: Figure S5). The results suggest that it is necessary to apply DeepDRIM to matched cell types
+in training and test sets; thus, ideas such as transfer learning between cell types are not applicable
+to this supervised model.
+The neighborhood context of the target TF-gene pairs has been widely applied to remove false
+positives in GRN reconstruction from bulk gene expression data via z-score normalization [17],
+conditional MI [61, 62], and graphical lasso [13]. However, these methods commonly assume that
+the gene expression profiles follow a Gaussian distribution, which violates our observation in scRNAseq data. Most of the existing algorithms designed for scRNA-seq are unsupervised and require
+
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+
+6
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+282
+
+pseudotime-ordered cells, making them inapplicable to bone marrow-derived macrophages, dendritic
+cells, and mESC(1), as illustrated in Table 1. DeepDRIM uses the neighborhood context with
+respect to neighbor images, and consists of two parts: 1) images from the genes that positively
+correlate with the TF or gene from the target pair, and 2) two self-images. In the current model,
+we adopted covariance to select the top correlated genes. Although such linear correlation is not
+resistant to outliers and dropouts, similar method has shown its effectiveness in discovering genegene co-expression from scRNA-seq data [5]. The two self-images can highlight the variance of
+single gene expression.
+DeepDRIM can not only predict the existence of TF-gene interactions, but also determine their
+causalities. This task is not given much attention by the unsupervised algorithms, despite it being
+an important consideration if regulatory interactions exist between two TFs. For this particular
+task, DeepDRIM does not surpass CNNC, because CNNC only focuses on the primary image
+and it is easier to capture the causalities by learning the regulatory directions from the validated
+TF-gene pairs. We generated a combined model from DeepDRIM and CNNC (Additional file 1:
+Supplementary Notes) and found that it can effectively reduce the false positives without losing
+any accuracy in the prediction of causality (Additional file 1: Figure S6).
+Many studies have been proposed with the aim to identify all of the cell types in the human
+tissues, with the ultimate goal of creating a human cell atlas to facilitate interpretation of the
+gene activities in individual cell types. DeepDRIM bridges the gap between cell types and gene
+functions, and will serve to increase our understanding of the activities of key TFs. We believe that
+as the cell-type-specific ChIP-seq data accumulate, DeepDRIM will attract increased attention in
+the scRNA-seq research community, and will shed light on drug target discovery and precision
+medicine in the future.
+
+283
+
+Conclusion
+
+284
+
+293
+
+We propose DeepDRIM, a supervised deep neural network model, to predict GRNs from scRNAseq data. DeepDRIM converts the joint expression of a TF–gene pair into a primary image and
+considers the neighbor images as the neighborhood context of the primary image to remove false
+positives due to transitive interactions. DeepDRIM also utilizes the training set to capture the key
+areas in the CNN embeddings that can recognize the TF-gene interactions and causalities. Our
+findings demonstrate that DeepDRIM outperforms nine existing algorithms on the eight cell types
+tested and is robust to the quality of scRNA-seq data. DeepDRIM can also identify the GRNs of
+B cells that are different between patients with mild and severe COVID-19 symptoms. We believe
+that DeepDRIM can fill the gaps in reconstructing cell-type-specific GRNs on scRNA-seq data and
+contributes to the rapidly growing single-cell research community.
+
+294
+
+Methods
+
+295
+
+Representation of gene pair joint expression.
+The scRNA-seq gene expression profiles are represented as a two-dimensional matrix M , where
+Mg,c represents the expression of gene g in cell c. We added a small pseudo-count to Mg,c to avoid
+empty entries before applying log-normalization:
+
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+
+285
+286
+287
+288
+289
+290
+291
+292
+
+296
+297
+298
+
+(1)
+299
+300
+
+logMg,c = log10 (Mg,c + 10−2 ).
+
+The joint histogram of genes i and j (Hi,j ) is generated by splitting logMi,− and logMj,− (“-”:
+across all of the cells) into 32 bins, respectively. The value of each bin is derived from the number
+7
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+301
+302
+
+of cells that falls in the corresponding slot; this value is further log-normalized to avoid extreme
+values:
+(2)
+
+303
+304
+305
+306
+307
+308
+
+logHi,j = log10 (Hi,j /Σ(Hi,j ) + 10−4 )/4 + 1
+
+We generated an image (Ii,j ) for genes i and j of 32 by 32 pixels, where the intensity of each pixel
+is the corresponding value in logHi,j . DeepDRIM requires two image sets to predict the direct interaction between genes i and j, namely 1. the primary image Ii,j and 2. the neighbor images. The
+neighbor images consist of 1. {Ii,p1 , ..., Ii,pn , Ij,q1 , ..., Ij,qn }, where (p1 , p2 , ....pn ) and (q1 , q2 , ...qn )
+are the top n genes that have strong positive covariance with gene i and gene j, respectively; and
+2. two self-images Ii,i and Ij,j . The default value of n was 10 in the experiments.
+
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+
+Network structure of DeepDRIM.
+The network structure of DeepDRIM consists of two components, Network A and Network B, which
+process the primary and neighbor images, respectively (Fig.2 C and Additional file 1: Figure S3).
+Network A is inspired by VGGnet [52], which contains the stacked convolutional and maxpooling
+layers, and uses the rectified linear activation function (ReLu) as the activation function. The
+structure of Network B is similar to that of Network A, and is a siamese-like neural network, where
+the weights are shared among all of the subnetworks. Each image is embedded into a vector of size
+512, and a total of 2n + 3 images (1 primary image and 2n + 2 neighbor images) are converted
+into a vector of size 512 × (2n + 3). This vector is then condensed by two stacked fully connected
+layers, and is processed for binary classification using the sigmoid function. Moreover, DeepDRIM
+is trained by mini-batched stochastic gradient descent.
+
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+
+Simulation of scRNA-seq data to examine the effect of neighbor images.
+We simulated 2,500 small datasets, each with 4 genes and 1,000 cells. The ground truth network for
+each dataset was represented by a sparse precision matrix Θ, where each entry had a 50% chance
+of being non-zero and drawn from [−1, −0.25] ∪ [0.25, 1], or otherwise was assigned zero. We simulated the gene expression profiles from a multivariate normal distribution N (0, Θ−1 ) [14]. Next,
+we randomly chose two gene pairs from each dataset, one involving a direct interaction (Θi,j 6= 0)
+as a positive case, and the other involving an independent pair (Θi,j = 0) as a negative case. For
+each case, we prepared two types of images, a primary image of 32 by 32 pixels, and an augmented
+image by concatenating the primary and six neighbor images (Fig.1 C–F) of 96 by 96 pixels. We
+generated two training sets with 5,000 primary and 5,000 augmented images, respectively. These
+images were used to train CNNC and the performance was evaluated using the AUROC from the
+five-fold cross-validation.
+
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+
+scRNA-seq data from eight cell lines.
+We prepared the real scRNA-seq data from eight cell lines and the corresponding cell-type-specific
+ChIP-seq data as the benchmarks (Table 1) to compare DeepDRIM with the existing algorithms for
+GRN reconstruction. The eight cell lines comprised bone marrow-derived macrophages [2], dendritic
+cells [2], IB10 mouse embryonic stem cells (mESC(1)) [31], human embryonic stem cells (hESC) [11],
+and 5G6GR mouse embryonic stem cells (mESC(2)) [23], as well as three mouse hematopoietic stem
+cell lines [41] of erythroid lineage (mHSC(E)), granulocyte-macrophage lineage (mHSC(GM)), and
+lymphoid lineage (mHSC(L)). All scRNA-seq data were pre-processed and normalized according to
+the descriptions in [46, 60]. In practice, GENIE3 is slow if too many genes or cells are involved;
+thus, we removed the less informative cells and genes using the strategies described in [1].
+8
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+
+We extracted the validated TF targets from the ChIP-seq data as positive cases, and the same
+number of non-validated targets as negative cases. As training sets that are too large and are
+computationally insolvable in terms of generating images, we randomly selected 18 TFs and their
+validated targets as positive cases in the training data for hESC, mESC(2), mHSC(E), mHSC(GM),
+and mHSC(L) to alleviate the computational burden (Table 1).
+To improve the performance of the unsupervised methods in Fig.3 E-F, only the overlap between
+top-varying 500 genes and the TFs/genes in the training set were selected from the scRNA-seq data
+of hESC, mESC(2), mHSC(E), mHSC(GM) and mHSC(L). In cross-validation, We trained CNNC
+and DeepDRIM using 2/3 TF-gene pairs in the training set and evaluated their performance on
+the overlap between the TFs/genes in the remaining 1/3 test set and top-varying 500 genes. This
+could guarantee all the supervised and unsupervised were evaluated on the same TF-gene pairs.
+
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+
+Comparison of DeepDRIM to existing algorithms for GRN reconstruction.
+We compared DeepDRIM with the nine existing algorithms using their default parameters. The
+nine algorithms were PCC, MI, CNNC [60], PIDC [9], GENIE3[26], GRNBOOST2 [39], SCODE
+[38], PPCOR [29], and SINCERITIES [44]. With the exception of PCC, MI, and CNNC, the other
+six methods were performed using the interfaces provided by BEELINE [46]. The AUROC and
+AUPRC for each TF were collected to calculate the p-values between two algorithms using the
+Wilcoxon signed rank test. Given that CNNC and DeepDRIM are supervised models, the TFs
+from the ChIP-seq data were divided into three independent parts for cross-validation (Additional
+file 1: Supplementary Note).
+
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+
+Simulation of scRNA-seq data to evaluate robustness.
+The simulated datasets were transferred from the scRNA-seq of bone marrow-derived macrophages
+[2] to preserve the characteristics of scRNA-seq data. We simulated gene expression profiles with
+various cell numbers and sizes of training sets via sub-sampling from the total 6,283 cells and 50,254
+validated TF-gene pairs from the ChIP-seq data. We applied MAGIC [55] to impute the missing
+values in the raw gene expression matrix, and subsequently masked the corresponding entries according to the “dropout step” in BoolODE [46]. BoolODE has two parameters, drop − probability
+and drop − cutof f , which are used to control the number of entries to be masked. The entries have
+a probability of drop − probability to be masked if their gene expression values are at the bottom
+drop − cutof f . We set the drop − probability = 0.3, 0.5 and the drop − cutof f = 0 to 0.9.
+
+378
+379
+380
+381
+382
+383
+384
+385
+
+Generation of validated TF-gene pairs for B cells in patients with COVID-19.
+We extracted the ChIP-seq data with the keyword “human B cell” in the Gene Transcription Regulation Database [58] and determined the TF target genes as those with high confidence peaks
+(p-value < 1E − 8) in the promoter regions of these genes. The promoter regions were defined
+as the 10 kb upstream and 1 kb downstream regions of the transcript start sites. To generate a
+balanced training set, we extracted an equal number of negative pairs by randomly selecting the
+non-target genes of the selected TFs.
+
+386
+387
+388
+389
+
+Identification of differentially expressed TFs.
+We applied SCDE [27] to determine the differentially expressed TFs if the expression fold changes
+> 2 or < 0.5, and the p-values to be < 1E − 11 after multiple testing correction.
+
+390
+
+9
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+394
+
+Gene PageRank score and functional annotation.
+We calculated gene PageRank scores using “networkx” [21] (Additional file 5) and applied GSEA
+to annotate the enriched GO modules with p-value< 0.05[59]. The genes were ordered by their
+PageRank scores in GSEA analysis.
+
+395
+
+Appendix
+
+396
+
+Funding.
+This research is partially supported by Hong Kong Research Grant Council Early Career Scheme
+(HKBU 22201419), HKBU Start-up Grant Tier 2(RC-SGT2/19-20/SCI/007), HKBU’s Interdisciplinary Research Clusters Matching Scheme (IRCRC/IRCs/17-18/04) and Guangdong Basic and
+Applied Basic Research Foundation (2019A1515011046). XZ is partially supported by Vanderbilt
+university development funds (F F 300033).
+
+391
+392
+393
+
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+
+Availability of data and materials.
+DeepDRIM is available at https://github.com/jiaxchen2-c/DeepDRIM. Gene expression and ChIPSeq data of bone marrow-derived macrophages, dendritic cells, mESC(1) are available at https://github.com/xiaoyeye
+Gene expression and ChIP-Seq data of hESC, mESC(2), mHSC(E), mHSC(GM), mHSC(L) are
+available at https://doi.org/10.5281/zenodo.3378975. Gene expression profiles from the bronchoalveolar lavage fluid of COVID-19 patients and healthy controls are available at GSE145926.
+
+409
+410
+411
+412
+413
+
+Authors’ contributions.
+LZ, WKC conceived the study; LZ, JXC designed DeepDRIM; JXC implemented the algorithm and
+analyzed the results. JXC, CWC conducted the experiments. JXC, LZ, WKC wrote the article.
+JML, APL and ZX reviewed the paper. All authors read and approved the final manuscript.
+
+414
+415
+416
+
+Competing interests.
+The authors declare that they have no competing interests.
+
+417
+418
+419
+420
+
+Acknowledgements.
+We also thank Research Grants Council of Hong Kong, Hong Kong Baptist University and HKBU
+Research Committee for their kind support of this project.
+
+421
+
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+
+References
+1. Sara Aibar, Carmen Bravo González-Blas, Thomas Moerman, Hana Imrichova, Gert Hulselmans, Florian Rambow, Jean-Christophe Marine, Pierre Geurts, Jan Aerts, Joost van den Oord, et al., Scenic: single-cell regulatory
+network inference and clustering, Nature methods 14 (2017), no. 11, 1083.
+2. Amir Alavi, Matthew Ruffalo, Aiyappa Parvangada, Zhilin Huang, and Ziv Bar-Joseph, A web server for comparative analysis of single-cell rna-seq data, Nature communications 9 (2018), no. 1, 1–11.
+3. Genevera I Allen and Zhandong Liu, A log-linear graphical model for inferring genetic networks from highthroughput sequencing data, 2012 IEEE International Conference on Bioinformatics and Biomedicine, IEEE,
+2012, pp. 1–6.
+4. Tallulah S Andrews and Martin Hemberg, False signals induced by single-cell imputation, F1000Research 7
+(2018).
+5. Cédric Arisdakessian, Olivier Poirion, Breck Yunits, Xun Zhu, and Lana X Garmire, Deepimpute: an accurate,
+fast, and scalable deep neural network method to impute single-cell rna-seq data, Genome biology 20 (2019),
+no. 1, 1–14.
+10
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+486
+487
+488
+489
+
+6. Prabhu S Arunachalam, Florian Wimmers, Chris Ka Pun Mok, Ranawaka APM Perera, Madeleine Scott, Thomas
+Hagan, Natalia Sigal, Yupeng Feng, Laurel Bristow, Owen Tak-Yin Tsang, et al., Systems biological assessment
+of immunity to mild versus severe covid-19 infection in humans, Science 369 (2020), no. 6508, 1210–1220.
+7. Norman F Boyd, Lisa J Martin, Michael Bronskill, Martin J Yaffe, Neb Duric, and Salomon Minkin, Breast
+tissue composition and susceptibility to breast cancer, Journal of the National Cancer Institute 102 (2010),
+no. 16, 1224–1237.
+8. Wei Cao and Taisheng Li, Covid-19: towards understanding of pathogenesis, Cell Research 30 (2020), no. 5,
+367–369.
+9. Thalia E Chan, Michael PH Stumpf, and Ann C Babtie, Gene regulatory network inference from single-cell data
+using multivariate information measures, Cell systems 5 (2017), no. 3, 251–267.
+10. Shuonan Chen and Jessica C Mar, Evaluating methods of inferring gene regulatory networks highlights their lack
+of performance for single cell gene expression data, BMC bioinformatics 19 (2018), no. 1, 1–21.
+11. Li-Fang Chu, Ning Leng, Jue Zhang, Zhonggang Hou, Daniel Mamott, David T Vereide, Jeea Choi, Christina
+Kendziorski, Ron Stewart, and James A Thomson, Single-cell rna-seq reveals novel regulators of human embryonic stem cell differentiation to definitive endoderm, Genome biology 17 (2016), no. 1, 173.
+12. Megan Crow and Jesse Gillis, Co-expression in single-cell analysis: Saving grace or original sin?, Trends in
+Genetics 34 (2018), no. 11, 823–831.
+13. Patrick Danaher, Pei Wang, and Daniela M Witten, The joint graphical lasso for inverse covariance estimation
+across multiple classes, Journal of the Royal Statistical Society. Series B, Statistical methodology 76 (2014),
+no. 2, 373.
+14. Wenping Deng, Kui Zhang, Sanzhen Liu, Patrick X Zhao, Shizhong Xu, and Hairong Wei, Jrmgrn: joint
+reconstruction of multiple gene regulatory networks with common hub genes using data from multiple tissues or
+conditions, Bioinformatics 34 (2018), no. 20, 3470–3478.
+15. Sebastiaan Dhont, Eric Derom, Eva Van Braeckel, Pieter Depuydt, and Bart N Lambrecht, The pathophysiology
+of ‘happy’hypoxemia in covid-19, Respiratory Research 21 (2020), no. 1, 1–9.
+16. Fuyu Duan, Liyan Guo, Liuliu Yang, Yuling Han, Abhimanyu Thakur, Benjamin E Nilsson-Payant, Pengfei
+Wang, Zhao Zhang, Chui Yan Ma, Xiaoya Zhou, et al., Modeling covid-19 with human pluripotent stem cellderived cells reveals synergistic effects of anti-inflammatory macrophages with ace2 inhibition against sars-cov-2,
+(2020).
+17. Jeremiah J Faith, Boris Hayete, Joshua T Thaden, Ilaria Mogno, Jamey Wierzbowski, Guillaume Cottarel,
+Simon Kasif, James J Collins, and Timothy S Gardner, Large-scale mapping and validation of escherichia coli
+transcriptional regulation from a compendium of expression profiles, PLoS biology 5 (2007), no. 1, e8.
+18. Urs F Greber and Michael Way, A superhighway to virus infection, Cell 124 (2006), no. 4, 741–754.
+19. Alex Greenfield, Aviv Madar, Harry Ostrer, and Richard Bonneau, Dream4: Combining genetic and dynamic
+information to identify biological networks and dynamical models, PloS one 5 (2010), no. 10, e13397.
+20. Alexandra Grubman, Gabriel Chew, John F Ouyang, Guizhi Sun, Xin Yi Choo, Catriona McLean, Rebecca K
+Simmons, Sam Buckberry, Dulce B Vargas-Landin, Daniel Poppe, et al., A single-cell atlas of entorhinal cortex
+from individuals with alzheimer’s disease reveals cell-type-specific gene expression regulation, Nature neuroscience
+22 (2019), no. 12, 2087–2097.
+21. Aric Hagberg, Pieter Swart, and Daniel S Chult, Exploring network structure, dynamics, and function using
+networkx, Tech. report, Los Alamos National Lab.(LANL), Los Alamos, NM (United States), 2008.
+22. Anne-Claire Haury, Fantine Mordelet, Paola Vera-Licona, and Jean-Philippe Vert, Tigress: trustful inference of
+gene regulation using stability selection, BMC systems biology 6 (2012), no. 1, 145.
+23. Tetsutaro Hayashi, Haruka Ozaki, Yohei Sasagawa, Mana Umeda, Hiroki Danno, and Itoshi Nikaido, Single-cell
+full-length total rna sequencing uncovers dynamics of recursive splicing and enhancer rnas, Nature communications 9 (2018), no. 1, 1–16.
+24. Ji Huang, Juefei Zheng, Hui Yuan, and Karen McGinnis, Distinct tissue-specific transcriptional regulation revealed by gene regulatory networks in maize, BMC plant biology 18 (2018), no. 1, 1–14.
+25. Sui Huang, Gabriel Eichler, Yaneer Bar-Yam, and Donald E Ingber, Cell fates as high-dimensional attractor
+states of a complex gene regulatory network, Physical review letters 94 (2005), no. 12, 128701.
+26. Alexandre Irrthum, Louis Wehenkel, Pierre Geurts, et al., Inferring regulatory networks from expression data
+using tree-based methods, PloS one 5 (2010), no. 9, e12776.
+27. Peter V Kharchenko, Lev Silberstein, and David T Scadden, Bayesian approach to single-cell differential expression analysis, Nature methods 11 (2014), no. 7, 740–742.
+
+11
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543
+544
+
+28. Maroun Khoury, Jimena Cuenca, Fernanda F Cruz, Fernando E Figueroa, Patricia RM Rocco, and Daniel J
+Weiss, Current status of cell-based therapies for respiratory virus infections: applicability to covid-19, European
+Respiratory Journal 55 (2020), no. 6.
+29. Seongho Kim, ppcor: an r package for a fast calculation to semi-partial correlation coefficients, Communications
+for statistical applications and methods 22 (2015), no. 6, 665.
+30. Vladimir Yu Kiselev, Kristina Kirschner, Michael T Schaub, Tallulah Andrews, Andrew Yiu, Tamir Chandra,
+Kedar N Natarajan, Wolf Reik, Mauricio Barahona, Anthony R Green, et al., Sc3: consensus clustering of
+single-cell rna-seq data, Nature methods 14 (2017), no. 5, 483.
+31. Allon M Klein, Linas Mazutis, Ilke Akartuna, Naren Tallapragada, Adrian Veres, Victor Li, Leonid Peshkin,
+David A Weitz, and Marc W Kirschner, Droplet barcoding for single-cell transcriptomics applied to embryonic
+stem cells, Cell 161 (2015), no. 5, 1187–1201.
+32. Robert Küffner, Tobias Petri, Pegah Tavakkolkhah, Lukas Windhager, and Ralf Zimmer, Inferring gene regulatory networks by anova, Bioinformatics 28 (2012), no. 10, 1376–1382.
+33. Wei Vivian Li and Jingyi Jessica Li, An accurate and robust imputation method scimpute for single-cell rna-seq
+data, Nature communications 9 (2018), no. 1, 997.
+34. Mingfeng Liao, Yang Liu, Jing Yuan, Yanling Wen, Gang Xu, Juanjuan Zhao, Lin Cheng, Jinxiu Li, Xin Wang,
+Fuxiang Wang, et al., Single-cell landscape of bronchoalveolar immune cells in patients with covid-19, Nature
+medicine (2020), 1–3.
+35. Xiao-Ying Ling, Jia-Lei Tao, Xun Sun, and Bin Yuan, Exploring material basis and mechanism of lianhua
+qingwen prescription against coronavirus based on network pharmacology, Chin. Trad. Herbal Drugs (2020),
+1723–1730.
+36. Daniel Marbach, James C Costello, Robert Küffner, Nicole M Vega, Robert J Prill, Diogo M Camacho, Kyle R
+Allison, Andrej Aderhold, Richard Bonneau, Yukun Chen, et al., Wisdom of crowds for robust gene network
+inference, Nature methods 9 (2012), no. 8, 796.
+37. Adam A Margolin, Ilya Nemenman, Katia Basso, Chris Wiggins, Gustavo Stolovitzky, Riccardo Dalla Favera,
+and Andrea Califano, Aracne: an algorithm for the reconstruction of gene regulatory networks in a mammalian
+cellular context, BMC bioinformatics, vol. 7, BioMed Central, 2006, p. S7.
+38. Hirotaka Matsumoto, Hisanori Kiryu, Chikara Furusawa, Minoru SH Ko, Shigeru BH Ko, Norio Gouda, Tetsutaro
+Hayashi, and Itoshi Nikaido, Scode: an efficient regulatory network inference algorithm from single-cell rna-seq
+during differentiation, Bioinformatics 33 (2017), no. 15, 2314–2321.
+39. Thomas Moerman, Sara Aibar Santos, Carmen Bravo González-Blas, Jaak Simm, Yves Moreau, Jan Aerts, and
+Stein Aerts, Grnboost2 and arboreto: efficient and scalable inference of gene regulatory networks, Bioinformatics
+35 (2019), no. 12, 2159–2161.
+40. Brian Munsky, Gregor Neuert, and Alexander Van Oudenaarden, Using gene expression noise to understand
+gene regulation, Science 336 (2012), no. 6078, 183–187.
+41. Sonia Nestorowa, Fiona K Hamey, Blanca Pijuan Sala, Evangelia Diamanti, Mairi Shepherd, Elisa Laurenti,
+Nicola K Wilson, David G Kent, and Berthold Göttgens, A single-cell resolution map of mouse hematopoietic
+stem and progenitor cell differentiation, Blood, The Journal of the American Society of Hematology 128 (2016),
+no. 8, e20–e31.
+42. Wentao Ni, Xiuwen Yang, Deqing Yang, Jing Bao, Ran Li, Yongjiu Xiao, Chang Hou, Haibin Wang, Jie Liu,
+Donghong Yang, et al., Role of angiotensin-converting enzyme 2 (ace2) in covid-19, Critical Care 24 (2020),
+no. 1, 1–10.
+43. Alicia Oshlack, Mark D Robinson, and Matthew D Young, From rna-seq reads to differential expression results,
+Genome biology 11 (2010), no. 12, 220.
+44. Nan Papili Gao, SM Minhaz Ud-Dean, Olivier Gandrillon, and Rudiyanto Gunawan, Sincerities: inferring gene
+regulatory networks from time-stamped single cell transcriptional expression profiles, Bioinformatics 34 (2018),
+no. 2, 258–266.
+45. Peter J Park, Chip–seq: advantages and challenges of a maturing technology, Nature reviews genetics 10 (2009),
+no. 10, 669–680.
+46. Aditya Pratapa, Amogh P Jalihal, Jeffrey N Law, Aditya Bharadwaj, and TM Murali, Benchmarking algorithms
+for gene regulatory network inference from single-cell transcriptomic data, Nature Methods 17 (2020), no. 2,
+147–154.
+47. Shitao Rao, Alexandria Lau, and Hon-Cheong So, Exploring diseases/traits and blood proteins causally related to
+expression of ace2, the putative receptor of sars-cov-2: A mendelian randomization analysis highlights tentative
+relevance of diabetes-related traits, Diabetes Care (2020).
+12
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+545
+546
+547
+548
+549
+550
+551
+552
+553
+554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571
+572
+573
+574
+575
+576
+577
+578
+579
+580
+581
+582
+583
+
+48. Faridah Hani Mohamed Salleh, Shereena Mohd Arif, Suhaila Zainudin, and Mohd Firdaus-Raih, Reconstructing
+gene regulatory networks from knock-out data using gaussian noise model and pearson correlation coefficient,
+Computational biology and chemistry 59 (2015), 3–14.
+49. Amr H Sawalha, Ming Zhao, Patrick Coit, and Qianjin Lu, Epigenetic dysregulation of ace2 and interferonregulated genes might suggest increased covid-19 susceptibility and severity in lupus patients, Clinical Immunology
+(2020), 108410.
+50. Ataman Sendoel and Michael O Hengartner, Apoptotic cell death under hypoxia, Physiology 29 (2014), no. 3,
+168–176.
+51. Stefan Siebert, Jeffrey A Farrell, Jack F Cazet, Yashodara Abeykoon, Abby S Primack, Christine E Schnitzler,
+and Celina E Juliano, Stem cell differentiation trajectories in hydra resolved at single-cell resolution, Science
+365 (2019), no. 6451, eaav9314.
+52. Karen Simonyan and Andrew Zisserman, Very deep convolutional networks for large-scale image recognition,
+arXiv preprint arXiv:1409.1556 (2014).
+53. Husain A Talukdar, Hassan Foroughi Asl, Rajeev K Jain, Raili Ermel, Arno Ruusalepp, Oscar Franzén, Brian A
+Kidd, Ben Readhead, Chiara Giannarelli, Jason C Kovacic, et al., Cross-tissue regulatory gene networks in
+coronary artery disease, Cell systems 2 (2016), no. 3, 196–208.
+54. Martin J Tobin, Franco Laghi, and Amal Jubran, Why covid-19 silent hypoxemia is baffling to physicians,
+American Journal of Respiratory and Critical Care Medicine 202 (2020), no. 3, 356–360.
+55. David Van Dijk, Roshan Sharma, Juozas Nainys, Kristina Yim, Pooja Kathail, Ambrose J Carr, Cassandra
+Burdziak, Kevin R Moon, Christine L Chaffer, Diwakar Pattabiraman, et al., Recovering gene interactions from
+single-cell data using data diffusion, Cell 174 (2018), no. 3, 716–729.
+56. Els Wauters, Pierre Van Mol, Abhishek D Garg, Sander Jansen, Yannick Van Herck, Lore Vanderbeke, Ayse
+Bassez, Bram Boeckx, Bert Malengier-Devlies, Anna Timmerman, et al., Discriminating mild from critical
+covid-19 by innate and adaptive immune single-cell profiling of bronchoalveolar lavages, BioRxiv (2020).
+57. Yong Xiong, Yuan Liu, Liu Cao, Dehe Wang, Ming Guo, Ao Jiang, Dong Guo, Wenjia Hu, Jiayi Yang, Zhidong
+Tang, et al., Transcriptomic characteristics of bronchoalveolar lavage fluid and peripheral blood mononuclear
+cells in covid-19 patients, Emerging microbes & infections 9 (2020), no. 1, 761–770.
+58. Ivan Yevshin, Ruslan Sharipov, Tagir Valeev, Alexander Kel, and Fedor Kolpakov, Gtrd: a database of transcription factor binding sites identified by chip-seq experiments, Nucleic acids research (2016), gkw951.
+59. Guangchuang Yu, Li-Gen Wang, Yanyan Han, and Qing-Yu He, clusterprofiler: an r package for comparing
+biological themes among gene clusters, Omics: a journal of integrative biology 16 (2012), no. 5, 284–287.
+60. Ye Yuan and Ziv Bar-Joseph, Deep learning for inferring gene relationships from single-cell expression data,
+Proceedings of the National Academy of Sciences 116 (2019), no. 52, 27151–27158.
+61. Xiujun Zhang, Juan Zhao, Jin-Kao Hao, Xing-Ming Zhao, and Luonan Chen, Conditional mutual inclusive
+information enables accurate quantification of associations in gene regulatory networks, Nucleic acids research
+43 (2015), no. 5, e31–e31.
+62. Xiujun Zhang, Xing-Ming Zhao, Kun He, Le Lu, Yongwei Cao, Jingdong Liu, Jin-Kao Hao, Zhi-Ping Liu, and
+Luonan Chen, Inferring gene regulatory networks from gene expression data by path consistency algorithm based
+on conditional mutual information, Bioinformatics 28 (2012), no. 1, 98–104.
+
+13
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+584
+
+Figures
+
+Fig. 1. The effectiveness of neighbor images in reconstructing GRN on the simulated data. A. The distribution of false positives from CNNC. B. The false
+positives of the two models with primary (P rim) and augmented (Aug) images as
+inputs due to randomness and transitive interactions. C and D. Two examples
+that demonstrate both of the models can correctly identify the direct interactions
+(C: g1 ⇒ g2 , D: g1 ⇒ g3 ). E and F. Two examples that demonstrate the model
+trained by augmented images can recognize and eliminate the false positives caused
+by the transitive edges (E: g2 ⇒ g3 , F: g3 ⇒ g4 ). The primary images are highlighted in the red squares, and S(·) denotes the confidence scores from the models
+with primary (S(P rim)) or augmented images (S(Aug)) as input. The correlation
+matrices and absolute correlation are calculated by Pearson correlation coefficient.
+
+14
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+15
+
+Fig. 2. Overview of DeepDRIM. A. Representation of the joint gene expression
+of gene a and gene b as a primary image. B. The 2n + 2 neighbor images are
+generated from the genes with strong positive covariance with gene a or gene b.
+C. The network architecture of DeepDRIM, including Network A and Network
+B, which are two stacked convolutional embedding structures designed to process
+the primary and neighbor images, respectively. Detailed network structures are
+shown in Additional file 1: Figure S3. D. An example for the prediction of a
+cell-type-specific GRN using DeepDRIM.
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+Fig. 3. Comparison of DeepDRIM with the existing algorithms for GRN reconstruction on the scRNA-seq data from eight cell lines. A, B, C and D: p-values
+were calculated between CNNC and DeepDRIM. E and F: The p-values were calculated between DeepDRIM (the best performer) and the second best algorithms
+(Additional file 1: Table S3 and S4).
+
+16
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+Fig. 4. Performance of DeepDRIM with a wide range of the qualities of scRNA-seq
+data (cell numbers and dropout rates), the number of involved neighbor images,
+and the size of training set.
+
+17
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+Fig. 5. Comparison of B cell-specific gene regulatory networks (GRNs) for patients
+with mild and severe COVID-19. A. The distribution of the confidence scores of the
+differentially expressed transcription factors and their target genes. B. The average
+target numbers of DETFs given different confidence score thresholds. C. The GO
+modules and the involved key transcription factors/genes related to COVID-19
+symptoms.
+
+18
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+Fig. 6. The unique GRNs of DETFs from the patients with severe COVID-19. A.
+GRNs related to: response to a decreased oxygen level (GO:0036293); DNA damage
+response (GO:0030330); negative regulation of the mitotic cell cycle (GO:0045930);
+and the intrinsic apoptotic signaling pathway (GO:0097193). B. GRNs related to
+the microtubule organizing center (GO:0005851).
+The edges are shown if their
+19
+absolute Pearson correlation coefficients larger than 0.4. DETFs: differentially
+expressed transcription factors.
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+Tables
+
+585
+
+Table 1. scRNA-seq datasets from the eight cell lines used in the experiments.
+Cell lines
+
+Genes
+
+Cells
+
+Size of train- Number
+ing set
+TFs
+
+Bone marrow-derived macrophages [2]
+Dendritic cells [2]
+mESC(1) [31]
+hESC [11]
+mESC(2) [23]
+mHSC(E) [41]
+mHSC(GM) [41]
+mHSC(L) [41]
+
+20,463
+20,463
+24,175
+17,735
+18,385
+4,762
+4,762
+4,762
+
+6,283
+4,126
+2,717
+758
+421
+1,071
+889
+847
+
+50,254
+28,046
+154,931
+100,720
+94,332
+49,114
+43,712
+48,884
+
+13
+16
+38
+18
+18
+18
+18
+18
+
+of
+
+Pseudotime
+N
+N
+N
+Y
+Y
+Y
+Y
+Y
+
+mESC(1): IB10 mouse embryonic stem cells, hESC: human embryonic stem cells, mESC(2): 5G6GR mouse
+embryonic stem cells , mHSC(E), mHSC(GM) and mHSC(L): three mouse hematopoietic stem cell lines of
+erythroid lineage, granulocyte-macrophage lineage, and lymphoid lineage.
+
+20
+
+bioRxiv preprint doi: https://doi.org/10.1101/2021.02.03.429484; this version posted February 3, 2021. The copyright holder for this preprint
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+586
+
+Additional Files
+
+587
+
+Additional file 1 — Supplementary Note, Supplementary Figures and Supplementary Tables.
+Additional file 2 — AUROCs and AUPRCs of PCC, MI, GENIE3, CNNC, and DeepDRIM for each
+TF on bone marrow-derived macrophages, dendritic cells, and mESC(1).
+Additional file 3 — AUROCs and AUPRCs of PCC, MI, GENIE3, CNNC, and DeepDRIM for each
+TF on hESC, mESC(2), mHSC(E), mHSC(GM), and mHSC(L).
+Additional file 4 — AUROCs and AUPRCs of PIDC, GENIE3, GRNBOOST2, SCODE, PPCOR,
+SINCERITIES, and DeepDRIM for each TF on hESC, mESC(2), mHSC(E), mHSC(GM), and
+mHSC(L).
+Additional file 5 — PageRank scores, degree and betweenness of the genes in the GRNs from the
+patients with severe COVID-19.
+Additional file 6 — GO annotation for the genes in the GRNS from the patients with severe
+COVID-19.
+
+588
+589
+590
+591
+592
+593
+594
+595
+596
+597
+598
+
+21
+
+

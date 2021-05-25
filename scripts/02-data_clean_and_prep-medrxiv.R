@@ -15,7 +15,8 @@ library(oddpub)
 library(tidyverse)
 
 # Read in the raw data. 
-# med_txt_folder = paste(getwd(), ", sep = "")
+# med_txt_folder <- paste(getwd(), ", sep = "")
+
 # Load text files into list of string vectors for use in text mining algorithm.
 # Returns list of lists, with one list for each document (paper)
 med_text_sentences <- 

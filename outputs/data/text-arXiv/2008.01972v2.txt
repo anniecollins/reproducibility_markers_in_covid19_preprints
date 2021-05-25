@@ -1,0 +1,2169 @@
+Ontology-driven weak supervision for clinical
+entity classification in electronic health records
+Jason A. Fries1 , Ethan Steinberg1,2 , Saelig Khattar2 , Scott L. Fleming1 ,
+Jose Posada1 , Alison Callahan1 , and Nigam H. Shah1
+
+arXiv:2008.01972v2 [cs.CL] 6 Apr 2021
+
+1
+
+Center for Biomedical Informatics Research, Stanford University
+2
+Department of Computer Science, Stanford University
+April 7, 2021
+∗
+
+Corresponding author: jason-fries@stanford.edu
+
+Abstract
+In the electronic health record, using clinical notes to identify entities such as disorders and their temporality (e.g.
+the order of an event relative to a time index) can inform many important analyses. However, creating training
+data for clinical entity tasks is time consuming and sharing labeled data is challenging due to privacy concerns.
+The information needs of the COVID-19 pandemic highlight the need for agile methods of training machine
+learning models for clinical notes. We present Trove, a framework for weakly supervised entity classification
+using medical ontologies and expert-generated rules. Our approach, unlike hand-labeled notes, is easy to share
+and modify, while offering performance comparable to learning from manually labeled training data. In this
+work, we validate our framework on six benchmark tasks and demonstrate Trove’s ability to analyze the records
+of patients visiting the emergency department at Stanford Health Care for COVID-19 presenting symptoms and
+risk factors.
+
+Introduction
+Analyzing text to identify concepts such as disease names and their associated attributes like negation are
+foundational tasks in medical natural language processing (NLP). Traditionally, training classifiers for named
+entity recognition (NER) and cue-based entity classification have relied on hand-labeled training data. However
+annotating medical corpora requires considerable domain expertise and money, creating barriers to using
+machine learning in critical applications [1, 2]. Moreover, hand-labeled datasets are static artifacts that are
+expensive to change. The recent COVID-19 pandemic highlights the need for machine learning tools that enable
+faster, more flexible analysis of clinical and scientific documents in response to rapidly unfolding events [3].
+To address the scarcity of hand-labeled training data, machine learning practitioners increasingly turn to lower
+cost, less accurate label sources to rapidly build classifiers. Instead of requiring hand-labeled training data,
+weakly supervised learning relies on task-specific rules and other imperfect labeling strategies to programmatically
+generate training data. This approach combines the benefits of rule-based systems, which are easily shared,
+inspected and modified, with machine learning which typically improves performance and generalization
+properties. Weakly supervised methods have demonstrated success across a range of NLP and other settings
+[4, 5, 6, 7, 8] .
+Knowledge bases and ontologies provide a compelling foundation for building weakly supervised entity classifiers.
+Ontologies codify a vast amount of medical knowledge via taxonomies and example instances for millions of
+medical concepts. However, repurposing ontologies for weak supervision creates challenges when combining label
+information from multiple sources without access to ground truth labels. The hundreds of terminologies found
+in the Unified Medical Language System (UMLS) Metathesaurus [9] and other sources [10] typify the highly
+
+1
+
+redundant, conflicting, and imperfect entity definitions found across medical ontologies. Naively combining such
+conflicting label assignments can cause substantial performance drops in weakly supervised classification [11];
+therefore, a key challenge is correcting for labeling errors made by individual ontologies when combining label
+information.
+Rule-based systems for NER and cue detection [12, 13] are common in clinical text processing, where labeled
+corpora are difficult to share due to privacy concerns. Generating imperfect training labels from indirect sources
+(e.g., patient notes) is often used in analyzing medical images [14, 15, 16]. Recent work has explored learning
+the accuracies of sources to correct for label noise when using rule-based systems to generate training data
+for text classification [4, 17]. Weakly supervised clinical applications have explored document and relation
+classification using task-specific rules [18, 19] or leveraging dependency parsing and compositional grammars to
+automate relation classification for standardizing clinical concepts [20]. However these largely focus on relation
+and document classification via task-specific labeling rules or sourcing supervision from a single ontology and
+do not explore NER or automating labeling via multiple ontologies.
+Prior research on weakly supervised NER has required complex preprocessing to identify possible entity spans
+[21], generated labels from a single source rather than combining multiple sources [22], or relied on ad hoc
+rule engineering [23]. High impact application areas, such as clinical NER using weak supervision, are largely
+unstudied. Recent weak supervision frameworks such as Snorkel [11] are domain and task-agnostic, introducing
+barriers to quickly developing and deploying labeling heuristics in complex domains such as medicine. Key
+questions remain about the extent to which we can automate weak supervision using existing medical ontologies
+and how much additional task-specific rule engineering is required for state-of-the-art performance. It is also
+unclear whether, and by how much, pre-trained language models such as BioBERT [24] improve the ability to
+generalize from weakly labeled data and reduce the need for task-specific labeling rules.
+We present a Trove, a framework for training weakly supervised medical entity classifiers using off-the-shelf
+ontologies as a source of reusable, easily automated labeling heuristics. Doing so transforms the work of using
+weak supervision from that of coding task-specific labeling rules to defining a target entity type and selecting
+ontologies with sufficient coverage for a target dataset, which is a common interface for popular biomedical
+annotation tools such as NCBO BioPortal and MetaMap [10, 25]. We examine whether ontology-based weak
+supervision, coupled with recent pre-trained language models such as BioBERT, reduces the engineering cost of
+creating entity classifiers while matching performance of prior, more expensive, weakly supervised approaches.
+We further investigate how ontology-based labeling functions can be extended when we need to incorporate
+additional, task-specific rules. The overall pipeline is shown in Fig. 1.
+In this work, we demonstrate the utility of Trove through six benchmark tasks for clinical and scientific text,
+reporting state-of-the-art weakly supervised performance (i.e., using no hand-labeled training data) on NER
+datasets for chemical/disease and drug tagging. We further present weakly supervised baselines for two tasks in
+clinical text: disorder tagging and event temporality classification. Using ablation analyses, we characterize
+the performance trade-offs of training models with labels generated from easily automated ontology-based
+weak supervision vs. more expensive, task-specific rules. Finally, we present a case study deploying Trove
+for COVID-19 symptom tagging and risk factor monitoring using a daily data feed of Stanford Health Care
+emergency department notes.
+Weakly supervised learning is an umbrella term referring to methods for training classifiers using imperfect,
+indirect, or limited labeled data and includes techniques such as distant supervision [26, 27], co-training [28]
+and others [29]. Prior approaches for weakly supervised NER such as co-training use a small set of labeled
+seed examples [30] which are iteratively expanded through bootstrapping or self-training [31]. Semi-supervised
+methods also use some amount of labeled training data and incorporate unlabeled data by imposing constraints
+on properties such as expected label distributions [32]. Distant supervision requires no labeled training data, but
+typically focuses on a single source for labels such as AutoNER [22], which used phrase mining and a tailored
+dictionary of canonical entity names to construct a more precise labeler, rather than unifying labels assigned
+using heterogeneous sources of unknown quality. Crowdsourcing methods combine labels from multiple human
+annotators with unknown accuracy [33]. However compared to human labelers, programmatic label assignment
+has different correlation and scaling properties which create technical challenges when combining sources. Data
+programming [34, 11, 17] formalizes theory for combining multiple label sources with different coverage and
+unknown accuracy as well as correlation structure to correct for labeling errors.
+
+2
+
+In the setting of weakly supervised NER and sequence labeling, SwellShark [21] uses a variant of data
+programming to train a generative model using labels from multiple dictionary and rule-based sources. However
+this approach required task-specific preprocessing to identify candidate entities a priori to achieve competitive
+performance. Safranchik et al. [23] presented WISER, a linked hidden Markov model where weak supervision
+was defined separately over tags and tag transitions using linking rules derived from language models, ngram
+statistics, mined phrases and custom heuristics to train a BiLSTM-CRF. SwellShark and WISER both focused
+on hand-coded, task-specific labeling function design.
+Trove advances weakly supervised medical entity classification by: (1) eliminating the requirement for identifying
+probable entity spans a priori by combining word-level weak supervision with contextualized word embeddings;
+(2) developing general purpose, more easily automated ontology-based labeling functions which reduce the need
+for engineering hand-coded rules; (3) quantifying the relative contributions of sources of label assignment – such
+as pre-existing ontologies from the UMLS (low cost) and task-specific rule engineering (high cost) – to the
+achieved performance for a task; and (4) evaluating Trove in a deployed medical setting, tagging symptoms and
+risk factors of COVID-19.
+I. Ontology Mapping (k Classes)
+
+disease or syndrome → 1
+antibiotic → 0
+… → k
+
+Entity Classes
+
+II. Weak Supervision Sources
+
+2. Build Label Matrix
+Apply m Labeling
+Functions to D
+Ontology Labeling
+Function Templates
+
+Specify s Ontology Sources
+
++
+
+Write r Task-speciﬁc Rules
+
+Task-speciﬁc
+Labeling Functions
+
+Label Sources m
+
+=s+r
+
+III. Unlabeled Training Documents
+Docs → N
+Sentences
+
+D
+
+=
+
+{Xi}Ni=1
+
+Label Matrix
+Λ ∈ {−1,0,...,k}n×m
+
+LEGEND
+
+3. Train Label Model
+
+4. Label Dataset
+
+Learn Label Source
+Accuracies
+
+5. Train End Model
+
+m
+
+6. Classify Concepts
+Apply Model to
+Held-out Data
+
+Generate Probabilistic
+Sequence Labels
+
+D̂
+
+= {Xi, Ŷ i}Ni=1
+
+1
+
+…
+
+1. Define Entities & Label Sources
+
+End Model
+
+Unseen
+Documents
+
+(BioBERT)
+
+Xi
+
+y
+
+risk
+factor
+for
+diabetes
+type
+2
+
+P(Y, Λ)
+
+Predict P(Y | Λ)
+Optional Step
+
+Ŷ i
+
+0.00
+0.00
+0.40
+0.99
+0.99
+0.99
+
+OR
+Use Label
+Model Directly
+
+Concept Output
+(Diseases, Negation, etc.)
+
+X1 : {diabetes type 2}
+
+…
+
+XÑ : {DVT,…,embolism}
+
+Trained Model
+
+Figure 1: Trove pipeline for ontology-driven weak supervision for medical entity classification.
+Users specify: (I) a mapping of an ontology’s class categories to entity classes; (II) a set of label sources (e.g.,
+ontologies, task-specific rules) for weak supervision; and (III) a collection of unlabeled document sentences
+with which to build a training set. Ontologies instantiate labeling function templates which are applied to
+sentences to generate a label matrix. This matrix is used to train the label model which learns source accuracies
+and corrects for label noise to predict a consensus probability per word. Consensus labels are transformed
+into the probabilistic sequence label dataset which is used as training data for an end model (e.g., BioBERT).
+Alternatively, the label model can also be used as the final classifier.
+
+Results
+Experiment overview
+After quantifying the performance of ontology-driven weak supervision in all our tasks, we performed four
+experiments. First, we examined performance differences by label source ablations, which compared ontologybased labeling functions against those incorporating task-specific rules. Second, we compared Trove to existing
+weakly supervised tagging methods. Third, we examined learning source accuracies for UMLS terminologies.
+Finally we report on a case study that used Trove to monitor emergency department notes for symptoms and
+risk factors associated with patients tested for COVID-19.
+We evaluated four methods of combining labeling functions to train entity classifiers. (1) Majority vote (MV)
+is the majority class for each word predicted by all labeling functions. In cases of abstain or ties, predictions
+default to the majority class. (2) Label model (LM) is the default data programming model. Abstain and ties
+default to the majority class. (3) Weakly Supervised (WS) is BioBERT trained on the probabilistic dataset
+generated by the label model. (4) Fully supervised (FS) is BioBERT trained on the original expert-labeled
+training set, tuned to match current published state-of-the-art performance, and using the validation set for
+early stopping.
+
+3
+
+For reference, we also included published F1 metrics for state-of-the-art (SOTA) supervised performance for
+each task, as determined to the best of our knowledge. Note some published SOTA benchmarks (e.g., BC5CDR
+in Lee et al. [24]) use both the hand-labeled train and validation sets for training, so they are not directly
+comparable to our experimental setup.
+
+Performance of Trove in medical entity classification tasks
+Table 1 reports F1 performance for weak supervision using ontology-based labeling functions and those
+incorporating additional, task-specific rules. For NER tasks, adding task-specific rules performed within 1.3 4.9 F1 points (4.1%) of models trained on hand-labeled data and for span tasks within 3.4 - 13.3 F1 points. The
+total number of task-specific labeling functions used ranged from 9 to 27. For ontology-based supervision, the
+label model improved performance over MV by 4.1 F1 points on average and BioBERT provided an additional
+average increase of 0.3 F1 points.
+
+Task
+Chemical
+Disease
+Disorder
+Drug
+Negation
+DocTimeRel
+
+LFs
+22
+16
+25
+16
+-
+
+Ontologies
+(Guidelines+UMLS+Other)
+MV
+LM
+WS
+79.8
+88.0 ±0.1†
+88.5 ±0.2∗
+74.7
+78.9 ±0.1†
+78.3 ±0.2∗
+67.8
+68.3 ±0.3†
+69.1 ±0.2∗
+75.3
+78.6 ±0.1†
+79.2 ±0.2∗
+-
+
++ Task-specific Rules
+LFs
++9
++6
++11
++11
+17
+27
+
+MV
+81.1
+76.4
+71.2
+82.2
+92.5
+67.8
+
+LM
+89.2 ±0.2†
+79.8 ±0.3†
+75.0 ±0.2†
+85.8 ±0.4†
+93.0 ±0.0†
+69.2 ±0.0†
+
+WS
+91.1 ±0.1∗
+79.9 ±0.2
+76.3 ±0.1∗
+88.3 ±0.3∗
+92.7 ±0.6∗
+72.9 ±0.5∗
+
+Hand-labeled
+FS
+92.4 ±0.2
+84.5 ±0.2
+79.6 ±0.3
+93.2 ±0.3
+96.1 ±0.2
+86.2 ±0.1
+
+SOTA
+93.5 [24]
+87.2 [24]
+80.1 [35]
+91.4 [36]
+∼
+83.4 [37]
+
+Table 1: F1 scores for ontology and task-specific rule-based weak supervision. Models are majority
+vote (MV); label model (LM); weakly supervised BioBERT (WS); our fully supervised BioBERT (FS); and
+published state-of-the-art (SOTA). LFs denote labeling function counts or total added task-specific rules. Bold
+indicates the best score for each approach and task. Scores are the mean and ±1 SD of n=10 random weight
+initializations. A two-sided Wilcoxon signed-rank test was used to compute statistical significance. ∗ denotes
+p < 0.05 for difference between weakly supervised BioBERT (WS) and the label model (LM). For (chemical,
+disease, disorder, drug) exact p-values for ontologies were (0.0039, 0.0020, 0.0020, 0.0020) and for task-specific
+rules (0.0020, 0.3223, 0.0020, 0.0020). For Negation p=0.0273 and for DocTimeRel p=0.0020. † denotes p <
+0.05 for difference between the label model (LM) and majority vote (MV). Here all task p-values were 0.0020.
+∼ Mowery et al. [38] only reported accuracy for the negation task.
+
+Labeling source ablations
+For NER tasks, we examined five ablations, ordered by increasing cost of labeling effort. (1) Guidelines, a
+dictionary of all positive and negative examples explicitly provided in annotation guidelines, including dictionaries
+for punctuation, numbers, and English stopwords. (2) +UMLS, all terminologies available in the UMLS. (3)
++Other, additional ontologies or existing dictionaries not included in the UMLS. (4) +Rules, task-specific rules
+including regular expressions, small dictionaries, and other heuristics. (5) Hand-labeled, supervised learning
+using the expert-labeled training split.
+Tiers 1-4 are additive and include all prior levels. We initialized labeling function templates as follows:
+For ontology-based labeling functions, we used the UMLS Semantic Network and corresponding Semantic Groups
+as our entity categories and defined a mapping of semantic types (STYs) to target class labels y ∈ {−1, 0, 1}.
+Non-UMLS ontologies that did not provide semantic type assignments (e.g., ChEBI) were mapped to a single
+class label. All UMLS terminologies v were ranked by term coverage on the unlabeled training set, defined as each
+term’s document frequency summed by terminology, and the top s terminologies were used to initialize templates,
+where s was tuned with a validation set. The remaining (vs+1 , ..., v92 ) UMLS terminologies were merged into a
+single labeling function to ensure all terms in the UMLS were included. UMLS synsets were constructed using
+concept unique identifiers (CUIs) and templates were initialized with the union of all terminologies and fixed
+across all NER tasks.
+For task-specific labeling functions, we evaluated our ability to supplement ontology-based supervision with
+hand-coded labeling functions and estimated the relative performance contribution of adding these task-specific
+
+4
+
+rules. All training set documents were preprocessed to tag entities using the ontology-based labeling functions
+outlined above and indexed to support search queries for efficient data exploration. The design of task-specific
+labeling functions is a mix of data exploration, i.e., looking at entities identified by ontology labeling functions
+to identify errors, and similarity search to identify common, out-of-ontology concept patterns. Only the training
+set was examined during this process and the test set was held out during all labeling function development and
+model tuning.
+For NER, we used two rule types to label concepts: (1) pattern matching via regular expressions and small
+dictionaries of related terms (e.g., illegal drugs); and (2) bigram word co-occurrence graphs from ontologies to
+support fuzzy span matching. Pattern matching comprised the majority of our task-specific labeling functions.
+While task-specific labeling functions codify generalized patterns not captured by ontologies, we also note that
+a number of our task-specific labeling functions were necessary due to the idiosyncratic nature of ground truth
+labels in benchmark tasks. For example, in the i2b2/n2c2 drug tagging task, annotation guidelines included
+more complex, conditional entity definitions, such as not labeling negated or historical drug mentions. We
+incorporated these guidelines using the Negation and DocTimeRel labeling functions described below. See
+Supplementary Fig. 1 and Supplementary Note for a more detailed example of designing task-specific labeling
+functions.
+For span tasks, which classify Negation and DocTimeRel for pre-identified entities, we do not use ontology-based
+labeling functions directly for supervision. Instead, ontology-tagged entities were used to guide development of
+labeling functions that search left and right context windows around a target entity for cue phrases. Designing
+search patterns for left and right context windows is the same strategy used by NegEx/ConText [12, 39] to
+assign negation and temporal status. For Negation, we built on NegEx by adding additional patterns found
+via exploration of the training documents. For DocTimeRel we used a heuristic based on the nearest explicit
+datetime mention (in token distance) to an event mention [40]. Additional contextual pattern matching rules
+were added to detect other cues of event temporality, e.g., using section headers such as past medical history to
+identify events occurring before the note creation time.
+
+Majority Vote (MV)
+Guidelines
++ UMLS
++ Other
++ Rules
+Weakly Supervised BioBERT (WS)
+Guidelines
++ UMLS
++ Other
++ Rules
+Fully Supervised BioBERT (FS)
+Hand-labeled
+
+Figure 2: Ablation study of F1 performance by labeling source. Majority vote (MV) vs. weakly
+supervised BioBERT (WS) vs. fully supervised (FS) for all labeling source ablations showing the absolute
+F1-score for all labeling tiers. The colored region of each bar indicates MV performance and the white regions
+denote performance improvements of WS over MV. The mean performance of FS is indicated by the green lines
+and square points. WS and FS consist of n=10 experiment replicates using different random initialization seeds,
+presented as the mean with error bars ± SD. MV is deterministic and does not include replicates.
+
+5
+
+Fig. 2 reports F1 scores across all ablation tiers. In all settings, the weakly supervised BioBERT models
+outperformed MV. Gains of 8.0 to 34.7 F1 points are seen in the guideline-only tier and 1.3 to 8.2 points in
+other tiers. Incorporating source accuracies into BioBERT training provided significant benefits when combining
+high precision sources with low precision/high recall sources. In the case of chemical tagging with MV, the
+UMLS tier (red) outperformed UMLS+Other (orange) by 1.8 F1 points (81.6 vs. 79.8). This was due to adding
+the ChEBI ontology which increased recall but only had 65% word-level precision. Majority vote cannot learn
+or utilize this information, so naively adding ChEBI labels hurt performance. However the label model learned
+ChEBI’s accuracy to take advantage of the noisier, but higher coverage signal, thus the WS UMLS+Other
+(orange+white) outperformed UMLS ((red+white)) by 2.5 F1 points (88.0 vs 85.5). See Supplementary Tables
+1-4 for complete performance metrics across all ablation tiers.
+
+Comparing Trove with existing weakly supervised methods
+We compared Trove to three existing weakly supervised methods for NER and sequence labeling: SwellShark
+[21], AutoNER [22], and WISER [23]. We compared performance on BC5CDR (the combination of disease and
+chemical tasks) against all methods and on the i2b2/n2c2 drug task for SwellShark. All performance numbers
+are for models trained on the original training set split, with the exception of SwellShark which is trained on
+an additional 25,000 weakly labeled documents. All weakly supervised methods use the labeling functions,
+preprocessing, and dictionary curation methods as described in the original manuscripts. Table 2 compares
+Trove with these existing weakly supervised methods. Our ontology-based approach outperformed AutoNER by
+1.7 F1 points. For models incorporating task-specific rules, we outperformed the best weakly supervised model
+SwellShark by 1.9 F1 points. SwellShark reported F1 scores on the i2b2/n2c2 drug task of 78.3 for dictionaries
+and 83.4 for task-specific rules. Our best models achieved 79.2 and 88.4 F1 respectively.
+Supervision Method
+Fully Supervised
+Fully Supervised
+SwellShark
+AutoNER
+Ours (Trove+Snorkel)
+SwellShark
+WISER
+Ours (Trove+Snorkel)
+
+Label Source
+Hand-labeled
+Hand-labeled
+Dictionaries
+Dictionaries
+Dictionaries
+Custom Rules
+Custom Rules
+Custom Rules
+
+#Train Docs
+500
+500
+25,500
+500
+500
+25,500
+500
+500
+
+End Model
+BioBERT
+BiLSTM-CRF
+BiLSTM-CRF
+BiLSTM-CRF
+BioBERT
+BiLSTM-CRF
+BiLSTM-CRF
+BioBERT
+
+P
+87.6
+87.2
+84.6
+83.2
+81.6
+86.1
+82.7
+85.5
+
+R
+89.3
+87.9
+74.1
+81.1
+86.1
+82.4
+83.3
+86.8
+
+F1
+88.7
+87.5
+79.0
+82.1
+83.7
+84.2
+83.0
+86.1
+
+Table 2: Comparison of Trove against existing weakly supervised NER methods. Precision (P),
+recall (R), and F1 scores for the BC5CDR task. Underlined numbers indicates the best weakly supervised
+score using only dictionaries/ontologies and bold indicates the best score using custom rules. For this task,
+ontology-based supervision alone outperformed existing weakly supervised methods except for SwellShark which
+required custom rules and candidate generation. Incorporating task-specific rules into Trove further improved
+performance.
+
+UMLS terminologies as plug-and-play weak supervision
+Biomedical annotators such as NCBO BioPortal require selecting a set of target ontologies/terminologies to use
+for labeling. Since Trove is capable of automatically combining noisy terminologies, given a shared semantic
+type definition, we tested the ability to avoid selecting specific UMLS terminologies for use as supervision
+sources. This is challenging because estimating accuracies with the label model requires observing agreement
+and disagreement among multiple label sources, however it is non-obvious how to partition the UMLS, which
+contains many terminologies, into labeling functions. The naive extremes are to either create a single labeling
+function from the union of all terminologies or include all terminologies as individual labeling functions.
+To explore how partitioning choices impact label model performance, we held all non-UMLS labeling functions
+fixed across all ablation tiers and computed performance across s = (1, ..., 92) partitions of the UMLS by
+terminology. All scores were normalized to the best global majority vote score per tier, selected using the best s
+choice evaluated on the validation set, to assess the impact of correcting for label noise.
+
+6
+
+Fig. 3 shows the impact of partitioning the UMLS into s different labeling functions. Modeling source accuracy
+consistently outperformed MV across all tiers, in some cases by 2-8 F1 points. The best performing partition
+size s ranged from 1-10 by task. The naive baseline approaches – collapsing the UMLS into a single labeling
+function or treating all terminologies as individual labeling functions – generally did not perform best overall.
+Chemical
+Chemical
+Chemical
+Chemical
+
+b
+
+Disease
+Disease
+Disease
+
++/- F1
+
+a
+
+Method
+Method
+METHOD Method
+Majority Vote (MV)
+
+d
+
+Drug
+Drug
+Drug
+
+Ablation
+Ablation
+Tier
+Tier
+Ablation
+Tier
+ABLATION
+TIER
+
++/- F1
+
+c
+
+Disorder
+Disorder
+Disorder
+
+UMLS Partition Size s
+UMLS
+UMLS
+Partition
+Partition
+Size
+Size
+s ss
+UMLS
+Partition
+Size
+
+Figure 3: The relationship between the number of UMLS partitions and label model performance.
+a BC5CDR chemical entities. b BC5CDR disease entities. c ShARe/CLEF 2014 disorder entities. d i2b2/n2c2
+2009 drug entities. The UMLS is partitioned into s terminologies (x-axis, log-scale) ordered by term coverage on
+the unlabeled training set. Red (MV) and blue (LM) lines are the mean difference in F1 performance (y-axis)
+of n=5 random weight initializations. Error bars are represented using the solid colored line to denote the mean
+value of data points and the shaded regions corresponding to ±SD. The grey region indicates performance worse
+than the best possible MV, discovered via the validation set. Across virtually all partitioning choices, modeling
+source accuracies outperformed MV, with k =1 to 10 performing best overall.
+
+Case study in rapidly building clinical classifiers
+We deployed Trove to monitor emergency departments for patients undergoing COVID-19 testing, analyzing
+clinical notes for presenting symptoms/disorders and risk factors [41]. This required identifying disorders and
+defining a novel classification task for exposure to a confirmed COVID-19 positive individual, a risk factor
+informing patient contact tracing. The dataset consisted of daily dumps of emergency department notes from
+Stanford Health Care (SHC), beginning in March 2020. Our study was approved by the Stanford University
+Administrative Panel on Human Subjects Research, protocol #24883 and included a waiver of consent. All
+included patients from SHC signed a privacy notice which informs them that their records may be used for
+research purposes given approval by the IRB, with study procedures in place to protect patient confidentiality.
+We manually annotated a gold test set of 20 notes for all mentions of disorders and 776 notes for mentions
+of a positive COVID exposure. Two clinical experts generated gold annotations which were adjudicated
+for disagreements by authors AC and JAF. As a baseline for disorder tagging, we used the fully supervised
+ShARe/CLEF disorder tagger. This reflects a readily available, but out-of-distribution training set (MIMIC-II
+[42] vs. SHC). We used the same disorder labeling function set as our prior experiments, adding one additional
+dictionary of COVID terms [43]. BioBERT was trained using 2482 weakly-labeled documents. Custom labeling
+7
+
+functions were written for the exposure task and models were trained on 14k sentences.
+Table 3 contains our COVID case study results. The label model provided up to 5.2 F1 points improvement over
+majority vote and performed best overall for disorder tagging. Our best weakly supervised model outperformed
+the disorder tagger trained on hand-labeled MIMIC-II data by 2.3 F1 points. For exposure classification, the
+label model provided no benefit, but the weakly supervised end model provided a 6.9% improvement (+5.2 F1
+points) over the rules alone.
+
+Supervision
+Hand-labeled
+Ontologies
++Task-specific
+Task-specific
+
+Task
+Disorder
+Disorder
+Disorder
+Exposure
+
+P
+64.4
+69.1
+82.6
+
+MV
+R
+66.4
+70.4
+69.1
+
+F1
+
+P
+
+65.3
+69.8
+75.2
+
+69.3
+73.0
+82.6
+
+LM
+R
+71.7
+73.9
+69.1
+
+F1
+
+P
+
+70.5
+73.4
+75.2
+
+67.1
+70.5
+87.2
+
+WS
+R
+72.3
+74.8
+74.5
+
+F1
+69.6
+72.6
+80.4
+
+P
+68.0
+
+FS
+R
+74.5
+-
+
+F1
+71.1
+
+Table 3: COVID-19 presenting symptoms/disorders and risk factors evaluated on Stanford Health
+Care emergency department notes. Bold and underlined scores indicate the best score in symptom/disorder
+tagging and COVID exposure classification respectively. Ontology-based weak supervision performed almost as
+well as the out-of-distribution, hand-labeled MIMIC-II data used for FS. Adding task-specific rules, even though
+they were developed without seeing Stanford data, outperformed the hand-labeled FS model by 2.3 F1 points.
+
+Discussion
+Our experiments demonstrate the effectiveness of using weakly supervised methods to train entity classifiers
+using off-the-shelf ontologies and without requiring hand-labeled training data. Medical ontologies are freely
+available sources of weak supervision for NLP applications [44] and in several NER tasks, our ontology-only
+weakly supervised models matched or outperformed more complex weak supervision methods in the literature.
+Our work also highlights how domain-aware language models, such as BioBERT, can be combined with weak
+supervision to build low-cost and highly performant medical NLP classifiers.
+Rule-based approaches are common tools in scientific literature analysis and clinical text processing [45].
+Our results suggest that engineering task-specific rules in addition to labels provided by ontologies provides
+strong performance for several NER tasks – in some cases approaching the performance of systems built using
+hand-labeled data. We further demonstrated how leveraging the structure inherent in knowledge bases such as
+the UMLS to estimate source accuracies and correct for label noise provides substantial performance benefits.
+We find that the classification performance of the label model alone is strong, with BioBERT providing modest
+gains of 1.0 F1 points on average. Since the label model is orders of magnitude more computationally efficient
+to train than BERT-based models, in many settings (e.g., limited access to high-end GPU hardware) the label
+model alone may suffice.
+Our tasks reflect a wide range of difficulty. Clinical tasks required more task-specific rules to address the
+increased complexity of entity definitions and other non-grammatical, sub-language phenomena [46]. Here
+custom rules improved clinical tasks an average of 8.1 F1 points vs. 2.1 points for scientific literature. Moreover,
+adding non-UMLS ontologies to PubMed tasks consistently improved overall performance while providing littleto-no benefit for our clinical tasks. Annotation guidelines for our clinical tasks also increased complexity. The
+i2b2/n2c2 drug task combines several underlying classification problems (e.g., filtering out negated medications,
+patient allergies, and historical medications) into a single tagging formulation. This extends beyond entity
+typing and requires more complex, cue-driven rule design.
+Manually labeling training data is time consuming and expensive, creating barriers to using machine learning for
+new medical classification tasks. Sometimes, there is a critical need to rapidly analyze both scientific literature
+and unstructured electronic health record data – as in the case of the COVID-19 pandemic when we need to
+understand the full repertoire of symptoms, outcomes, and risk factors at short notice [41, 47, 48]. However,
+sharing patient notes and constructing labeled training sets presents logistical challenges, both in terms of
+patient privacy and in developing infrastructure to aggregate patient records [49]. In contrast, labeling functions
+can be easily shared, edited, and applied to data across sites in a privacy preserving manner to rapidly construct
+
+8
+
+classifiers for symptom tagging and risk factor monitoring.
+This work has several limitations. Our task-specific labeling functions were not exhaustive and only reflect lowcost rules easily generated by domain experts. Additional rule development could lead to improved performance.
+In addition, we did not explore data augmentation or multi-task learning in the BioBERT model, which may
+further mitigate the need to engineer task-specific rules. There is considerable prior work developing machine
+learning models for tagging disease, drug, and chemical entities that could be incorporated as labeling functions.
+However, our goal was to explore performance tradeoffs in settings where existing machine learning models are
+not available. Our framework leverages the wide range of medical ontologies available for English language
+settings, which provides considerable advantages for weakly supervised methods. Additional work is needed to
+characterize the extent to which the framework can benefit tasks in non-English settings.
+Combining labels from multiple ontology sources violates an independence assumption of data programming
+as used in this work, because for any pair of source ontologies we may have correlated noise. This restriction
+applies to all label sources, but is more prevalent in cases with extremely similar label sources, as can occur
+with ontologies. In our experiments, for a small number of sources, the impact was minor, however performance
+tended to decrease after including more than 20 ontologies. Additional research into unsupervised methods
+for structure learning [50, 51], i.e., learning dependencies among sources from unlabeled data, could further
+improve performance or mitigate the need to limit the number of included ontologies.
+Identifying named entities and attributes such as negation are critical tasks in medical natural language
+processing. Manually labeling training data for these tasks is time consuming and expensive, creating a barrier
+to building classifiers for new tasks. The Trove framework provides ontology-driven weak supervision for medical
+entity classification and achieves state-of-the-art weakly supervised performance in the NER tasks of recognizing
+chemicals, diseases, and drugs. We further establish new weakly supervised baselines for disorder tagging and
+classifying the temporal order of an event entity relative to its document timestamp. The weakly supervised
+NER classifiers perform within 1.3 - 4.9 F1 points of classifiers trained with hand-labeled data. Modeling the
+accuracies of individual ontologies and rules to correct for label noise improved performance in all of our entity
+classification tasks. Combining pre-trained language models such as BioBERT with weak supervision results in
+an additional improvement in most tasks.
+The Trove framework demonstrates how classifiers for a wide range of medical NLP tasks can be quickly
+constructed by leveraging medical ontologies and weak supervision without requiring manually labeled training
+data. Weakly supervised learning provides a mechanism for combining the generalization capabilities of
+state-of-the-art machine learning with the flexibility and inspectability of rule-based approaches.
+
+Methods
+Datasets and tasks
+We analyze two categories of medical tasks using six datasets: (1) NER; and (2) span classification where
+entities are identified a priori and classified for cue-driven attributes such as negation or document relative
+time i.e., the order of an event entity relative to the parent document’s timestamp. Both categories of tasks are
+formalized as token classification problems, either tagging all words in a sequence (NER) or just the head words
+for an entity set (span classification). Table 4 contains summary statistics for all six datasets. All documents
+were preprocessed using a spaCy [52] pipeline optimized for biomedical tokenization and sentence boundary
+detection [19].
+Our COVID-19 case study used a daily feed of emergency department notes from Stanford Health Care (SHC),
+beginning in March 2020. Our study was approved by the Stanford University Administrative Panel on Human
+Subjects Research, protocol #24883 and included a waiver of consent. All included patients from SHC signed a
+privacy notice which informs them that their records may be used for research purposes given approval by the
+IRB, with study procedures in place to protect patient confidentiality.
+We used 99 label sources covering a broad range of medical ontologies. We used the 2018AA release of the
+UMLS Metathesaurus, removing non-English and zoonotic source terminologies as well as sources containing
+fewer than 500 terms, resulting in 92 sources. Additional sources included the 2019 SPECIALIST abbreviations
+[56]; Disease Ontology [57]; Chemical Entities of Biological Interest (ChEBI) [58]; Comparative Toxicogenomics
+9
+
+Task
+Disease
+Chemical
+Disorder
+Drug
+Negation
+DocTimeRel
+
+Domain
+Literature
+Literature
+Clinical
+Clinical
+Clinical
+Clinical
+
+Name
+BC5CDR [53]
+BC5CDR [53]
+ShARe/CLEF 2014 [38]
+i2b2/n2c2 2009 [54]
+ShARe/CLEF 2014 [38]
+THYME 2016 [55]
+
+Type
+NER
+NER
+NER
+NER
+Span
+Span
+
+k
+2
+2
+2
+2
+2
+4
+
+Documents
+500/500/500
+500/500/500
+166/133/133
+100/75/75
+166/133/133
+293/147/151
+
+Entities
+4182/4244/4424
+5203/5347/5385
+5619/4449/7367
+3157/2504/2819
+5619/4449/7367
+38937/20974/18990
+
+Table 4: Dataset summary statistics. There are (k) classes per task. The (Documents) and (Entities)
+columns indicate counts for train/validation/test splits.
+Database (CTD) [59]; the seed vocabulary used in AutoNER [22]; ADAM abbreviations database [60]; and
+word sense abbreviation dictionaries used by the clinical abbreviation system CARD [61].
+We applied minimal preprocessing to all source ontologies, filtering out English stopwords and numbers, applying
+a letter case normalization heuristic to preserve abbreviations, and removing all single character terms. We did
+not incorporate UMLS term type information, such as filtering out terms explicitly denoted as suppressible
+within a terminology, since this information is not typically available in non-UMLS ontologies. Our overall goal
+was to impose as few assumptions as possible when importing terminologies, evaluating their ability to function
+as plug-and-play sources for weak supervision.
+
+Formulation of the labeling problem
+We assume a sequence labeling problem formulation, where we are given a dataset D = {Xi }N
+i=1 of N sequences
+Xi = (xi,1 , ..., xi,t ) consisting of words x from a fixed vocabulary. Each sequence is mapped to a corresponding
+sequence of latent class variables Yi = (yi,1 , ..., yi,t ), where y ∈ {0, ..., k} for k tag classes. Since Y is not
+observable, our primary technical challenge is estimating Y from multiple, potentially conflicting label sources
+of unknown quality to construct a probabilistically labeled dataset D̂ = {Xi , Ŷi }N
+i=1 . This dataset can then
+be used for training classification models such as deep neural networks. Such a labeling regimen is typically
+low-cost, but less accurate than the hand-curated labels used in traditional supervised learning, hence this
+paradigm is referred to as weakly supervised learning.
+
+Unifying and denoising sources with a label model
+When using biomedical annotators such as MetaMap or NCBO BioPortal, users specify a target set of entity
+classes and a set of terminology sources with which to generate labeled concepts. Consider the example
+outlined in Fig. 4, where we want to train an entity tagger for disease names using labels generated from four
+terminologies. Here we are interested in generating a consensus set of entities using each terminology’s labeled
+output. A straightforward unification method is majority vote
+ŷ = argmax
+
+m
+X
+
+y∈{1,...,k} i=1
+
+1k (λi (x) = y)
+
+(1)
+
+where our m terminologies are represented as individual labeling functions λi . Labeling functions encode an
+underlying heuristic such as matching strings against a dictionary and given an input instance (e.g., a document
+or entity span) assign a label in the domain {−1, 0, ..., k} where -1 denotes abstain, i.e., not assigning any class
+label. Majority vote simply takes the mode of all labeling function outputs for each word, emitting the majority
+class in the case of ties or abstains.
+Majority vote weights sources equally when combining labels, an assumption that does not hold in practice,
+which introduces noise into the labeling process. Sources have unknown, task-dependent accuracies and often
+make systematic labeling errors. Failing to account for these accuracies can negatively impact classification
+performance. To correct for such label noise, we use data programming [34] to estimate accuracies of each
+source and ensemble the sources via a label model which assigns a consensus probabilistic label per word.
+To learn the label model, m label sources are parameterized as labeling functions λ1 , ....λm . The vector of
+m labeling functions applied to n instances forms the label matrix Λ ∈ {−1, 0, ..., k}m×n . A key finding
+10
+
+of data programming is that we can use Λ to recover the latent class-conditional accuracy of each label
+source without ground truth labels by observing the rates of agreement and disagreement across all pairs of
+labeling functions λi , λj [34]. This leverages the fact that while the accuracy ai = E[λi Y ] (the expectation
+of the labeling function output λi multiplied by the true label) is not directly observable, the product of
+ai aj = E[λi Y λj Y ] = E[λi Y ]E[λj Y ] is the rate at which labeling functions vote together, which is observable
+via Λ. Assuming independent noise among labeling functions, accuracies are then recoverable up to a sign by
+solving accuracies for disjoint sets of triplets. We refer readers to Ratner et al. (2019) [17] for more details.
+We use the weak supervision framework Snorkel [11] to train a probabilistic label model which captures the
+relationship between the true label and label sources P (Y, Λ). Here the training input is the label matrix
+Λ, generated by applying labeling functions λ1 , ....λm to the unlabeled dataset D. Formally, P (Y, Λ) can be
+encoded as a factor graph-based model with m accuracy factors between λ1 , ..., λm and our true (unobserved)
+label y (Fig. 1, step 3).
+θjAcc (Λi , yi ) := yi Λij
+m X
+n
+X
+
+pθ (Y, Λ) ∝ exp
+
+(2)
+!
+
+θjAcc φAcc
+j (Λi , yi )
+
+(3)
+
+i=1 j=1
+
+Snorkel implements a matrix completion formulation of data programming which enables faster estimation of
+model parameters θ using stochastic gradient descent rather than relying on Gibbs sampling-based approaches
+[17]. The label model estimates P (Y|Λ) to provide denoised consensus label predictions Ŷ and generates our
+probabilistically labeled dataset D̂.
+Fig. 4 shows how data programming provides a principled way to synthesize a label when there is disagreement
+across label sources about what constitutes an entity span. The disease mention diabetes type 2 is not found in
+Metathesaurus Names (MTH) or SNOMED Clinical Terms (SNOMEDCT) which leads to disagreement and
+label errors. Using a majority vote of labeling functions misses the complete entity span, while the label model
+learns to account for systematic errors made by each ontology to generate a more accurate consensus label
+prediction.
+Label Matrix
+
+λ1
+
+Labeling Functions
+
+λ2
+λ3
+λ4
+
+Sequence
+Unobserved True Labels
+Majority Vote (MV)
+Label Model (LM)
+
+MTH
+
+MTH
+
+MTH
+
+CHV
+LNC
+
+LNC
+
+SNOMEDCT
+
+aMV aLM
+
+Λm×n
+MTH
+
+1.00 0.62
+
+MTH
+
+CHV
+
+CHV
+
+1.00 1.00
+
+LNC
+
+LNC
+
+1.00 1.00
+
+SNOMEDCT
+
+SNOMEDCT
+
+1.00 0.60
+
+SNOMEDCT
+
+Xi
+
+risk
+
+factor
+
+for
+
+diabetes
+
+type
+
+2
+
+Yi
+Ŷ i
+Ŷ i
+
+0
+0.0 (0/3)
+0.0
+
+0
+0.0 (0/4)
+0.0
+
+0
+0.0 (0/1)
+0.40
+
+1
+1.0 (3/3)
+0.99
+
+1
+0.50 (2/4)
+0.99
+
+1
+0.50 (2/4)
+0.99
+
+LEGEND
+
+Disease or Syndrome
+
+NOT Disease or Syndrome
+
+Learned
+Accuracies
+
+ABSTAIN
+
+Figure 4: An example of combining ontology-based labeling functions. Here four ontology labeling
+functions (MTH, CHV, LNC, SNOMEDCT) are used to label a sequence of words Xi containing the entity
+diabetes type 2. Majority vote estimates Yi as a word-level sum of positive class labels, weighing each equally
+(aMV ). The label model learns a latent class-conditional accuracy (aLM ) for each ontology, which is used to
+reweight labels to generate a more accurate consensus prediction of Yi .
+
+Labeling function templates
+In this work, a labeling function λj accepts an unlabeled sequence Xi as input and emits a vector of predicted
+labels Ỹi,j = (ỹj,1 , ..., ỹj,t ), i.e., a label ỹj ∈ {−1, 0, ..., k} for each word in Xi . A typical labeling function serves
+11
+
+as a wrapper for an underlying, potentially task-specific labeling heuristic such as pattern matching with a
+regular expression or a more complex rule system. Since these labeling functions are not easily automated and
+require hand coding, we refer to them as task-specific labeling functions. These are analogous to the rule-based
+approaches used in 48% of recent medical concept recognition publications [45].
+In contrast, medical ontologies can be automatically transformed into labeling functions with little-to-no custom
+coding by defining reusable labeling function templates. Templates only require specifying a set of target entity
+categories and providing a collection of terminologies mapped to those categories. These categories are easily
+derived from knowledge bases such as the UMLS Metathesaurus (where the UMLS Semantic Network [62]
+provides a consistent categorization of UMLS concepts) or other domain-specific taxonomies. In this work, we
+use UMLS Semantic Groups [63] (mappings of semantic types into simpler, non-hierarchical categories such as
+disorders) as the basis for our concept categories.
+We explore two types of ontology-based labeling functions, which leverage knowledge codified in medical
+ontologies for term semantic types and synonymy.
+Semantic type labeling functions require a set of terms (single or multi-word entities) t ∈ T mapped to semantic
+types, where a term may be mapped to multiple entity classes. This mapping is converted to a k-dimensional
+probability vector where k is the number of entity classes ti → [p1 , ..., pk ]. Given input sequence Xi , use string
+matching to find all longest term matches (in token length) and assign each match to its most probable entity
+class ỹ = max(ti ), abstaining on ties. Using the longest match is a heuristic which helps disambiguates nested
+terms (lung as anatomy vs lung cancer as disease). Matching optionally includes a set of slot-filled patterns to
+capture simple compositional mentions (e.g., {*} ({*}) → Tylenol (Acetaminophen)).
+Synonym (synset) labeling functions require synsets (collections of synonymous terms) {t̂1 , ..., t̂n } ∈ T̂ and
+terms T mapped to a semantic types. Given input sequence Xi and it’s parent context (e.g., document) search
+for >1 unique synonym matches from a target synset and label all matches ỹ = max(ti ). This is useful for
+disambiguating abbreviations (e.g, Duchenne muscular dystrophy → DMD) , where a long form of an abbreviated
+term appears elsewhere in a document. Matches can be unconstrained, e.g., any tuple found anywhere in a
+context, or subject to matching rules e.g., using Schwartz-Hearst abbreviation disambiguation [64] to identify
+out-of-dictionary abbreviations.
+
+Training the BioBERT end model
+The output of the label model is a set of probabilistically labeled words, which we transform back into sequences
+D̂ = {Xi , Ŷi }N
+i=1 . While probabilistic labels may be used directly for classification, this suffers from a key
+limitation: the label model cannot generalize beyond the direct output of labeling functions. Rules alone can
+miss common error cases such as out-of-dictionary synonyms or misspellings. Therefore, to improve coverage
+we train a discriminative end model, in this case a deep neural network, to transform the output of labeling
+functions into learned feature representations. Doing so leverages the inductive bias of pre-trained language
+models [65] and provides additional opportunities for injecting domain knowledge via data augmentation [66]
+and multi-task learning [67] to improve classification performance.
+We use the transformer-based BioBERT [24], a language model fine-tuned on biomedical text. We also evaluated
+ClinicalBERT [68] for clinical tasks, and found its performance to be the same as BioBERT. BioBERT is trained
+as a token-level classifier with a max sequence length of 512 tokens. We follow Devlin et al. [65] for sequence
+labeling formulation, using the last BERT layer of each word’s head wordpiece token as the contextualized
+embedding. Since sequence labels may be incomplete (i.e., cases where all labeling functions abstain on a word),
+we mask all abstained tokens when computing the loss during training. We modified BioBERT to support a
+noise-aware binary cross entropy loss function [34] which minimizes the expected value with respect to Ŷ to
+take advantage of the more informative probabilistic labels.
+N
+1 X
+ŵ = argminw
+E
+[L(w, xi , ŷ)]
+N i=1 ŷ∼Ŷ
+
+12
+
+(4)
+
+Hyperparameter tuning for the label and end models
+All models were trained using weakly-labeled versions of the original training splits, i.e., no hand-labeled
+instances. We used a hand-labeled validation and test set for hyperparameter tuning and model evaluation,
+respectively. Result metrics are reported using the test set. The label model was tuned for learning rate, training
+epochs, L2 regularization, and a uniform accuracy prior used to initialize labeling function accuracies. BioBERT
+weights were fine-tuned, and end models were tuned for learning rate and training epochs. We used a linear
+decay learning rate schedule with a 10% warmup period. See Supplementary Tables 5-6 for hyperparameter
+grids.
+
+Metrics
+We report precision, recall, and F1-score for all tasks. DocTimeRela is reported using micro-averaging. NER
+metrics are computed using exact span matching [69]. Each NER task is trained separately as a binary classifier
+using IO (inside, outside) tagging to simplify labeling function design, with predicted tags converted to BIO
+(beginning, inside, outside) to properly count errors detecting head words. Span task metrics are calculated
+assuming access to gold test set spans, as per the evaluation protocol of the original challenges. Label model
+and BioBERT scores are reported as the mean and standard deviation of 10 runs with different random seeds.
+A two-sided Wilcoxon signed-rank test with an alpha level of 0.05 was used to calculate statistical significance.
+
+Data availability
+All primary data that support the findings of this study are available via public benchmark datasets (BC5CDR,
+https://biocreative.bioinformatics.udel.edu/tasks/biocreative-v/track-3-cdr/) or are otherwise
+available per data use agreements with the respective data owners (ShARe/CLEF 2014, https://physionet.
+org/content/shareclefehealth2014task2/1.0/; THYME, https://healthnlp.hms.harvard.edu/center/
+pages/data-sets.html; i2b2/n2c2 2009, https://portal.dbmi.hms.harvard.edu/projects/n2c2-nlp/).
+The data that support the findings of the clinical case study are available on request from the corresponding
+author JAF. These data are not publicly available because they contain information that could compromise
+patient privacy.
+Trove requires access to the UMLS, which is available by license from National Library of Medicine, Department
+of Health and Human Services, https://www.nlm.nih.gov/research/umls/index.html. Open source ontologies used in this study are available at: SPECIALIST Lexicon, https://lsg3.nlm.nih.gov/LexSysGroup/
+Summary/lexicon.html; Disease Ontology, https://bioportal.bioontology.org/ontologies/DOID; Chemical Entities of Biological Interest (ChEBI), ftp://ftp.ebi.ac.uk/pub/databases/chebi/; Comparative
+Toxicogenomics Database (CTD), http://ctdbase.org; AutoNER core dictionary, https://github.com/
+shangjingbo1226/AutoNER/blob/master/data/BC5CDR/dict_core.txt; ADAM abbreviations database, http:
+//arrowsmith.psych.uic.edu/arrowsmith_uic/adam.html; and the Clinical Abbreviation Recognition and
+Disambiguation (CARD) framework, https://sbmi.uth.edu/ccb/resources/abbreviation.htm.
+
+Code availability
+Trove is written in Python v3.6, spaCy 2.3.4 was used for NLP preprocessing, and Snorkel v0.9.5 was used
+for training the label model. BioBERT-Base v1.1, Transformers v2.8 [70], and PyTorch v1.1.0 were used to
+train all discriminative models. Trove is open source software and publicly available at https://github.com/
+som-shahlab/trove; https://doi.org/10.5281/zenodo.4497214 [71]
+
+References
+[1] Ravı̀, D. et al. Deep learning for health informatics. IEEE Journal of Biomedical and Health Informatics
+21, 4–21 (2017).
+[2] Esteva, A. et al. A guide to deep learning in healthcare. Nat. Med. 25, 24–29 (2019).
+
+13
+
+[3] Wang, L. L. et al. CORD-19: The COVID-19 open research dataset. In Proceedings of the 1st Workshop
+on NLP for COVID-19 at ACL 2020 (Association for Computational Linguistics, Online, 2020). URL
+https://www.aclweb.org/anthology/2020.nlpcovid19-acl.1.
+[4] Kuleshov, V. et al. A machine-compiled database of genome-wide association studies. Nat. Commun. 10,
+3341 (2019).
+[5] Fries, J. A. et al. Weakly supervised classification of aortic valve malformations using unlabeled cardiac
+MRI sequences. Nat. Commun. 10, 3111 (2019).
+[6] Khattar, S. et al. Multi-frame weak supervision to label wearable sensor data. In Proceedings of the Time
+Series Workshop at ICML 2019 (2019).
+[7] Varma, P. et al. Multi-resolution weak supervision for sequential data. In Wallach, H. M. et al. (eds.)
+Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, 8-14 December 2019, Vancouver, BC, Canada, 192–203 (2019). URL
+http://papers.nips.cc/paper/8313-multi-resolution-weak-supervision-for-sequential-data.
+[8] Dunnmon, J. A. et al. Cross-Modal data programming enables rapid medical machine learning. Patterns
+1, 100019 (2020).
+[9] Bodenreider, O. The unified medical language system (UMLS): integrating biomedical terminology. Nucleic
+Acids Res. 32, D267–70 (2004).
+[10] Jonquet, C., Shah, N. H. & Musen, M. A. The open biomedical annotator. Summit Transl Bioinform
+2009, 56–60 (2009).
+[11] Ratner, A. et al. Snorkel: Rapid training data creation with weak supervision. Proceedings VLDB
+Endowment 11, 269–282 (2017).
+[12] Chapman, W. W., Bridewell, W., Hanbury, P., Cooper, G. F. & Buchanan, B. G. A simple algorithm for
+identifying negated findings and diseases in discharge summaries. J. Biomed. Inform. 34, 301–310 (2001).
+[13] Peng, Y. et al. NegBio: a high-performance tool for negation and uncertainty detection in radiology reports.
+AMIA Jt Summits Transl Sci Proc 2017, 188–196 (2018).
+[14] Wang, X. et al. Chestx-ray8: Hospital-scale chest x-ray database and benchmarks on weakly-supervised
+classification and localization of common thorax diseases. In 2017 IEEE Conference on Computer Vision
+and Pattern Recognition, CVPR 2017, Honolulu, HI, USA, July 21-26, 2017, 3462–3471 (IEEE Computer
+Society, 2017). URL https://doi.org/10.1109/CVPR.2017.369.
+[15] Rajpurkar, P. et al. Deep learning for chest radiograph diagnosis: A retrospective comparison of the
+CheXNeXt algorithm to practicing radiologists. PLoS Med. 15, e1002686 (2018).
+[16] Draelos, R. L. et al. Machine-Learning-Based multiple abnormality prediction with Large-Scale chest
+computed tomography volumes (2020). 2002.04752.
+[17] Ratner, A. et al. Training complex models with Multi-Task weak supervision. Proc. Conf. AAAI Artif.
+Intell. 33, 4763–4771 (2019).
+[18] Wang, Y. et al. A clinical text classification paradigm using weak supervision and deep representation.
+BMC Med. Inform. Decis. Mak. 19, 1 (2019).
+[19] Callahan, A. et al. Medical device surveillance with electronic health records. NPJ Digit Med 2, 94 (2019).
+[20] Peterson, K. J., Jiang, G. & Liu, H. A corpus-driven standardization framework for encoding clinical
+problems with HL7 FHIR. Journal of Biomedical Informatics 110, 103541 (2020).
+[21] Fries, J., Wu, S., Ratner, A. & Ré, C. SwellShark: A generative model for biomedical named entity
+recognition without labeled data (2017). 1704.06360.
+
+14
+
+[22] Shang, J. et al. Learning named entity tagger using domain-specific dictionary. In Proceedings of
+the 2018 Conference on Empirical Methods in Natural Language Processing, 2054–2064 (Association
+for Computational Linguistics, Brussels, Belgium, 2018). URL https://www.aclweb.org/anthology/
+D18-1230.
+[23] Safranchik, E., Luo, S. & Bach, S. H. Weakly supervised sequence tagging from noisy rules. In The
+Thirty-Fourth AAAI Conference on Artificial Intelligence, AAAI 2020, The Thirty-Second Innovative
+Applications of Artificial Intelligence Conference, IAAI 2020, The Tenth AAAI Symposium on Educational
+Advances in Artificial Intelligence, EAAI 2020, New York, NY, USA, February 7-12, 2020, 5570–5578
+(AAAI Press, 2020). URL https://aaai.org/ojs/index.php/AAAI/article/view/6009.
+[24] Lee, J. et al. BioBERT: a pre-trained biomedical language representation model for biomedical text mining.
+Bioinformatics (2019).
+[25] Aronson, A. R. & Lang, F.-M. An overview of metamap: historical perspective and recent advances.
+Journal of the American Medical Informatics Association 17, 229–236 (2010).
+[26] Craven, M. & Kumlien, J. Constructing biological knowledge bases by extracting information from text
+sources. Proc. Int. Conf. Intell. Syst. Mol. Biol. 77–86 (1999).
+[27] Mintz, M., Bills, S., Snow, R. & Jurafsky, D. Distant supervision for relation extraction without labeled data.
+In Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International
+Joint Conference on Natural Language Processing of the AFNLP, 1003–1011 (2009).
+[28] Blum, A. & Mitchell, T. M. Combining labeled and unlabeled data with co-training. In Bartlett,
+P. L. & Mansour, Y. (eds.) Proceedings of the Eleventh Annual Conference on Computational Learning
+Theory, COLT 1998, Madison, Wisconsin, USA, July 24-26, 1998, 92–100 (ACM, 1998). URL https:
+//doi.org/10.1145/279943.279962.
+[29] Ma, Y., Cambria, E. & Gao, S. Label embedding for zero-shot fine-grained named entity typing. In
+Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical
+Papers, 171–180 (2016).
+[30] Collins, M. & Singer, Y. Unsupervised models for named entity classification. In 1999 Joint SIGDAT
+Conference on Empirical Methods in Natural Language Processing and Very Large Corpora (1999).
+[31] Medlock, B. & Briscoe, T. Weakly supervised learning for hedge classification in scientific literature. In
+Proceedings of the 45th annual meeting of the association of computational linguistics, 992–999 (2007).
+[32] Mann, G. S. & McCallum, A. Generalized expectation criteria for Semi-Supervised learning with weakly
+labeled data. J. Mach. Learn. Res. 11 (2010).
+[33] Khetan, A., Lipton, Z. C. & Anandkumar, A. Learning from noisy singly-labeled data. In 6th International
+Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018, Conference Track Proceedings (OpenReview.net, 2018). URL https://openreview.net/forum?id=H1sUHgb0Z.
+[34] Ratner, A., De Sa, C., Wu, S., Selsam, D. & Ré, C. Data programming: Creating large training sets,
+quickly. Adv. Neural Inf. Process. Syst. 29, 3567–3575 (2016).
+[35] Dai, X., Karimi, S. & Paris, C. Medication and adverse event extraction from noisy text. In Proceedings of
+the Australasian Language Technology Association Workshop 2017, 79–87 (2017).
+[36] Si, Y., Wang, J., Xu, H. & Roberts, K. Enhancing clinical concept extraction with contextual embeddings.
+Journal of the American Medical Informatics Association 26, 1297–1304 (2019).
+[37] Lin, C., Dligach, D., Miller, T. A., Bethard, S. & Savova, G. K. Multilayered temporal modeling for the
+clinical domain. Journal of the American Medical Informatics Association 23, 387–395 (2016).
+[38] Mowery, D. L. et al. Task 2: ShARe/CLEF ehealth evaluation lab 2014. In Cappellato, L., Ferro, N.,
+Halvey, M. & Kraaij, W. (eds.) Working Notes for CLEF 2014 Conference, Sheffield, UK, September 15-18,
+2014, vol. 1180 of CEUR Workshop Proceedings, 31–42 (CEUR-WS.org, 2014). URL http://ceur-ws.
+org/Vol-1180/CLEF2014wn-eHealth-MoweryEt2014.pdf.
+15
+
+[39] Harkema, H., Dowling, J. N., Thornblade, T. & Chapman, W. W. Context: an algorithm for determining
+negation, experiencer, and temporal status from clinical reports. Journal of biomedical informatics 42,
+839–851 (2009).
+[40] Fries, J. A. Brundlefly at semeval-2016 task 12: Recurrent neural networks vs. joint inference for clinical
+temporal information extraction. In Bethard, S. et al. (eds.) Proceedings of the 10th International Workshop
+on Semantic Evaluation, SemEval@NAACL-HLT 2016, San Diego, CA, USA, June 16-17, 2016, 1274–1279
+(The Association for Computer Linguistics, 2016). URL https://doi.org/10.18653/v1/s16-1198.
+[41] Callahan, A. et al. Estimating the efficacy of symptom-based screening for COVID-19. npj Digital Medicine
+3, 95 (2020).
+[42] Saeed, M. et al. Multiparameter intelligent monitoring in intensive care II (MIMIC-II): a public-access
+intensive care unit database. Critical care medicine 39, 952 (2011).
+[43] Hanauer, D. Project EMERSE: COVID-19 synonyms. URL http://project-emerse.org/synonyms_
+covid19.html. http://project-emerse.org/synonyms_covid19.html.
+[44] Rubin, D. L., Shah, N. H. & Noy, N. F. Biomedical ontologies: a functional perspective. Brief. Bioinform.
+9, 75–90 (2008).
+[45] Fu, S. et al. Clinical concept extraction: A methodology review. J. Biomed. Inform. 109, 103526 (2020).
+[46] Friedman, C., Kra, P. & Rzhetsky, A. Two biomedical sublanguages: a description based on the theories of
+zellig harris. J. Biomed. Inform. 35, 222–235 (2002).
+[47] Wagner, T. et al. Augmented curation of clinical notes from a massive ehr system reveals symptoms of
+impending covid-19 diagnosis. eLife 9, e58227 (2020). URL https://doi.org/10.7554/eLife.58227.
+[48] Wang, J., Pham, H. A., Manion, F., Rouhizadeh, M. & Zhang, Y. COVID-19 SignSym: A fast adaptation
+of general clinical NLP tools to identify and normalize COVID-19 signs and symptoms to OMOP common
+data model (2020). 2007.10286.
+[49] National COVID cohort collaborative (N3C). https://ncats.nih.gov/n3c (2020). Accessed: 2020-7-9.
+[50] Bach, S. H., He, B. D., Ratner, A. & Ré, C. Learning the structure of generative models without labeled
+data. In Precup, D. & Teh, Y. W. (eds.) Proceedings of the 34th International Conference on Machine
+Learning, ICML 2017, Sydney, NSW, Australia, 6-11 August 2017, vol. 70 of Proceedings of Machine
+Learning Research, 273–282 (PMLR, 2017). URL http://proceedings.mlr.press/v70/bach17a.html.
+[51] Varma, P., Sala, F., He, A., Ratner, A. & Ré, C. Learning dependency structures for weak supervision
+models. In Chaudhuri, K. & Salakhutdinov, R. (eds.) Proceedings of the 36th International Conference
+on Machine Learning, ICML 2019, 9-15 June 2019, Long Beach, California, USA, vol. 97 of Proceedings
+of Machine Learning Research, 6418–6427 (PMLR, 2019). URL http://proceedings.mlr.press/v97/
+varma19a.html.
+[52] Honnibal, M., Montani, I., Van Landeghem, S. & Boyd, A. spaCy: Industrial-strength Natural Language
+Processing in Python (2020). URL https://doi.org/10.5281/zenodo.1212303.
+[53] Wei, C. et al. Assessing the state of the art in biomedical relation extraction: overview of the biocreative
+V chemical-disease relation (CDR) task. Database J. Biol. Databases Curation 2016 (2016). URL
+https://doi.org/10.1093/database/baw032.
+[54] Uzuner, O., Solti, I. & Cadag, E. Extracting medication information from clinical text. J. Am. Med.
+Inform. Assoc. 17, 514–518 (2010).
+[55] Bethard, S. et al. Semeval-2016 task 12: Clinical tempeval. In Bethard, S. et al. (eds.) Proceedings of the
+10th International Workshop on Semantic Evaluation, SemEval@NAACL-HLT 2016 (The Association for
+Computer Linguistics, 2016). URL https://doi.org/10.18653/v1/s16-1165.
+[56] SPECIALIST Lexicon and Lexical Tools (National Library of Medicine (US), 2009).
+16
+
+[57] Schriml, L. M. et al. Disease ontology: a backbone for disease semantic integration. Nucleic Acids Res. 40,
+D940–6 (2012).
+[58] Degtyarenko, K. et al. ChEBI: a database and ontology for chemical entities of biological interest. Nucleic
+Acids Res. 36, D344–50 (2008).
+[59] Davis, A. P. et al. The comparative toxicogenomics database’s 10th year anniversary: update 2015. Nucleic
+Acids Res. 43, D914–20 (2015).
+[60] Zhou, W., Torvik, V. I. & Smalheiser, N. R. ADAM: another database of abbreviations in MEDLINE.
+Bioinformatics 22, 2813–2818 (2006).
+[61] Wu, Y. et al. A long journey to short abbreviations: developing an open-source framework for clinical
+abbreviation recognition and disambiguation (CARD). J. Am. Med. Inform. Assoc. 24, e79–e86 (2017).
+[62] McCray, A. T. An upper-level ontology for the biomedical domain. Comparative and Functional Genomics
+4, 80–84 (2003).
+[63] McCray, A. T., Burgun, A. & Bodenreider, O. Aggregating umls semantic types for reducing conceptual
+complexity. Studies in health technology and informatics 84, 216 (2001).
+[64] Schwartz, A. S. & Hearst, M. A. A simple algorithm for identifying abbreviation definitions in biomedical text.
+In Altman, R. B., Dunker, A. K., Hunter, L. & Klein, T. E. (eds.) Proceedings of the 8th Pacific Symposium
+on Biocomputing, PSB, 451–462 (2003). URL http://psb.stanford.edu/psb-online/proceedings/
+psb03/schwartz.pdf.
+[65] Devlin, J., Chang, M.-W., Lee, K. & Toutanova, K. BERT: Pre-training of deep bidirectional transformers
+for language understanding. In Proceedings of the 2019 Conference of the North American Chapter of the
+Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short
+Papers), 4171–4186 (Association for Computational Linguistics, Minneapolis, Minnesota, 2019). URL
+https://www.aclweb.org/anthology/N19-1423.
+[66] Wei, J. & Zou, K. EDA: Easy data augmentation techniques for boosting performance on text classification
+tasks. In Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and
+the 9th International Joint Conference on Natural Language Processing (EMNLP-IJCNLP), 6382–6388
+(Association for Computational Linguistics, Hong Kong, China, 2019). URL https://www.aclweb.org/
+anthology/D19-1670.
+[67] Zhang, Y. & Yang, Q. A survey on Multi-Task learning (2017). 1707.08114.
+[68] Alsentzer, E. et al. Publicly available clinical BERT embeddings. In Proceedings of the 2nd Clinical Natural
+Language Processing Workshop, 72–78 (Association for Computational Linguistics, Minneapolis, Minnesota,
+USA, 2019). URL https://www.aclweb.org/anthology/W19-1909.
+[69] Tjong Kim, E. & Buchholz, S. Introduction to the CONLL-2000 shared task: Chunking. In Proceedings of
+the Fourth Conference on Computational Natural Language Learning and of the Second Learning Language
+in Logic Workshop (CONLL/LLL 2000). Lissabon, Portugal, 13-14 september 2000, 127–132 (ACL, 2000).
+[70] Wolf, T. et al. Transformers: State-of-the-art natural language processing. In Proceedings of the 2020
+Conference on Empirical Methods in Natural Language Processing: System Demonstrations, 38–45 (Association for Computational Linguistics, Online, 2020). URL https://www.aclweb.org/anthology/2020.
+emnlp-demos.6.
+[71] Fries, J. A. et al. Ontology-driven weak supervision for clinical entity classification in electronic health
+records. Zenodo (2021). URL https://doi.org/10.5281/zenodo.4497214.
+
+17
+
+Acknowledgements
+This work was funded under NLM R01-LM011369-05. Thank you to Birju Patel and Keith Morse who did our
+COVID-19 clinical annotations and to Daisy Ding and Adrien Coulet who helped refine experimental hypotheses
+during the early stages of this project. Computational resources were provided by Nero, a shared big data
+computing platform made possible by the Stanford School of Medicine Research Office and Stanford Research
+Computing Center. Additional thanks to reader feedback from Stephen Pfohl, Erin Craig, Conor Corbin, and
+Jennifer Wilson.
+This is a post-peer-review, pre-copyedit version of an article published in Nature Communications. The final
+authenticated version is available online at: https://doi.org/10.1038/s41467-021-22328-4
+
+Author contributions
+JAF conceived the initial study. JAF, ES, SK, SF, JP, AC wrote code and conducted experimental analysis
+of machine learning models. AC, JAF managed and adjudicated clinical text annotations. JAF, ES, NHS
+contributed ideas and experimental designs. NHS supervised the project. All authors contributed to writing.
+
+Competing Interests
+The authors declare no competing interests.
+
+18
+
+Title
+Ontology-driven weak supervision for clinical entity classification in electronic health records
+
+Supplementary Information
+Supplementary Figures
+
+a
+
+Explore Ontology-based Labeling Function Output
+
+02405-069810-ECG_REPORT.txt
+
+b
+
+Formulate Search Queries to Identify Missing Entity Patterns
+SEARCH
+
+wave (change[s]*|abnormalit(y|ies))
+
+Modest nonspeciﬁc ST-T wave changes are suggested but baseline artifact makes assessment di cult .
+Since previous tracing of 2018-06-02 , sinus tachycardia and slight ST-T wave changes present 2018-06-19
+CXR : Lung volumes are low with several bibasilar areas of atelectasis.
+Non-speciﬁc ST-T wave changes .
+Compared to the previous tracing of 2016-03-25 the rate is slower and the ST-T wave changes are less prominent.
+Di use non-speciﬁc ST-T wave changes .
+Compared to the previous tracing left ventricular hypertrophy and di use ST-T wave changes are new.
+
+c
+
+Develop Regular Expression Labeling Function
+r'''((ST((or|[- ])T)*\s*)|T)( wave\s*)*(change[s]*|abnormalit(y|ies)'''
+
+Figure 5: Example workflow for developing task-specific labeling functions. a Users examine documents tagged by our ontology-based labeling functions and search for common, out-of-ontology entity mentions,
+in this case “T wave changes” in ECGs. b Users create a search query to identify similar missing mention
+patterns in other documents. c Based on the set of documents returned via the search query, users refine their
+entity pattern into a regular expression which can automatically be used as a labeling function when coupled
+with a target class label (ShARe/CLEF 2014 disorders in this example).
+
+19
+
+# load semantic types and specify entity mapping
+enti ty_class es = {
+" Antibiotic "
+:1 ,
+" Clinical Drug " :1
+}
+# define entity categories with classes y \ in {0 ,1}
+categories = {
+name :0 if name not in en tity_cl asses else en tity_cla sses [ name ]
+for name in umls . sema ntic_ty pes ()
+}
+# build ontology ( t \ rightarrow [ p_1 ,... , p_k ]) and synsets ({\ hat { t } _1 ,... ,\ hat { t } _n })
+ontology = b u i l d _ e n t i t y _ m a p ( umls [ " SNOMEDCT_US " ] , categories )
+synsets = b u i l d _ s y n s e t _ m a p ( umls [ " SNOMEDCT_US " ] , categories )
+# labeling functions
+lfs = [
+S e m a n t i c T y p e L a b e l i n g F u n c t i o n ( name = " LF_SNOMED " , ontology ) ,
+S y n S e t L a b e l i n g F u n c t i o n ( name = " L F _ S N O M E D _ s y n s e t s " , synsets )
+]
+
+Figure 6: Example ontology-based labeling functions. Semantic type and synset labeling functions do
+not require that users manually code rules, only that they specify ontologies with sufficient coverage for an
+entity class of interest. These examples initialize labeling functions for a simple definition of “drug” using the
+SNOMEDCT US terminology from the UMLS.
+
+rgxs = [
+r " ( ACEi | ACE inhibitor [ s ]*) " ,
+r " ([ l ][ - ]( glutathione | arginine ) ) " ,
+r " ([ A - Z ]) {2}[0 -9]{3 ,} " ,
+r " (( alpha | beta | gamma ) [ -][ T ]) "
+]
+lf = R e g e x L a b e l i n g F u n c t i o n ( name = " L F _ c h e m i ca l s _ r g x " , rgxs = rgxs , label =1) )
+
+rgxs = [
+r " \ b ([ A - Za - z0 -9]+?[ rlntd ] ase [ s ]*) \ b " ,
+r " [A - Za - z0 -9]+ factor [ s ]* " ,
+r " \ b ( anti [a - z ]+) \ b "
+]
+lf = R e g e x L a b e l i n g F u n c t i o n ( name = " L F _ n o t _ c h e m i c a l s _ r g x " , rgxs = rgxs , label =0) )
+
+Figure 7: Example task-specific labeling functions. Regular expression labeling functions are developed
+by manually inspecting unlabeled data and identifying common patterns for the entity of interest. These
+examples are for chemical tagging in B5CDR.
+
+20
+
+Supplementary Tables
+Task
+
+Method
+
+Ablation Tier
+
+Precision
+
+Recall
+
+F1
+
+Chemical
+Chemical
+Chemical
+Chemical
+
+MV
+MV
+MV
+MV
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+90.7
+87.0
+74.6
+78.3
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+3.1 ±0.0
+76.8 ±0.0
+85.7 ±0.0
+84.2 ±0.0
+
+6.0 ±0.0
+81.6 ±0.0
+79.8 ±0.0
+81.1 ±0.0
+
+Chemical
+Chemical
+Chemical
+Chemical
+
+LM
+LM
+LM
+LM
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+90.7
+89.0
+91.0
+90.8
+
+±0.0
+±0.2
+±0.2
+±0.4
+
+3.1 ±0.0
+82.3 ±0.2
+85.2 ±0.2
+87.7 ±0.4
+
+6.0 ±0.0
+85.5 ±0.1
+88.0 ±0.1
+89.2 ±0.2
+
+Chemical
+Chemical
+Chemical
+Chemical
+
+WS
+WS
+WS
+WS
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+76.0
+87.0
+85.7
+91.0
+
+±6.7
+±0.1
+±0.3
+±0.4
+
+7.8 ±3.1
+84.6 ±0.2
+91.5 ±0.2
+91.2 ±0.3
+
+14.0
+85.8
+88.5
+91.1
+
+Chemical
+
+FS
+
+Supervised
+
+92.1 ±0.4
+
+92.6 ±0.7
+
+92.4 ±0.2
+
+±5.0
+±0.1
+±0.2
+±0.1
+
+Table 5: Complete performance metrics for BC5CDR chemical tagging for all supervision tiers. Scores are the
+mean and ±1 SD of 5 random weight initializations.
+
+Task
+
+Method
+
+Ablation Tier
+
+Precision
+
+Recall
+
+F1
+
+Disease
+Disease
+Disease
+Disease
+
+MV
+MV
+MV
+MV
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+58.5
+67.8
+71.9
+74.1
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+6.8 ±0.0
+65.2 ±0.0
+77.8 ±0.0
+78.7 ±0.0
+
+12.3
+66.5
+74.7
+76.4
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+Disease
+Disease
+Disease
+Disease
+
+LM
+LM
+LM
+LM
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+58.5
+70.8
+80.9
+81.8
+
+±0.0
+±0.9
+±0.9
+±1.1
+
+6.8 ±0.0
+71.3 ±0.1
+77.0 ±0.7
+78.0 ±0.7
+
+12.3
+71.0
+78.9
+79.8
+
+±0.0
+±0.4
+±0.1
+±0.3
+
+Disease
+Disease
+Disease
+Disease
+
+WS
+WS
+WS
+WS
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+40.9
+69.4
+76.9
+78.0
+
+±6.8
+±0.4
+±0.4
+±0.4
+
+51.9
+75.2
+79.7
+81.9
+
+±4.8
+±0.4
+±0.3
+±0.1
+
+45.1
+72.1
+78.3
+79.9
+
+±3.1
+±0.4
+±0.2
+±0.2
+
+Disease
+
+FS
+
+Supervised
+
+82.6 ±0.4
+
+86.5 ±0.2
+
+84.5 ±0.2
+
+Table 6: Complete performance metrics for BC5CDR disease tagging for all supervision tiers. Scores are the
+mean and ±1 SD of 5 random weight initializations.
+
+21
+
+Task
+
+Method
+
+Ablation Tier
+
+Precision
+
+Recall
+
+F1
+
+Disorder
+Disorder
+Disorder
+Disorder
+
+MV
+MV
+MV
+MV
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+69.2
+76.1
+74.2
+77.0
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+3.8 ±0.0
+57.8 ±0.0
+62.4 ±0.0
+66.3 ±0.0
+
+7.2 ±0.0
+65.7 ±0.0
+67.8 ±0.0
+71.2 ±0.0
+
+Disorder
+Disorder
+Disorder
+Disorder
+
+LM
+LM
+LM
+LM
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+69.2
+73.2
+74.1
+79.4
+
+±0.0
+±0.0
+±1.4
+±0.8
+
+3.8 ±0.0
+61.6 ±0.0
+63.3 ±0.5
+71.1 ±0.4
+
+7.2 ±0.0
+66.9 ±0.0
+68.3 ±0.3
+75.0 ±0.2
+
+Disorder
+Disorder
+Disorder
+Disorder
+
+WS
+WS
+WS
+WS
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+35.0
+74.1
+70.8
+79.4
+
+±5.0
+±0.3
+±0.2
+±0.2
+
+53.9
+64.8
+67.5
+73.4
+
+Disorder
+
+FS
+
+Supervised
+
+77.7 ±0.5
+
+±5.5
+±0.5
+±0.3
+±0.3
+
+81.7 ±0.1
+
+41.9
+69.1
+69.1
+76.3
+
+±2.7
+±0.3
+±0.2
+±0.1
+
+79.6 ±0.3
+
+Table 7: Complete performance metrics for ShARe/CLEF 2014 disorder tagging for all supervision tiers. Scores
+are the mean and ±1 SD of 5 random weight initializations.
+
+Task
+
+Method
+
+Ablation Tier
+
+Precision
+
+Drug
+Drug
+Drug
+Drug
+
+Recall
+
+MV
+MV
+MV
+MV
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+76.2
+70.1
+69.5
+81.6
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+14.8
+81.9
+82.0
+82.9
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+24.8
+75.5
+75.3
+82.2
+
+±0.0
+±0.0
+±0.0
+±0.0
+
+Drug
+Drug
+Drug
+Drug
+
+LM
+LM
+LM
+LM
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+77.5
+75.5
+75.9
+86.2
+
+±0.0
+±0.1
+±0.1
+±0.3
+
+15.0
+79.7
+81.5
+85.4
+
+±0.0
+±0.0
+±0.2
+±0.7
+
+25.2
+77.5
+78.6
+85.8
+
+±0.0
+±0.1
+±0.1
+±0.4
+
+Drug
+Drug
+Drug
+Drug
+
+WS
+WS
+WS
+WS
+
+Guidelines
+Guidelines+UMLS
+Guidelines+UMLS+Other
+Guidelines+UMLS+Other+Rules
+
+30.0
+72.6
+75.7
+88.1
+
+±5.9
+±0.3
+±0.2
+±0.2
+
+83.0
+83.5
+83.0
+88.5
+
+±1.0
+±0.1
+±0.3
+±0.3
+
+43.7
+77.7
+79.2
+88.3
+
+±6.2
+±0.2
+±0.2
+±0.3
+
+Drug
+
+FS
+
+Supervised
+
+93.7 ±0.3
+
+92.7 ±0.4
+
+F1
+
+93.2 ±0.3
+
+Table 8: Complete performance metrics for i2b2/n2c2 2009 drug tagging for all supervision tiers. Scores are
+the mean and ±1 SD of 5 random weight initializations.
+
+Parameter
+
+Values
+
+learning rate
+l2
+epochs
+precision init
+
+[0.01, 0.005, 0.001, 0.0001]
+[0.001, 0.0001]
+[50, 100, 200, 600, 700, 1000]
+[0.6, 0.7, 0.8, 0.9]
+
+Table 9: Label model hyperparameter grid.
+
+22
+
+Parameter
+
+Values
+
+learning rate
+epochs
+
+[5e-5, 1e-5, 1e-3]
+[5, 25, 50, 100]
+
+Table 10: BioBERT hyperparameter grid.
+
+Supplementary Note
+Task-specific Rule Design: After using Trove to combine multiple ontologies to label entities, we often want
+to incorporate additional supervision signal to capture more out-of-ontology entities and further improve
+classification performance. While any existing rule-based system can be used as a labeling functions, either
+treated as a gestalt, black box labeler or broken down into more modular rules, in this work we largely focus on
+regular expression labeling functions. Regular expressions are flexible, map to a simple supervision paradigm
+where users are writing search queries, and correspond to how many rule-based systems are designed in practice
+[45].
+In Supplementary Fig. 5 we illustrate an example workflow for developing a labeling pattern which relies on a
+mix of data exploration and writing search queries. We assume all documents are queryable via a search index
+backend such as Elasticsearch [? ]. First, a user browses a random sample of notes to identify common missing
+or incorrect entity spans, as generated by our initial ontology-based labeling functions. Second, once a target
+set of missing entities is identified, the user creates a search query to find similar entity mentions, e.g., “ST-T
+wave changes” in the example below. Finally, the set of retrieved results is used to expand upon a set of regular
+expressions, which is then mapped to a class label for use as a labeling function.
+Since labeling functions consisting of a single pattern generally have low coverage and often low conflict among
+other labelers, we typically bundle multiple, related regular expressions into a single labeling function to increase
+coverage. This process is repeated until the overall label model performance reaches a target performance
+threshold.
+Additional dataset preprocessing: For the DocRelaTime and Negation tasks, labeling functions assume access to
+explicit datetime mentions (TIMEX3) and clinical event entities (e.g. disorders, drugs, procedures). However,
+our experiments assume machine-learning based entity taggers are not available for these subtasks. Instead,
+we use a dictionary of clinical events derived from the UMLS to tag possible event entities, which are used to
+generate noisy candidate entities for both Negation and DocRelaTime tasks. TIMEX3 entities are tagged using
+regular expressions and normalized into abstractions supporting datetime math. Labeling functions are applied
+to these candidates to train the label model, with the resulting probabilistic labels used to train our BioBERT
+models. For the ShARe/CLEF tasks we report scores on a subset of the overall disorder entity set, removing
+non-contiguous, relational-style disorders spans, which comprised 7.9% (628) of test set mentions.
+Guideline annotation examples: These examples are provided directly in annotation guideline documents.
+• Chemical (BioCreative V CDR Task - Data Annotation Guidelines)
+– Positive [ATP, Ca, DCE, Fe, K, Li, NO, O2, amino acid, angiotensin II, angiotensin ii, antidepressant,
+antidepressant drug, antidepressive agent, cAMP, carbidopa, estrogen, estrogen receptor agonist,
+estrogenic agent, estrogenic compound, estrogenic effect, ethanolic extract of daucus carota seed,
+fatty acid, glucose, grape seed proanthocyanidin extract, levodopa, low-dose oral contraceptive, nitric
+oxide, oral contraceptive, phasic oral contraceptive, polyethylene glycol, saturated fatty acid, steroid,
+sucrose, thymoanaleptics, thymoleptics]
+– Negative [DNA, adrenergic, anti-HIV agent, anticholinesterase drug, anticoagulant, anticonvulsant,
+antipsychotic, atom, cellulose, collagen, glucagon, glucocorticoid, glycogen, gold standard, insulin, ion,
+juice, lipid, lipopolysaccharide, mRNA, molecular, muscarinic, nucleic acid polymer, oligosaccharide,
+opiate, opioid, opioid alkaloids, opium poppy plant, papaver somniferum, polypeptide, polysaccharide,
+prolactin, protein, purinergic, saline, starch, water]
+• Disease (BioCreative V CDR Task - Data Annotation Guidelines)
+
+23
+
+– Positive [akathisis, auditory toxicity, bone marrow oedema, cancer, cardiac toxicity, death, dyskinesia,
+erythroblastocytopenia, hepatitis, hypertension, hypertensive, liver toxicity, ototoxicity, ovarian and
+peritoneal cancer, pain, partial seizures, peritoneal cancer, toxicity, tumor, visual toxicity]
+– Negative [cancerogenesis, complication, deficiencies, deficiency, disease, syndrome, tumorigenesis]
+• Disorder (ShARe/CLEF eHealth 2013 Shared Task: Guidelines for the Annotation of Disorders in Clinical
+Notes)
+– Positive [bowel obstruction, chest pain, chronic gingivitis, colon cancer, crohn, facial droop, lower
+extremity DVT, lupus, numbness, pain, rash, schizophrenia, severe pre-eclampsia, small bowel
+obstruction, stroke, tumor, tumor of the skin, watering of the eye]
+– Negative NONE
+• Drug (i2b2 Medication Extraction Challenge Preliminary Annotation Guidelines)
+– Positive [CITALOPRAM HYDROBROMIDE, CZI, ECASA, ECASA ( ASPIRIN ENTERIC COATED
+), IV fluid, KCL IMMEDIATE REL, LISINOPRIL, NIFEREX TABLET, NITROGLYCERIN 1/150,
+NTG, POTASSIUM CHLORIDE, TPN, TYLENOL ( ACETAMINOPHEN ), TYLENOL ( ACETAMINOPHEN ), acetaminophen, asa, aspirin, atenolol, avapro, bb, caltrate plus D, caltrate plus
+D, novolog, diuretic, diuretics, fasting lipids sent, fluocinonide 0.5% cream, furosemide, glucophage,
+lasix, lasix, lasix, long acting nitrate, nephrotoxic meds, plavix, red blood cells, saline, saline solution,
+this medication, total parenteral nutrition, tylenol, tylenol 3, nitroglycerin 1/150, vitamin A, vitamin
+C, vitamin D, vitamin E, vitamin E, vitamins, vitamins A, vitamins C, vitamins D, vitamins E]
+– Negative NONE
+
+24
+
+

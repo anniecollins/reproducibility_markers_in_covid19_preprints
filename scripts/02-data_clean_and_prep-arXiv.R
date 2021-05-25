@@ -35,7 +35,7 @@ arxiv_open_data_results <-
 arxiv_open_data_results <- 
   arxiv_open_data_results %>% 
   left_join(all_arxiv_results, by = "id")
-  
+
 # Convert TRUE/FALSE in ODDPub output to 1/0
 arxiv_open_data_results$is_open_code <- as.integer(arxiv_open_data_results$is_open_code)
 arxiv_open_data_results$is_open_data <- as.integer(arxiv_open_data_results$is_open_data)

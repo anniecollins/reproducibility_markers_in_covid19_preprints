@@ -1,0 +1,1757 @@
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+F ORECASTING COVID-19 C OUNTS AT A S INGLE
+H OSPITAL : A H IERARCHICAL BAYESIAN A PPROACH
+Alexandra Hope Lee
+Tufts University
+
+arXiv:2104.09327v1 [stat.ML] 14 Apr 2021
+
+John B. Wong
+Tufts Medical Center
+
+Panagiotis Lymperopoulos
+Tufts University
+
+Joshua T. Cohen
+Tufts Medical Center
+
+Michael C. Hughes
+Dept. of Computer Science, Tufts University
+
+A BSTRACT
+We consider the problem of forecasting the daily number of hospitalized COVID19 patients at a single hospital site, in order to help administrators with logistics
+and planning. We develop several candidate hierarchical Bayesian models which
+directly capture the count nature of data via a generalized Poisson likelihood,
+model time-series dependencies via autoregressive and Gaussian process latent
+processes, and can share statistical strength across related sites. We demonstrate
+our approach on public datasets for 8 hospitals in Massachusetts, U.S.A. and 10
+hospitals in the United Kingdom. Further prospective evaluation compares our approach favorably to baselines currently used by stakeholders at 3 related hospitals
+to forecast 2-week-ahead demand by rescaling state-level forecasts.
+
+1
+
+I NTRODUCTION
+
+The COVID-19 pandemic has created unprecedented demand for limited hospital resources across
+the globe. Emergency resource allocation decisions made by hospital administrators (such as planning additional personnel or provisioning beds and equipment) are crucial for achieving successful
+patient outcomes and avoiding overwhelmed capacity. However, at present hospitals often lack the
+ability to forecast what will be needed at their site in coming weeks. This may be especially true in
+under-resourced hospitals, due to constraints on funding, staff time and expertise, and other issues.
+In response to this pressing need, in this study our goal is to develop statistical machine learning approaches to forecast hospital utilization for specific hospitals. By focusing on the short-term
+future (1-3 weeks ahead) at specific sites, we hope predictions are directly actionable so hospital
+administrators can respond to forecasted demand.
+While many efforts to forecast the spread of COVID-19 and its impact on hospitals have been publicized (Murray et al., 2020; Jewell et al., 2020; Reiner et al., 2021), they are not usable for offthe-shelf predictions for a specific hospital because they focus on whole countries, states, or regions
+rather than a specific site. Even if this regional forecasting were reliable, it can be of limited relevance to a particular hospital (Wong, 2020), at which new patient arrivals depend on localized
+conditions (e.g., case incidence at local “hot spots”). Notable efforts for hospital-level or patientlevel modeling exist (Epstein & Dexter, 2020; Roimi et al., 2021), but require much more detailed
+data than our approach (e.g. length-of-stay for all patients at a site or other patient-level covariates).
+Contributions. Our study develops and validates latent variable models to predict distributions over
+census counts at a hospital site for each future day of interest given a univariate time series of past
+counts. Our probabilistic methods can work even if the past census data is not fully observed (as
+might arise in sites relying on noisy or error-prone record-keeping processes). As a technical contribution, we show that generalized Poisson likelihoods are a better alternative to the more popular
+standard Poisson likelihoods for modeling hospitalization census counts. We further show that when
+modeling multiple hospital sites in the same region, we can use hierarchical modeling to share statistical strength and improve forecasts. We have released open-source Python code1 to allow others
+to reproduce our analysis, making site-specific demand prediction at sites around the globe possible.
+1
+
+https://github.com/tufts-ml/single-hospital-count-forecasting/
+
+1
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+2
+
+M ETHODS
+
+Suppose across T days we observe a univariate time series y1:T = [y1 , y2 , . . . yT ], where yt ∈
+{0, 1, 2, . . .} indicates the patient occupancy count for a specific hospital on day t. Our goal is to
+develop forecasts for the next F days (typically a few weeks ahead), given all previous observations,
+using a conditional probabilistic model p(y(T +1):(T +F ) | y1:T ). We consider a flexible family of
+latent variable models, where each timestep has a latent real value ft ∈ R. We capture dependency
+across time in the latent series f1:T , and model each count yt as conditionally independent given ft :
+QT
+p(f1:T , y1:T ) = pα (f1:T ) · t=1 pλ (yt | ft ),
+(1)
+with latent-generating parameters α and count-generating parameters λ. We’ll consider two options
+for pα motivated by different dependency assumptions, as well as two possible likelihoods pλ .
+Likelihoods for count data. Given ft , to generate the observed count yt on day t, we use either the
+standard Poisson or the generalized Poisson distribution. In both cases, we set the mean parameter
+by transforming the latent ft to a positive value via the exponential:
+pλ (yt | ft ) = Poisson(exp(ft )), or pλ (yt | ft ) = GenPoisson(exp(ft ), λ)
+(2)
+The standard Poisson has no ability to control variance separately from the mean. The generalized
+Poisson (Consul & Famoye, 1992) has dispersion parameter: λ ∈ [−1, +1], reducing to the standard
+Poisson when λ = 0. We assume a priori symmetric chances of both under- and over-dispersion, so
+we set the prior on λ be a normal distribution with mean 0 and standard deviation 0.3, truncated to
+[−1, +1]. Typically, on our hospital data we find that our posteriors favor under-dispersion.
+Generalized Autoregressive (GAR) model. Our generalized autoregressive model is an instance
+of the generative model in Eq. (1) with an order-W autoregressive process to generate f1:T :
+QT
+QT
+PW
+pα (f1:T ) = t=1 pα (ft | f(t−W ):(t−1) ) = t=1 N (ft |β0 + τ =1 βτ ft−τ , σ 2 )
+(3)
+We place vague unimodal priors over the parameters α = {β, σ} (see App. E). Window size W
+is a hyperparameter selected on validation data. Our GAR model is limited to linear dependencies
+within the latent sequence f1:T , but it is conceptually simple and fast to fit and evaluate.
+Generalized Gaussian Process (GGP) model. We next consider a model where latents are drawn
+from a Gaussian process (GP), which can be seen as a simplified GP state-space model (Damianou
+et al., 2011; Frigola et al., 2014). The goal here is a flexible, data-driven model for non-linear trends
+in f1:T without an explosion of parameters to learn. Our model is again an instance of Eq. (1),
+with a GP for the prior over the latents: f1:T ∼ GP(mα (t), kα (t, t0 )). We assume
+a constant
+
+
+0 2
+)
+mean mα (t) = c and squared exponential covariance kernel kα (t, t0 ) = a2 exp − (t−t
+. The
+2`2
+parameters α = {c, a, `}, with a > 0 and ` > 0, are given vague unimodal priors (see App. F).
+Multi-site hierarchical model. Now, consider predicting future census counts at H different hospital sites simultaneously, given the same T days of observations from each site. If all H sites
+share common trends (i.e. cases rising in all because they draw from similar populations), we might
+improve forecasts by modeling sites in the hierarchical Bayesian fashion (Gelman, 2006).
+Our multi-site generative model ties the latent-sequence-generating parameters α across sites, but
+allows likelihood parameters λh to be specific to each site (indexed by h). The model factorizes as:
+QH
+h
+h
+h
+h
+h
+p({y1:T
+, f1:T
+}H
+(4)
+h=1 ) =
+h=1 pα (f1:T )pλh (y1:T | f1:T ).
+For simplicity, all multi-site experiments use the GAR model described above, with its latentgenerating parameters α = {β, σ} shared among all sites, again with vague priors (App. H).
+Posterior estimation and forecasting. For all methods, we use a No-U-Turn sampler (Hoffman
+& Gelman, 2014) to perform Markov chain Monte Carlo approximate sampling from the posterior, as implemented using the PyMC3 toolbox (Salvatier et al., 2016). This lets us sample from
+the posterior over parameters and latent values: p(α, λ, f1:T | y1:T ) for single site models and
+h
+h
+H
+p(α, {λh , f1:T
+}H
+h=1 | {y1:T }h=1 ) for multi-site models, gathering S posterior samples (indexed by
+s). We collect thousands of samples from multiple chains to avoid poor convergence.
+Then, we can sample S forecasts for site h by conditioning on each posterior sample’s parameters
+s,h
+αs , λs,h and latents f1:T
+when simulating the next F days (indexed by τ ) from the model:
+s,h
+h
+fTs,h
++τ ∼ pαs (fT +τ | f1:T +τ −1 ),
+
+s,h
+h
+yTs,h
++τ ∼ pλs,h (yT +τ | fT +τ ),
+
+2
+
+τ ∈ 1, 2, . . . F.
+
+(5)
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Hospital Site (MA, USA)
+Beth Israel Deaconness
+Boston Medical Center
+Brigham & Women’s Faulkner
+Brigham & Women’s Hospital
+Carney Hospital
+Massachusetts General
+St. Elizabeth’s
+Tufts Medical Center
+Hospital Site (UK)
+Barts Health
+Chelsea & Westminster
+Imperial College Healthcare
+King’s College Hospital
+London North West University
+Manchester University
+North Middlesex University
+Nottingham University
+University Hospitals Birmingham
+Univ. Hospitals of North Midlands
+
+Single-Site GGP
+−3.153 ± 0.005
+−3.376 ± 0.002
+−2.719 ± 0.002
+−3.118 ± 0.001
+−3.072 ± 0.008
+−3.777 ± 0.020
+−1.980 ± 0.007
+−2.937 ± 0.005
+Single-Site GGP
+−4.730 ± 0.058 *
+−2.937 ± 0.009 *
+−4.017 ± 0.019
+−3.012 ± 0.003
+−2.829 ± 0.008
+−12.335 ± 0.647
+−1.593 ± 0.008 *
+−3.443 ± 0.018
+−4.385 ± 0.005 *
+−3.188 ± 0.002
+
+Single-Site GAR
+−3.121 ± 0.017
+−3.454 ± 0.025
+−2.684 ± 0.010
+−2.978 ± 0.009*
+−2.721 ± 0.105
+−3.468 ± 0.018 *
+−1.312 ± 0.120 *
+−2.822 ± 0.010
+Single-Site GAR
+−6.727 ± 0.221
+−3.141 ± 0.030
+−3.063 ± 0.178 *
+−2.749 ± 0.020
+−2.488 ± 0.014 *
+−12.735 ± 0.937
+−1.677 ± 0.022
+−3.324 ± 0.066
+−4.571 ± 0.019
+−2.953 ± 0.033
+
+Multi-Site GAR
+−3.010 ± 0.011 *
+−3.296 ± 0.014 *
+−2.601 ± 0.008 *
+−3.044 ± 0.016
+−2.564 ± 0.090 *
+−3.450 ± 0.017 *
+−1.598 ± 0.007
+−2.728 ± 0.007 *
+Multi-Site GAR
+−4.842 ± 0.078
+−5.929 ± 0.086
+−3.976 ± 0.110
+−2.695 ± 0.005 *
+−2.572 ± 0.009
+−6.152 ± 0.167 *
+−1.703 ± 0.008
+−2.950 ± 0.032 *
+−4.583 ± 0.031
+−2.829 ± 0.016 *
+
+Table 1: Heldout likelihood for retrospective evaluation across 8 sites in MA (top) and 10 sites
+in UK (bottom). We report test-set log likelihood (normalized by total test days). The entry marked
+(*) in each row indicates the best result. For all methods, we run MCMC given all observations from
+the combined training-plus-validation dataset, and report likelihoods on the test set. For single-site
+GGP and single-site GAR, we select hyperparameters values via grid search on the validation set.
+For multi-site GAR, we set window size to W = 1 to keep runtime affordable. Tab. B.1 gives
+expanded results showing consistency across multiple MCMC chains.
+After drawing S forecast samples, we can compute summary statistics of these samples, such as
+mean or median values as well as lower and upper percentiles.
+
+3
+
+E VALUATION
+
+We applied our models to the task of forecasting site-specific census counts of patients with COVID19. First, we perform a retrospective evaluation of our proposed models on two public datasets from
+April to July 2020 (described in App. A). These initial experiments consider data from 8 hospitals
+in Suffolk County, MA, U.S.A, as well as 10 hospital sites in the UK. Next, we applied the best
+performing models in a prospective validation on data from January to February 2021, comparing
+our methods to those currently used by stakeholders at a major hospital system in Massachusetts.
+Comparison of likelihoods: Generalized vs. Standard Poisson. Supplementary Fig. B.1 shows
+that our proposed generalized Poisson likelihood delivers better heldout likelihoods on the MA data
+than the standard Poisson. We use the generalized Poisson throughout the remaining experiments.
+Comparison of models: Single-Site GGP vs Single-Site GAR vs Multi-Site GAR. Table 1 provides quantitative heldout likelihood comparisons of our three candidate methods (single-site GGP,
+single-site GAR, and multi-site GAR), across the 8 sites in MA and 10 sites in the UK. We find that
+the multi-site GAR model is preferred for 6 out of 8 sites in the MA dataset, perhaps because all sites
+come from the same county and thus sharing information across sites works well. The UK hospital
+sites are much more spread out geographically, so we see less conclusive results (multi-site GAR
+competes well in a plurality of 4 out of 10 sites). Figure B.2 illustrates forecasts for 3 representative
+sites from MA, showing that the GAR models extrapolate trends better than the GGP.
+Prospective validation: Methods. We performed 2-week-ahead forecasts starting on February 4,
+2021 at 3 sites in Massachusetts - Melrose-Wakefield Hospital, Lowell General Hospital, and Tufts
+Medical Center - operated by a common healthcare system. We compare our GAR models against
+two baselines currently in use to help with 2-week-ahead planning at these sites. The first baseline is
+a rescaled state-level linear regression, where state-level census counts are predicted with standard
+frequentist linear regression (unknown slope, unknown intercept) from the day indicator t. We use
+public data released by the state and fit to the previous 28 days of data. The second baseline comes
+from rescaled state-level IHME forecasts, which uses the daily mean and 95% CI of hospitalization
+forecasts for the state of MA made public by the Institute for Health Metrics and Evaluation (IHME).
+Both baselines involve rescaling state-wide forecasts to site-specific levels. We first fit a linear
+3
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Melrose-Wakefield Hospital
+
+50
+
+40
+
+40
+
+30
+20
+10
+
+20
+
+0
+2021-01-07
+
+2021-02-04 2021-02-17
+
+Our Multi-Site GAR
+
+observed
+mean, 95% CI
+
+MAE = 5.943
+0
+2021-02-04 2021-02-17 2021-01-07
+
+Our Single-Site GAR
+
+60
+
+20
+
+40
+
+observed
+mean, 95% CI
+
+40
+20
+
+MAE = 1.359
+2021-02-04 2021-02-17
+
+2021-02-04 2021-02-17
+
+Our Multi-Site GAR
+
+60
+
+20
+
+MAE = 3.023
+
+0
+2021-02-04 2021-02-17 2021-01-07
+
+40
+
+MAE = 3.206
+
+30
+
+10
+
+MAE = 2.910
+
+0
+2021-01-07
+
+20
+
+Our Single-Site GAR
+
+50
+
+40
+
+MAE = 2.374
+
+0
+2021-02-04 2021-02-17 2021-01-07
+
+Count
+
+Count
+
+10
+
+MAE = 2.851
+
+0
+2021-01-07
+
+Count
+
+10
+
+20
+
+Baseline: Rescaled State-Level IHME
+60
+
+Count
+
+20
+
+60
+
+30
+
+Count
+
+40
+
+Baseline: Rescaled State-Level Linear Regression
+
+Count
+
+40
+30
+
+Tufts Medical Center
+
+Baseline: Rescaled State-Level IHME
+50
+
+Count
+
+Count
+
+Baseline: Rescaled State-Level Linear Regression
+50
+
+0
+2021-01-07
+
+MAE = 1.427
+0
+2021-02-04 2021-02-17 2021-01-07
+
+2021-02-04 2021-02-17
+
+Figure 1: Prospective evaluation of proposed models against baselines in use at two sites of a major
+hospital system in MA. All proposed GAR models deliver competitive mean absolute error and plausible
+interval estimates where uncertainty increases slightly with time. See expanded results for all sites in Fig. C.1.
+
+regression to predict the fraction sht of the total state-level volume at each site h on each future day
+t, based on the previous 28 days of observed fractional volume. Then for each day, we multiply
+the predicted fractional volume at each site of interest by the predicted state-level count. We further
+estimate 95% CIs of this fraction and use these to estimate site-level 95% CIs.
+Prospective validation: Results. Fig. 1 shows qualitative performance and mean absolute error
+(MAE) metrics on two of the sites in our prospective evaluation (see all 3 sites in Fig. C.1). All
+methods capture the essentially linear trend of the test period in all 3 sites. In most cases, the rescaled
+IHME baseline appears overly uncertain (intervals are too wide), so rescaled linear regression seems
+to be the better baseline. At two sites, there seems to be little difference (MAE difference within 1.0)
+between our GAR methods and rescaled linear regression. However, at one site (Tufts Medical) our
+methods appear noticeably better than the linear regression baseline: MAE improvement in these
+counts is larger than 1.75 patients per day. Furthermore, at all sites our methods produce the most
+reasonable uncertainty intervals, which sensibly grow slightly further into the future.
+
+4
+
+D ISCUSSION
+
+Advantages. Our approach is simple yet effective: we find that order-1 autoregressive latent variable
+models deliver reasonable predictions when we share latent dynamics parameters α across sites and
+use generalized Poisson likelihoods with flexible dispersion. Our approach may be portable to
+health systems around the world, as it relies on easy-to-collect count data and does not require much
+outside of a site leader’s control (such as region-level data or expensive computing resources). Our
+approach is robust to realistic scenarios where some counts may be missing or corrupted: our fullyprobabilistic model allows us to properly calibrate our uncertainty in these cases. Our approach is
+extensible, relying upon widely-used probabilistic programming toolkits (Salvatier et al., 2016).
+Limitations. The primary limitation of this work is that that our forecasts are purely based on
+statistical patterns in past census counts within the site(s) of interest. Our generalized autoregressive
+approach may poorly predict in cases where underlying dynamics change (e.g. if the testing period
+sees higher vaccination rates) or in cases where the local trend is far from linear (hence our initial
+interest in GPs; we plan to do follow-up work to explore GPs with appropriately learned non-linear
+mean functions). Additional data, especially leading indicators such as surveillance tests in the
+region or levels of community mobility and interaction, could improve forecasts especially when
+there is a regime change in disease dynamics (e.g., from the summer lull to the late fall 2020 surge).
+Other helpful data might include community demographics and density as well as referral patterns
+(e.g., from nursing homes). We assume that hospitals in the same geographic region will have similar
+trends, which may miss how nearby hospitals serve different populations and thus see diverse trends.
+We do not account for how hospitals may interact (e.g., transferring patients) to balance capacity.
+While there is much more to be done, we hope this study raises interest in the single-site forecasting
+problem and offers a step forward for improving decision-making for local leaders.
+4
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+R EFERENCES
+Antoni B. Chan and Daxiang Dong. Generalized Gaussian process models. In IEEE Computer
+Vision and Pattern Recognition (CVPR), pp. 2681–2688, Colorado Springs, CO, USA, 2011.
+IEEE.
+P.C. Consul and Felix Famoye. Generalized poisson regression model. Communications in Statistics
+- Theory and Methods, 21(1):89–109, 1992.
+Andreas Damianou, Michalis K. Titsias, and Neil D Lawrence. Variational Gaussian Process Dynamical Systems. In Advances in Neural Information Processing Systems, 2011.
+Richard H Epstein and Franklin Dexter. A Predictive Model for Patient Census and Ventilator Requirements at Individual Hospitals During the Coronavirus Disease 2019 (COVID-19) Pandemic:
+A Preliminary Technical Report. Cureus, 12(6), 2020.
+Felix Famoye. Generalized Poisson random variate generation. American Journal of Mathematical
+and Management Sciences, 17(3-4):219–237, 1997.
+Roger Frigola, Yutian Chen, and Carl Edward Rasmussen. Variational Gaussian Process State-Space
+Models. In Advances in Neural Information Processing Systems, pp. 9, 2014.
+Andrew Gelman. Multilevel (Hierarchical) Modeling: What It Can and Cannot Do. Technometrics,
+48(3):432–435, 2006.
+Matthew D Hoffman and Andrew Gelman. The No-U-Turn Sampler: Adaptively Setting Path
+Lengths in Hamiltonian Monte Carlo. Journal of Machine Learning Research, pp. 31, 2014.
+http://jmlr.org/papers/volume15/hoffman14a/hoffman14a.pdf.
+Nicholas P. Jewell, Joseph A. Lewnard, and Britta L. Jewell. Predictive Mathematical Models of
+the COVID-19 Pandemic: Underlying Principles and Value of Projections. JAMA, 323(19):1893–
+1894, 2020.
+Neil D Lawrence. Gaussian Process Latent Variable Models for Visualisation of High Dimensional
+Data. In Advances in Neural Information Processing Systems, 2003.
+Christopher JL Murray, others, and the IHME COVID-19 health service utilization forecasting team.
+Forecasting the impact of the first wave of the COVID-19 pandemic on hospital demand and
+deaths for the USA and European Economic Area countries. medRxiv, 2020. https://www.
+medrxiv.org/content/10.1101/2020.04.21.20074732v1.
+Carl Edward Rasmussen and Christopher K. I. Williams. Gaussian Processes for Machine Learning.
+The MIT Press, 2006.
+Robert C. Reiner, Ryan M. Barber, James K. Collins, Peng Zheng, Christopher Adolph, James
+Albright, Catherine M. Antony, Aleksandr Y. Aravkin, Steven D. Bachmeier, et al. Modeling
+COVID-19 scenarios for the United States. Nature Medicine, 27(1):94–105, 2021.
+Michael Roimi, Rom Gutman, Jonathan Somer, Asaf Ben Arie, Ido Calman, Yaron Bar-Lavie, Udi
+Gelbshtein, Sigal Liverant-Taub, Arnona Ziv, et al. Development and validation of a machine
+learning model predicting illness trajectory and hospital utilization of COVID-19 patients-a nationwide study. Journal of the American Medical Informatics Association: JAMIA, 2021.
+John Salvatier, Thomas V. Wiecki, and Christopher Fonnesbeck. Probabilistic programming in
+Python using PyMC3. PeerJ Computer Science, 2:e55, 2016.
+John B. Wong. Pandemic Surge Models in the Time of Severe Acute Respiratory Syndrome
+Coronavirus-2: Wrong or Useful? Annals of Internal Medicine, 2020. https://www.
+acpjournals.org/doi/10.7326/M20-1956.
+
+5
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+A
+
+DATASETS
+
+Massachusetts data. We selected 8 hospital sites in Suffolk County, Massachusetts, USA targeted
+at adult patients with the largest volume of cases (all other sites had fewer than 50 patients per day).
+We used public data sourced from the Department of Public Health of the state of Massachusetts2 ,
+which provided the total count of hospitalized patients with either suspected or confirmed cases of
+COVID-19, in both the general hospital or intensive care unit.
+The observed counts for 3 representative sites (out of the 8 total) for our selected study period are
+shown in Fig. A.1. In this data, we see a general decline across all sites, as expected as the data
+is from a transitory phase of the pandemic in Massachusetts from the spring surge leading into the
+summer lull.
+UK data. We selected 10 hospital sites in England, United Kingdom with consistent data availability and the largest volume of cases. We used public data sourced from the National Health Service
+of the UK3 , which provided the count of beds occupied by COVID-19 patients on each day at each
+hospital. We excluded sites whose datasets contained either zeros or counts that had a difference of
+greater than 50 from the previous 4 days and next 4 days, assuming those unrealistic values were
+inaccurate.
+
+B
+
+R ESULTS ON R ETROSPECTIVE TASKS
+
+For our retrospective evaluation, we selected a study period of April 29, 2020 to July 6, 2020. Both
+MA and UK datasets had data available in this period. To evaluate our forecasts, we chose to set
+our future duration to F = 14 days (2 weeks). We selected this because 2 weeks into the future is
+a sensible planning horizon that allows some actionable logistics (expanding available beds, hiring
+traveling nursing staff) while remaining potentially predictable (forecasting the dynamics of hospitalizations caused by this disease further than 2 weeks from the present is a far more challenging
+problem with a low likelihood of success without incorporating other leading indicators such as testing rates and community activity levels). We set aside the last 14 days of data as the test set (used
+only for computing heldout likelihoods), and then treated the 14 days before that as the validation
+set (used for hyperparameter selection). The remaining T = 41 days served as our training set.
+B.1
+
+C OMPARISON OF L IKELIHOODS : G ENERALIZED VS . S TANDARD P OISSON
+
+Our first experiment sought to justify which likelihood model between the standard and generalized Poisson best suits our observed count data. While the standard Poisson distribution is more
+commonly used, the generalized Poisson offers more flexibility in dispersion.
+We trained the single-site generalized auto-regressive (GAR) model for all 8 sites from Massachusetts with W = 1 using both the standard Poisson and the generalized Poisson. Figure B.1
+shows a plot of multiple estimates of the heldout log likelihoods on the validation set under both
+likelihoods. These multiple estimates (derived from several Monte Carlo estimates from different
+MCMC chains) help us understand when differences are due to the underlying model and not just
+luck of the draw.
+The primary takeaway is that we see greater heldout likelihoods when we use the generalized Poisson
+(clear improvement in 6 out of the 8 sites and indistinguishable performance in the other 2). Recall
+that using the standard Poisson likelihood is equivalent to using the generalized Poisson with λ fixed
+at 0 rather than being a learned parameter. While the two models learn similar β coefficients, the
+learned λ parameter for the generalized Poisson concentrates well below zero for all sites, indicating
+the model is able to adjust for the underdispersion in the data. As a result, we don’t overestimate the
+variance in the data and have greater certainty in our forecasts.
+2
+
+https://www.mass.gov/info-details/covid-19-response-reporting
+https://www.england.nhs.uk/statistics/statistical-work-areas/covid-19hospital-activity/
+3
+
+6
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Brigham & Women's Faulkner Hospital
+
+Total Count of Hospitalized COVID Patients
+
+80
+
+Training, 41 days (29-Apr to 08-Jun)
+Validation, 14 days (09-Jun to 22-Jun)
+Test, 14 days (23-Jun to 06-Jul)
+
+70
+60
+50
+40
+30
+20
+10
+
+29-Apr
+
+08-May
+
+17-May
+
+26-May
+
+04-Jun
+
+13-Jun
+
+22-Jun
+
+01-Jul
+
+Total Count of Hospitalized COVID Patients
+
+Brigham & Women's Hospital
+Training, 41 days (29-Apr to 08-Jun)
+Validation, 14 days (09-Jun to 22-Jun)
+Test, 14 days (23-Jun to 06-Jul)
+
+180
+160
+140
+120
+100
+80
+60
+40
+20
+
+29-Apr
+
+08-May
+
+17-May
+
+26-May
+
+04-Jun
+
+13-Jun
+
+22-Jun
+
+01-Jul
+
+Total Count of Hospitalized COVID Patients
+
+Tufts Medical Center
+Training, 41 days (29-Apr to 08-Jun)
+Validation, 14 days (09-Jun to 22-Jun)
+Test, 14 days (23-Jun to 06-Jul)
+
+90
+80
+70
+60
+50
+40
+30
+20
+10
+
+29-Apr
+
+08-May
+
+17-May
+
+26-May
+
+04-Jun
+
+13-Jun
+
+22-Jun
+
+01-Jul
+
+Figure A.1: Raw data from 3 representative hospital sites in our Massachusetts dataset. We show the
+training, validation, and test splits used in experiments.
+
+B.2
+
+C OMPARISON OF L ATENT F UNCTION M ODELS : AR VS GP
+
+Next, we sought to understand which of our latent function models—the autoregressive (GAR) or
+Gaussian process (GGP)—offered the best fit to our data. We use a generalized Poisson likelihood
+for all these experiments.
+Experimental Setup. For both single-site models (GAR and GGP), we ran a grid search over hyperparameters. For each hyperparameter configuration, we condition on the training set when sampling from the posterior and then evaluate likelihoods on the validation set. We then combined the
+7
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Beth Israel Deaconness Medical Center
+Boston Medical Center
+Brigham and Women s Faulkner Hospital
+Site
+
+Brigham and Women's Hospital
+Poisson Distribution
+Standard
+Generalized
+
+Carney Hospital
+Massachusetts General Hospital
+St. Elizabeth s Medical Center
+Tufts Medical Center
+5.0
+
+4.5
+
+4.0
+
+3.5
+3.0
+Heldout Log Likelihood
+
+2.5
+
+2.0
+
+1.5
+
+Figure B.1: Comparison of standard and generalized Poisson likelihoods. The generalized Poisson outperforms the standard Poisson in general, with clear improvement in six sites and indistinguishable performance
+at two sites (Faulkner and Mass. General). For each site, there are 20 orange points (generalized Poisson) and
+20 blue points (standard Poisson), showing estimates of the count-normalized log likelihood on the validation
+set after training the single-site GAR model with W = 1 (simplest model). The 20 visualized points for each
+model come from 2 separate MCMC chains of 5000 samples each, divided into 10 groups of 500, to better
+indicate any mixing problems within chains.
+
+training and validation sets together using the hyperparameters with the best heldout performance,
+and evaluated the result on the test set.
+For the single-site GAR model, we searched the following set of window sizes W : [1, 2, 5, 7, 10,
+14]. For the single-site GGP model, we searched the following set of time-scale prior means µl : [0,
+5, 10, 15, 20, 25, 30, 35, 40, 45, 50].
+We further evaluated the multi-site GAR model. Here, we fixed a window size of W = 1, avoiding
+an expensive grid search. We found that performance was very similar between W = 1 and W = 2,
+especially averaged across sites, while W = 1 was substantially faster to train (at least 5 times
+faster).
+Single-Site GAR
+
+30
+
+30
+
+30
+
+20
+
+20
+10
+
+23-Jun
+
+06-Jul
+
+75
+
+80
+
+Count
+
+100
+
+Count
+
+100
+
+50
+
+0
+
+60
+
+23-Jun
+
+06-Jul
+
+20
+23-Jun
+
+06-Jul
+
+25-May
+
+23-Jun
+
+06-Jul
+
+25-May
+
+23-Jun
+
+06-Jul
+
+60
+
+20
+23-Jun
+
+06-Jul
+60
+
+40
+
+40
+20
+
+20
+25-May
+
+06-Jul
+
+40
+25-May
+
+Count
+
+40
+
+23-Jun
+
+80
+
+60
+
+60
+
+25-May
+100
+
+observed
+2.5, 50, 97.5 percentiles
+
+20
+25-May
+
+80
+
+0
+
+06-Jul
+
+40
+
+25
+
+20
+10
+
+23-Jun
+
+25-May
+
+Count
+
+25-May
+
+Count
+
+0
+
+Count
+
+40
+
+10
+
+Count
+
+Multi-Site GAR
+
+40
+
+Count
+
+Count
+
+Single-Site GGP
+40
+
+23-Jun
+
+25-May
+
+06-Jul
+
+Figure B.2: Qualitative forecasts for 3 representative hospital sites selected from the 8 available sites in
+our MA dataset. From top to bottom, the 3 sites are: Brigham & Women’s Hospital, Brigham & Women’s
+Faulkner Hospital, and Tufts Medical Center. Each column shows one of our methods of interest: singlesite GGP, single-site GAR, and multi-site GAR. We show the true observed values and the 2.5th , 50th , and
+97.5th percentiles of the sampled distribution on each day (S=5000 total samples). In general, the GGP (left)
+sometimes learns very wide predictive intervals, while the multi-site GAR (right) delivers better calibrated
+intervals.
+
+8
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Hospital Site (MA, USA)
+Beth Israel Deaconness
+Boston Medical Center
+Brigham & Women’s Faulkner
+Brigham & Women’s Hospital
+Carney Hospital
+Massachusetts General
+St. Elizabeth’s
+Tufts Medical Center
+Hospital Site (UK)
+Barts Health
+Chelsea & Westminster
+Imperial College Healthcare
+King’s College Hospital
+London North West University
+Manchester University
+North Middlesex University
+Nottingham University
+University Hospitals Birmingham
+Univ. Hospitals of North Midlands
+
+Single-Site GGP
+−3.153 ± 0.005
+−3.148 ± 0.003
+−3.376 ± 0.002
+−3.379 ± 0.004
+−2.719 ± 0.002
+−2.719 ± 0.003
+−3.118 ± 0.001
+−3.114 ± 0.001
+−3.072 ± 0.008
+−3.073 ± 0.007
+−3.777 ± 0.020
+−3.775 ± 0.019
+−1.980 ± 0.007
+−1.983 ± 0.010
+−2.937 ± 0.005
+−2.936 ± 0.004
+Single-Site GGP
+−4.730 ± 0.058
+−4.706 ± 0.043
+−2.937 ± 0.009
+−2.942 ± 0.013
+−4.017 ± 0.019
+−4.039 ± 0.049
+−3.012 ± 0.003
+−3.017 ± 0.003
+−2.829 ± 0.008
+−2.807 ± 0.017
+−12.335 ± 0.647
+−11.275 ± 0.807
+−1.593 ± 0.008
+−1.588 ± 0.006
+−3.443 ± 0.018
+−3.472 ± 0.018
+−4.385 ± 0.005
+−4.371 ± 0.010
+−3.188 ± 0.002
+−3.187 ± 0.003
+
+*
+*
+
+*
+
+*
+
+Single-Site GAR
+−3.121 ± 0.017
+−3.127 ± 0.020
+−3.454 ± 0.025
+−3.406 ± 0.021
+−2.684 ± 0.010
+−2.671 ± 0.014
+−2.978 ± 0.009
+−2.948 ± 0.012
+−2.721 ± 0.105
+−2.551 ± 0.080
+−3.468 ± 0.018
+−3.463 ± 0.013
+−1.312 ± 0.120
+−1.129 ± 0.122
+−2.822 ± 0.010
+−2.821 ± 0.016
+Single-Site GAR
+−6.727 ± 0.221
+−6.758 ± 0.118
+−3.141 ± 0.030
+−3.183 ± 0.023
+−3.063 ± 0.178
+−3.116 ± 0.145
+−2.749 ± 0.020
+−2.735 ± 0.014
+−2.488 ± 0.014
+−2.506 ± 0.017
+−12.735 ± 0.937
+−13.028 ± 0.924
+−1.677 ± 0.022
+−1.656 ± 0.015
+−3.324 ± 0.066
+−3.275 ± 0.047
+−4.571 ± 0.019
+−4.548 ± 0.033
+−2.953 ± 0.033
+−2.993 ± 0.028
+
+*
+
+*
+*
+
+*
+
+*
+
+Multi-Site GAR
+−3.010 ± 0.011
+−3.011 ± 0.012
+−3.296 ± 0.014
+−3.295 ± 0.015
+−2.601 ± 0.008
+−2.583 ± 0.006
+−3.044 ± 0.016
+−3.069 ± 0.027
+−2.564 ± 0.090
+−2.619 ± 0.079
+−3.450 ± 0.017
+−3.490 ± 0.025
+−1.598 ± 0.007
+−1.609 ± 0.002
+−2.728 ± 0.007
+−2.750 ± 0.007
+Multi-Site GAR
+−4.842 ± 0.078
+−4.852 ± 0.055
+−5.929 ± 0.086
+−5.880 ± 0.106
+−3.976 ± 0.110
+−4.100 ± 0.107
+−2.695 ± 0.005
+−2.695 ± 0.007
+−2.572 ± 0.009
+−2.560 ± 0.007
+−6.152 ± 0.167
+−6.021 ± 0.241
+−1.703 ± 0.008
+−1.708 ± 0.012
+−2.950 ± 0.032
+−2.986 ± 0.026
+−4.583 ± 0.031
+−4.620 ± 0.023
+−2.829 ± 0.016
+−2.841 ± 0.016
+
+*
+*
+*
+
+*
+*
+
+*
+
+*
+
+*
+
+*
+
+*
+
+Table B.1: Heldout likelihood evaluation across 8 sites in MA (top) and 10 sites in UK (bottom).
+We report test-set log likelihood (normalized by total test days). The entry marked (*) in each row
+indicates the best result. For each model, we report results from 2 separate MCMC chains to assess
+reliability (large differences across chains indicate convergence problems). Within each chain of
+5000 samples, we gather 10 groups of 500 samples, and report the mean ± SEM to communicate
+uncertainty. For all methods, we run MCMC given all observations from the combined trainingplus-validation dataset, and report likelihoods on the test set. For single-site GGP and single-site
+GAR, we select hyperparameters values via grid search on the validation set. For multi-site GAR,
+we set the window size to W = 1 to keep runtime affordable.
+
+Qualitative Results. Figure B.2 shows qualitative forecasts for 3 representative sites produced by
+the three models of interest (single-site GGP, single-site GAR, and multi-site GAR).
+We find in general that the GAR model is more reliable. Although the GGP can sometimes achieve
+better performance, it is difficult to find its ideal parameters. Because the sequences of census counts
+during our study period are relatively linear, likely a GP with a learnable linear mean function would
+have done better. Under our chosen model with a non-zero constant mean function, large time-scales
+are required to achieve better predictive performance. We chose a prior distribution over time-scales
+with larger mean and small standard deviation in order to inductively bias the posterior towards
+larger time scales; with a larger prior standard deviation and more freedom, the posterior time-scale
+might instead become smaller (improving some training predictions at the cost of generalization).
+The single-site GGP tends to be sensitive to the variability in the data over smaller time windows,
+causing the predictions curve away from the training data and prediction intervals to expand. On the
+other hand, the GAR learns the overall linear nature of the time series, leading to flatter predictions
+and intervals that expand less. The multi-site GAR achieves even greater certainty with more training
+data and less sensitivity to variability in the data.
+9
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Quantitative Results. Table B.1 gives the quantitative results for the Massachusetts data and UK
+data. We show heldout log likelihood for all three models, indicating the mean ± the standard error
+of the mean (SEM) for multiple MCMC chains (to help diagnose any convergence issues).
+MA Results. In the experiments on Massachusetts data, the single-site GAR performed better than
+the single-site GGP, and the multi-site GAR performed better than the single-site GAR. In 7 out of 8
+sites, the single-site GAR achieved better performance than the single-site GGP. The multi-site GAR
+achieved better performance than the single-site GAR in 4 out of 8 sites, and similar performance
+in 3 sites. In all 8 sites, the multi-site GAR outperformed the single-site GGP. We conclude that
+the multi-site GAR is the best model for our data. While it isn’t consistently better than the singlesite GAR, it offers a much faster forecasting model because it requires us to train only one set of
+parameters for the entire set of sites, rather than one set of parameters for each site.
+UK Results. In general, we had greater success with the Massachusetts data than the UK data. We
+did not see the multi-site GAR generally outperform the other models on the UK data because there
+was less similarity between hospital sites. While the hospital sites in the Massachusetts dataset are
+all in the same Massachusetts county (within about 30 miles), the hospital sites in the UK dataset are
+from a much larger region (within about 300 miles). Additionally, while the Massachusetts datasets
+are relatively smooth, the UK datasets have a lot more jumps and irregularities. For the sites that
+have smoother count series (like King’s College Hospital, Nottingham University Hospitals, and
+University Hospitals of North Midlands), we see the same pattern as the Massachusetts data, where
+the GAR outperforms the GGP, and the multi-site model outperforms the single-site model. On the
+other hand, we don’t see the same trends in the results for sites with more jumps and irregularities (like Chelsea & Westminster Hospital and Imperial College Healthcare). The gains from GGP
+to GAR and from single-site to multi-site come from tighter predictions/less uncertainty, but the
+datasets that are less smooth don’t benefit from that.
+
+C
+
+R ESULTS ON P ROSPECTIVE TASKS
+
+We show in Fig. C.1 an expanded set of qualitative visual forecasts from our prospective evaluation
+on all 3 sites of the hospital system of interest in Massachusetts. The figure also indicates the mean
+absolute error (MAE) of each method.
+A few key conclusions of our prospective evaluation are noticeable from this figure:
+• All methods capture the essentially linear trend of the data in the testing period reasonably
+well.
+• Between the two baselines (rescaled linear regression, rescaled IHME forecasts), we see
+consistently larger uncertainty intervals for the IHME forecasts. Rescaled linear regression
+appears to be the stronger baseline in terms of MAE: improvements of over 2.0 at two sites
+(LGH and TMC), and a difference under 0.5 at the third site (Melrose-Wakefield).
+• The single-site GAR and multi-site GAR deliver similar qualitative trends and prediction
+accuracy. The multi-site GAR has slightly worse MAE, but this is likely insignificant (its
+MAE is within 0.5 of the single-site model, so the daily difference in counts is less than one
+patient). However, the multi-site GAR gives uncertainty intervals that are narrower while
+still fully capturing the true values. (Note that MAE is calculated using only the mean
+prediction values and doesn’t account for uncertainty, which is a key goal of our forecasts.)
+• Our single-site and multi-site GAR models appear to either match or outperform our baseline models on all three sites. We emphasize that our models’ uncertainty intervals sensibly
+grow over time (unlike the frequentist linear regression baseline), accounting for larger
+uncertainty further in the future.
+
+10
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Baseline: Rescaled State-Level Linear Regression
+60
+
+Count
+
+Count
+
+60
+
+Baseline: Rescaled State-Level IHME
+
+40
+20
+
+40
+20
+
+MAE = 4.526
+
+Lowell
+General
+Hospital
+
+0
+2021-01-07
+
+MAE = 6.359
+0
+2021-02-04 2021-02-17 2021-01-07
+
+Our Single-Site GAR
+
+40
+20
+
+40
+20
+
+MAE = 4.164
+0
+2021-01-07
+
+MAE = 4.500
+0
+2021-02-04 2021-02-17 2021-01-07
+
+40
+
+40
+
+30
+20
+
+MelroseWakefield
+Hospital
+
+20
+
+Our Single-Site GAR
+
+50
+
+50
+
+40
+
+40
+
+30
+20
+10
+
+MAE = 3.023
+
+0
+2021-02-04 2021-02-17 2021-01-07
+
+2021-02-04 2021-02-17
+
+Baseline: Rescaled State-Level IHME
+60
+
+Count
+
+60
+
+Count
+
+observed
+mean, 95% CI
+
+20
+
+Baseline: Rescaled State-Level Linear Regression
+
+40
+20
+
+40
+20
+
+MAE = 3.206
+0
+2021-01-07
+
+MAE = 5.943
+0
+2021-02-04 2021-02-17 2021-01-07
+
+Our Single-Site GAR
+
+40
+20
+
+2021-02-04 2021-02-17
+
+Our Multi-Site GAR
+
+observed
+mean, 95% CI
+
+60
+
+Count
+
+60
+
+Count
+
+2021-02-04 2021-02-17
+
+Our Multi-Site GAR
+
+30
+
+10
+
+MAE = 2.910
+
+0
+2021-01-07
+
+Tufts
+Medical
+Center
+
+MAE = 2.374
+
+0
+2021-02-04 2021-02-17 2021-01-07
+
+Count
+
+Count
+
+0
+2021-01-07
+
+30
+
+10
+
+MAE = 2.851
+
+2021-02-04 2021-02-17
+
+Baseline: Rescaled State-Level IHME
+50
+
+Count
+
+Count
+
+Baseline: Rescaled State-Level Linear Regression
+50
+
+10
+
+observed
+mean, 95% CI
+
+60
+
+Count
+
+Count
+
+60
+
+2021-02-04 2021-02-17
+
+Our Multi-Site GAR
+
+40
+20
+
+MAE = 1.359
+0
+2021-01-07
+
+MAE = 1.427
+0
+2021-02-04 2021-02-17 2021-01-07
+
+2021-02-04 2021-02-17
+
+Figure C.1: Prospective evaluation of proposed models against baselines in use at all 3 hospital sites of the
+major hospital system we studied. All proposed GAR models deliver competitive mean absolute error and
+plausible interval estimates where uncertainty increases slightly with time.
+
+11
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+D
+
+M ETHOD D ETAILS : L IKELIHOODS FOR C OUNT DATA
+
+In this section, we review possible distributions for modeling observed data y which represents
+counts or non-negative integers: y ∈ {0, 1, 2, . . .}.
+Poisson Likelihood. Recall the Poisson distribution over non-negative integer random variable Y
+has probability mass function:
+1
+p(Y = y | θ) = θy e−θ ,
+y ∈ {0, 1, 2, . . .},
+(6)
+y!
+where the parameter θ > 0 controls both the mean and the variance of Y :
+E[Y ] = θ,
+
+Var[Y ] = θ.
+
+(7)
+
+Generalized Poisson Likelihood. The generalized Poisson distribution (Consul & Famoye, 1992)
+is an extension of the standard Poisson. Unlike the standard Poisson distribution, which has a single
+parameter determine both mean and variance and thus assumes equidispersion (the mean is the same
+as the variance), the generalized Poisson has a separate dispersion parameter that allows us to model
+count data that is either underdispersed (variance is less than the mean value) or overdispersed
+(variance is greater than the mean value).
+A generalized Poisson random variable Y has the following probability mass function:
+1
+p(Y = y | θ, λ) = θ(θ + λy)y−1 e−θ−λy ,
+y ∈ {0, 1, 2, . . .},
+y!
+
+(8)
+
+where θ > 0 and max(−1, − θ4 ) ≤ λ ≤ 1. The mean and variance are given by
+E[Y ] =
+
+θ
+,
+1−λ
+
+Var[Y ] =
+
+θ
+.
+(1 − λ)3
+
+(9)
+
+When λ = 0, the generalized Poisson reduces to the standard Poisson with mean θ. When λ < 0,
+the model has underdispersion; when λ > 0, the model has overdispersion.
+Priors on likelihood dispersion parameter λ. For the generalized Poisson, we make the a priori
+assumption that the count data has symmetric chances of both under- and over-dispersion. We thus
+set the prior on the dispersion parameter λ to be
+λ ∼ TruncatedNormal(0, 0.3, lower = −1, upper = 1).
+
+(10)
+
+Sampling from the generalized Poisson. We generate random samples from a generalized Poisson using the Inversion Algorithm (Famoye, 1997), whereby a random sample is drawn from the
+uniform distribution and then plugged into the inverse of the cumulative distribution function. The
+inverse CDF of the generalized Poisson distribution is available in closed-form, making this possible.
+
+E
+
+M ETHOD D ETAILS : S INGLE -S ITE GAR
+
+First, we consider a latent autoregressive process for count data (which we call the generalized
+autoregressive model or “GAR”). This model is “generalized” in the same sense as generalized
+linear models; that is, we may explore multiple possible likelihoods for count data (standard Poisson
+and generalized Poisson), rather than simply assuming the data is normally distributed.
+Our generalized autoregressive model is an instance of the generative model p(f1:T , y1:T ) in Eq. (1)
+with an order-W autoregressive process for the latent-generating distribution over f1:T
+pα (f1:T ) =
+
+T
+Y
+
+pα (ft | f(t−Wt ):(t−1) ),
+
+t=1
+
+where the recent window size W is a hyperparameter.
+12
+
+Wt = min(t − 1, W )
+
+(11)
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+For most timesteps t > W , we generate latent value ft using the fully-available window of W
+previous values ft−W :t−1 :
+W
+X
+
+pα (ft | f(t−W ):(t−1) ) = NormalPDF(β0 +
+
+βτ ft−τ , σ 2 ), t ∈ W +1, W +2, . . .
+
+(12)
+
+τ =1
+
+The latent-generating parameters α for the GAR are α = {β, σ}, with coefficient vector β =
+[β0 , β1 , . . . βW ] and standard deviation σ > 0.
+For the first W timesteps, the full window is not available, and so we regress only on the available
+previous values:
+pα (ft | f1:(t−1) ) = NormalPDF(β0 +
+
+t−1
+X
+
+βτ ft−τ , σ 2 ), t ∈ 1, 2, . . . W
+
+(13)
+
+τ =1
+
+The very first value t = 1 is generated with mean β0 .
+A simple case of this model occurs when W = 1, yielding the order-1 autoregressive process, which
+generates each timestep’s latent value using a regression on the previous value ft−1 :
+ft | ft−1 ∼ Normal(β0 + β1 ft−1 , σ 2 )
+(14)
+Priors on latent-generating parameters α. For the GAR, our latent-generating parameters are
+α = {β, τ }. We place Normal priors over all of the coefficients β, all centered at 0 except for the
+coefficient on the most recent timestep, whose prior is centered at 1 as we can assume that the future
+is like the recent past:
+β0 ∼ Normal(0, 0.1),
+(15)
+β1 ∼ Normal(1, 0.1),
+(16)
+β2 ∼ Normal(0, 0.1),
+(17)
+...
+(18)
+βW ∼ Normal(0, 0.1).
+(19)
+We also assume that the standard deviation of the autoregressive process should be close to 0 (since
+we imagine the latent process as a clean signal of an overall trend which gives rise to noisier count
+observations). Thus, we set the prior on the standard deviation to be:
+σ ∼ HalfNormal(0.1).
+(20)
+Advantages and Limitations. Our GAR model is advantageous due to its simple form of dependency within the latent sequence f1:T , which makes both learning and prediction fast. It is limited
+in the kinds of long-term dependencies it can capture, which motivates our next class of models.
+
+F
+
+M ETHOD D ETAILS : S INGLE -S ITE GGP
+
+We next consider a latent Gaussian process model, building on early work on Gaussian processes (Rasmussen & Williams, 2006), GP latent variable models (Lawrence, 2003), GP state space
+models (Damianou et al., 2011), and extensions of GPs to general likelihoods (Chan & Dong, 2011).
+Our proposed GGP model uses GPs to capture correlations between latent values f1:T . Again, this
+is an instance of the generative model p(f1:T , y1:T ) in Eq. (1), with a GP for the prior over f1:T :
+f1:T ∼ GP(mα (t), kα (t, t0 ))
+(21)
+where we assume a constant mean and squared exponential covariance kernel:
+
+
+(t − t0 )2
+0
+2
+(22)
+mα (t) = c,
+kα (t, t ) = a exp −
+2`2
+Here, the set of latent-generating parameters α is α = {c, a, `}, with a > 0 and ` > 0.
+Priors on latent-generating parameters α. We assume that the constant mean function c should
+be approximately equal to the mean of the set of observed log counts in our training set. We set the
+covariance amplitude a to be close to 0 to keep noise in the latent sequence f low.
+13
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Thus, we place the following priors over the Gaussian process parameters:
+c ∼ TruncatedNormal(4, 2, lower = 0)
+(23)
+a ∼ HalfNormal(2)
+(24)
+` ∼ TruncatedNormal(µ` , 2, lower = 0)
+(25)
+Here, µ` is a hyperparameter that controls the time-scale of dependencies. We set this via grid
+search on validation data. We choose a small standard deviation for the prior on ` to keep the
+posterior distribution close to the hyperparameter values being evaluated.
+
+G
+
+M ETHOD D ETAILS : M ODEL F ITTING AND E VALUATION
+
+Our goal is to make accurate predictions for future data given historical counts. To assess each
+model’s ability to do so, we partition the data into training and evaluation sets by time rather than
+by random selection. Given a time series of T + F counts, we treat the first T counts as observed
+data, and try to determine our prediction quality for the last F counts.
+G.1
+
+P OSTERIOR ANALYSIS AND FORECASTING
+
+Armed with our assumed generative model in Eq. (1) with either an AR or GP prior for the latentsequence-generating distribution pα (f1:T ), our analysis goal is to take as input an observed timeseries dataset of single site counts y1:T and use this to make useful predictions about future data
+y(T +1):(T +F ) . We achieve this in two steps. First, we need to draw samples of parameters α, λ
+and the past latent sequence f1:T from their posterior given the past counts y1:T . Second, given
+these parameters and latents from the posterior we can either sample future counts or evaluate the
+likelihood of some given future counts, using the generative model defined by these parameters.
+Posterior sampling. Given an observed time-series dataset of single site counts, we wish to first
+sample from the posterior over parameters α, λ, and latent values f : p(α, λ, f1:T | y1:T ). We use
+the No-U-Turn sampler (Hoffman & Gelman, 2014) to perform Markov chain Monte Carlo approximation of this posterior. Our NUTS sampler is implemented using the PyMC3 toolbox (Salvatier
+et al., 2016).
+Forecast sampling. Given a single posterior sample indexed by s, with parameters αs , λs and
+s
+, we can then use the generative model to draw a forecast of latents f and counts y for
+latents f1:T
+the next F days:
+s
+fTs +τ ∼ pαs (fT +τ | f1:(T
+τ ∈ 1, . . . F
+(26)
++τ −1) ),
+yTs +τ ∼ pλs (yT +τ | fTs +τ ),
+τ ∈ 1, . . . F
+(27)
+Naturally, the independence assumptions in the GAR model make the first equation above reduce to
+s
+pαs (fT +τ | f(T
++τ −W ):(T +τ −1) ).
+We typically draw a forecast for each of S distinct samples, using S = 1000 or more to be sure we’re
+capturing the full distribution. We can compute summary statistics of the empirical distribution over
+these S samples such as mean or median values as well as lower and upper percentiles.
+Using the previously described sampling and forecasting methods, we obtain S samples,
+s
+s
+αs , λs , f1:T
+, f(T
+s ∈ 1, 2, . . . S,
++1):(T +F ) ∼ p(α, λ, f1:T , f(T +1):(T +F ) | y1:T ),
+
+(28)
+
+which we use to estimate the likelihood of future data given the past.
+Computing Probability of Heldout Data. To score the model’s performance, we evaluate the
+likelihood of heldout futureZ counts:
+p(y(T +1):(T +F ) | y1:T ) =
+
+p(y(T +1):(T +F ) , f(T +1):(T +F ) , λ | y1:T )df(T +1):(T +F ) dλ
+
+(29)
+
+Z
+=
+
+pλ (y(T +1):(T +F ) | f(T +1):(T +F ) )p(f(T +1):(T +F ) , λ | y1:T )df(T +1):(T +F ) dλ
+(30)
+14
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+This is an expectation with respect to a posterior that conditions on y1:T . Given any posterior
+s
+sample from the full joint p(α, λ, f(T +1):(T +F ) , f1:T | y1:T ), we can always just drop αs , f1:T
+s
+s
+to obtain sampled values λ , f(T +1):(T +F ) from the posterior needed for the expectation above:
+p(f(T +1):(T +F ) , λ | y1:T ). Thus, given S samples we can compute a Monte Carlo approximation of
+the integral above to estimate the log probability of the heldout future counts:
+log p(y(T +1):(T +F ) | y1:T ) ≈ log
+≈ log
+
+S
+1X
+s
+pλs (y(T +1):(T +F ) | f(T
++1):(T +F ) )
+S s=1
+
+(31)
+
+S
+F
+1 XY
+pλs (yT +τ | fTs +τ )
+S s=1 τ =1
+
+(32)
+
+This uses our chosen count likelihood probability mass function pλ (·), which is typically the generalized Poisson but could be either of the functions in Sec. D.
+Practical rescaling. Across different real-world sites, the scale of the heldout log likelihood values
+computed by the above method is likely to differ substantially between large and small sites. To
+facilitate a more “sensible” scale, we recommend normalizing all likelihoods by the number of
+observations F . We thus compute F1 log p(y(T +1):(T +F ) | y1:T ). We find that in practice this makes
+human interpretation of these values more sensible, as the value has a consistent scale on the order
+of -10 to -2 regardless of the length of the window F .
+
+H
+
+M ETHOD D ETAILS : M ULTI -S ITE M ODELS
+
+We now aim to predict future census counts at H different hospital sites simultaneously, given T
+previous observations from each site. The intuition is that all H sites share common trends (i.e.,
+whether they increase or decrease over short-term time scales), though there may be site-specific
+patterns in the observed data (e.g. one hospital may typically have many more patients than another).
+We consider a multi-site generative model which ties the latent-sequence-generating parameters α
+across sites, but allows count-generating likelihood parameters λh to be specific to each site (indexed
+by h).
+h
+h
+p({y1:T
+, f1:T
+}H
+h=1 )
+
+=
+
+H
+Y
+
+h
+h
+h
+| f1:T
+)
+pα (f1:T
+)pλh (y1:T
+
+(33)
+
+h=1
+
+For simplicity, for the latent-generating distribution we use the AR model described above with
+window size W , where its latent-generating parameters α = {β, σ} are shared among all sites.
+For the count-generating distribution we use a generalized Poisson, so the site-specific parameter is
+λh ∈ [−1, +1].
+Priors on latent-generating parameters α.
+model:
+
+We use the same priors as for the single-site GAR
+
+β0 ∼ Normal(0, 0.1)
+β1 ∼ Normal(1, 0.1)
+β2 ∼ Normal(0, 0.1)
+...
+βW ∼ Normal(0, 0.1)
+σ ∼ HalfNormal(0.1)
+
+(34)
+
+(35)
+
+Priors on count-generating parameters λ. We draw each site’s parameter in i.i.d. fashion from
+the same truncated normal prior as before:
+λh ∼ TruncatedNormal(0, 0.3, lower = −1, upper = 1),
+15
+
+h ∈ 1, . . . H
+
+(36)
+
+Appears in ICLR 2021 Workshop on Machine Learning for Preventing and Combating Pandemics
+
+Posterior sampling for the multi-site model. As with the single-site model, for the multi-site
+model we can obtain S samples from the posterior using modern MCMC posterior sampling methods:
+n
+oH
+
+H
+s,h
+h
+H
+H
+αs , λs,h h=1 , f1:T
+∼ p(α, {λh }H
+s ∈ 1, 2, . . . S. (37)
+h=1 , {f1:T }h=1 | {y1:T }h=1 ),
+h=1
+
+s,h
+Then for each site independently, we can draw a forecast of future latents f(T
++1):(T +F ) given the
+s
+past latents for that site and the shared latent-generating parameters α . If a forecast count sample
+s,h
+is needed, we can simply draw y(T
++1):(T +F ) from the relevant site-specific likelihood with sampled
+s,h
+parameter λ .
+
+In order to evaluate heldout likelihoods, we can compute the count-normalized log likelihood using
+the Monte Carlo estimates in Eq. (32), using S samples of the site-specific parameters λh and siteh
+specific latents f(T
++1):(T +F ) .
+
+16
+
+
