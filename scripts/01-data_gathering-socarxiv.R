@@ -13,6 +13,7 @@
 library(httr)
 library(lubridate)
 library(tidyverse)
+library(textreadr)
 # library(lubridate)
 # library(utils)
 # library(purrr)
@@ -47,8 +48,9 @@ get_meta_data_socarxiv <-
   }
 
 # Set up the dataset that we're going to walk though
+# Check how many pages of results exist at https://api.osf.io/v2/preprints/?filter%5Bprovider%5D=socarxiv&page= and adjust numeric range accordingly
 get_these <- 
-  tibble(number = c(1:739),
+  tibble(number = c(1:811),
          location  = paste0("inputs/socarxiv/", number, ".csv"))
 
 safely_get_meta_data_socarxiv <- purrr::safely(get_meta_data_socarxiv)
@@ -128,8 +130,8 @@ covid_socarxiv_metadata <-
   all_socarxiv_metadata %>% 
   filter(covid_flag == TRUE)
 
-utils::download.file("https://osf.io/preprints/socarxiv/fcqd9/download", 
-                     "test.pdf", 
+utils::download.file("https://osf.io/preprints/socarxiv/2p3xt/download", 
+                     "test.docx", 
                      mode = "wb")  
 
 # Write a function
@@ -141,7 +143,7 @@ download_pdfs <-
     Sys.sleep(sample(x = c(5:10), size = 1))
   }
 
-#
+
 # Use the function
 get_covid_socarxiv_results <- 
   covid_socarxiv_metadata %>%
@@ -149,31 +151,23 @@ get_covid_socarxiv_results <-
   select(id) %>% 
   mutate(
     link_pdf = paste0("https://osf.io/preprints/socarxiv/", id, "/download"),
-    save_name = paste0("/Volumes/Hansard/socarxiv/", id, ".pdf")
+    save_name = paste0("outputs/data/pdf-socarxiv/", id, ".pdf")
   )
 
 safely_download_pdfs <- purrr::safely(download_pdfs)
 
 # Check what's already been downloaded
-already_got <- list.files(path = "/Volumes/Hansard/socarxiv", full.names = TRUE)
+already_got <- list.files(path = "/outputs/data/pdf-socarxiv", full.names = TRUE)
 # Remove those rows
 get_covid_socarxiv_results <- 
   get_covid_socarxiv_results %>% 
   filter(!save_name %in% already_got)
 
+# Download pdfs
+# Warning: of sample, 65 papers are only available in .docx format. See below for continued download.
 purrr::walk2(get_covid_socarxiv_results$link_pdf,
              get_covid_socarxiv_results$save_name,
              safely_download_pdfs)
-
-
-
-
-###### UP TO HERE 
-
-
-
-
-
 
 #### Have a quick look ####
 all_arxiv_results <- 
@@ -196,11 +190,76 @@ all_arxiv_results %>%
 #### Convert to text ####
 
 # Set up folders for download and txt conversion
-arxiv_pdf_folder = "/Volumes/Hansard/socarxiv/"
-arxiv_txt_folder = paste(getwd(), "/outputs/data/text-socarxiv", sep = "")
+socarxiv_pdf_folder = paste0(getwd(), "/outputs/data/pdf-socarxiv")
+socarxiv_txt_folder = paste0(getwd(), "/outputs/data/text-socarxiv")
 
 # Convert PDFs to text and saves in new folder
-oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
+oddpub::pdf_convert(socarxiv_pdf_folder, socarxiv_txt_folder)
 
 
 
+# Some papers in only download as docx. 
+# Use code below to identify pdfs that did not convert to txt (ie. those that did not download properly because they're docx files), then execute download process for docx files and convert to text in text folder.
+downloaded_pdf <- list.files("outputs/data/pdf-socarxiv")
+downloaded_txt <- list.files("outputs/data/text-socarxiv")
+
+# for each pdf, cycle through all txt files, and if there is no key from sample that corresponds to the pdf, remove it
+docx_files <- data.frame()
+for (pdf in downloaded_pdf) {
+  x <- FALSE
+  for (txt in downloaded_txt) {
+    if(grepl(substr(txt, 1, 5), pdf)) {   # if there is a txt that matches the pdf, x is true
+      x <- TRUE     # doi in downloads
+    }
+  } 
+  if (!x) {  # if there is no txt that matches the pdf, remove it
+    file <- get_covid_socarxiv_results %>% filter(grepl(substr(pdf, 1, 5), link_pdf)) # Extract rows with pdf that's not converting
+    docx_files <- rbind(docx_files, file)
+  } 
+}
+
+# Change save_name to refer to doc-socarxiv folder, create new save_name column to refer to text-socarxiv
+substr(docx_files$save_name, 14, 16) <- "doc"
+docx_files$save_name <- substr(docx_files$save_name, 1, 32) %>% paste0("docx")
+docx_files <- docx_files %>% 
+  rename("link_doc" = "save_name") %>% 
+  mutate(save_name = paste0(substr(link_doc, 1, 13), "text", substr(link_doc, 17, 26), id, ".txt"))
+
+
+# Check what's already been downloaded
+already_got <- list.files(path = paste0(getwd(), "/outputs/data/doc-socarxiv"), full.names = TRUE)
+# Remove those rows
+docx_files <- 
+  docx_files %>% 
+  filter(!(paste0(getwd(), link_doc) %in% already_got))
+
+# Download docs
+purrr::walk2(docx_files$link_pdf,
+             docx_files$save_name,
+             safely_download_pdfs)
+
+# NEXT: read in docx files, either convert to text and save, or figure out way to make into "sentences" object for processing
+# Check package "textreadr"
+
+# Write function
+doc_to_txt <-
+  function(link_to_doc_of_interest, save_name){
+    doc_content <- read_docx(link_to_doc_of_interest)
+    write.table(doc_content, file = save_name)
+    message <- paste0("Done with ", link_to_doc_of_interest, " at ", Sys.time())
+    print(message)
+    Sys.sleep(sample(x = c(5:10), size = 1))
+  }
+
+safely_doc_to_txt <- purrr::safely(doc_to_txt)
+
+already_got <- list.files(path = paste0(getwd(), "/outputs/data/text-socarxiv"), full.names = TRUE)
+# Remove those rows
+docx_files <- 
+  docx_files %>% 
+  filter(!save_name %in% already_got)
+
+# Convert docs to text files
+purrr::walk2(docx_files$link_doc,
+             docx_files$save_name,
+             safely_doc_to_txt)
