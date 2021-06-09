@@ -124,11 +124,12 @@ all_socarxiv_metadata <-
 write_csv(all_socarxiv_metadata, "outputs/all_socarxiv_metadata.csv")
 
 
-
 #### Download PDFs ####
 covid_socarxiv_metadata <- 
   all_socarxiv_metadata %>% 
   filter(covid_flag == TRUE)
+
+write_csv(covid_socarxiv_metadata, "outputs/data/socarxiv_results.csv")
 
 utils::download.file("https://osf.io/preprints/socarxiv/2p3xt/download", 
                      "test.docx", 

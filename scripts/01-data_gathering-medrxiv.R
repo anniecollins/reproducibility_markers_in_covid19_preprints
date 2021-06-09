@@ -22,6 +22,9 @@ library(oddpub)
 # Download copy of current database
 med_data <- mx_snapshot()
 
+# Keep snapshot of pre-pandemic database (see 'Pre-Pandemic Data' below)
+med_data_2019 <- med_data %>% filter(date <= "2019-12-31")
+
 # Raw stats as of 22 May, 2021 (from medRxiv website)
 # 16,135 COVID articles total
 # 12,450 in medRxiv
@@ -50,10 +53,6 @@ med_results <- med_results[order(med_results$date),]
 # Save results - this is sampling frame (info for all medRxiv COVID-19 papers)
 write_csv(med_results, "outputs/data/med_results.csv")
 
-# Sometimes a paper has multiple versions - EXCLUDED IN PREVIOUS STEP, THIS IS MOOT
-# Filter to only uniques and keep latest version of the paper
-# med_results_unique <- med_results[!duplicated(med_results[c(2)]),]
-
 # Summarise and graph by date
 med_daily_sum <- med_results %>% group_by(date) %>% summarise(date = date, total = n())
 med_plot <- med_daily_sum %>% ggplot() + geom_line(aes(x=date, y=total)) + geom_smooth(aes(x=date, y=total))
@@ -81,6 +80,24 @@ med_sample %>% slice(1068:1500) %>% mx_download(directory = med_pdf_folder, crea
 
 # Convert PDFs to text and saves in new folder
 pdf_convert(med_pdf_folder, med_txt_folder)
+
+
+#### Pre-Pandemic Data
+View(med_data_2019)
+# Filter to only unique DOIs and keep latest version of the paper
+# First sort by descending version number so only most recent version is kept
+med_data_2019 <- med_data_2019[order(-med_data_2019$version),] %>% distinct(doi, .keep_all = TRUE)
+
+#### Download relevant papers ####
+# Set up folders for download and txt conversion
+med_pdf_folder_new <- paste0(getwd(), "/outputs/control-data/pdf-medRxiv")
+med_txt_folder_new <- paste0(getwd(), "/outputs/control-data/text-medRxiv")
+
+# Download all PDFs
+med_data_2019 %>% mx_download(directory = med_pdf_folder_new, create = FALSE)
+
+# Convert PDFs to text and saves in new folder
+pdf_convert(med_pdf_folder_new, med_txt_folder_new)
 
 
 #### Clean up ####
