@@ -82,11 +82,18 @@ med_sample %>% slice(1068:1500) %>% mx_download(directory = med_pdf_folder, crea
 pdf_convert(med_pdf_folder, med_txt_folder)
 
 
-#### Pre-Pandemic Data
-View(med_data_2019)
+
+
+
+#### Pre-Pandemic Data ####
+
 # Filter to only unique DOIs and keep latest version of the paper
 # First sort by descending version number so only most recent version is kept
 med_data_2019 <- med_data_2019[order(-med_data_2019$version),] %>% distinct(doi, .keep_all = TRUE)
+
+# Save
+# TODO: Run
+write_csv(med_data_2019, "outputs/control-data/med_data_2019.csv")
 
 #### Download relevant papers ####
 # Set up folders for download and txt conversion

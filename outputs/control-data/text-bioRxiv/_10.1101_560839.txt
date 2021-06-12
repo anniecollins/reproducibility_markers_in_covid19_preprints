@@ -1,0 +1,2738 @@
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Reconstruction of clone- and haplotype-specific cancer genome
+karyotypes from bulk tumor samples
+Sergey Aganezov1,2 and Benjamin J. Raphael1,*
+1
+2
+
+Department of Computer Science, Princeton University, Princeton, NJ 08540
+
+Present affiliation: Department of Computer Science, Johns Hopkins University, Baltimore, MD 21218
+* Correspondence:
+
+braphael@princeton.edu
+
+Abstract
+Many cancer genomes are extensively rearranged with highly aberrant chromosomal karyotypes. These genome
+rearrangements, or structural variants, can be detected in tumor DNA sequencing data by abnormal mapping of sequence reads to the reference genome. However, nearly all cancer sequencing to date is of bulk tumor samples which
+consist of a heterogeneous mixture of normal cells and subpopulations of cancers cells, or clones, that harbor distinct
+somatic structural variants. We introduce a novel algorithm, Reconstructing Cancer Karyotypes (RCK), to reconstruct
+haplotype-specific karyotypes of one or more rearranged cancer genomes, or clones, that best explain the read alignments from a bulk tumor sample. RCK leverages specific evolutionary constraints on the somatic mutation process
+in cancer to reduce ambiguity in the deconvolution of admixed DNA sequence data into multiple haplotype-specific
+cancer karyotypes. In particular, RCK relies on generalizations of the infinite sites assumption that a genome rearrangement is highly unlikely to occur at the same nucleotide position more than once during somatic evolution.
+RCK’s comprehensive model allows us to incorporate information both from short and long-read sequencing technologies and is applicable to bulk tumor samples containing a mixture of an arbitrary number of derived genomes.
+We compared RCK to the state-of-the-art method ReMixT on a dataset of 17 primary and metastatic prostate cancer samples. We demonstrate that ReMixT’s limited support for heterogeneity and lack of evolutionary constrains
+leads to reconstruction of implausible karyotypes. In contrast, RCK’s infers cancer karyotypes that better explain read
+alignments from bulk tumor samples and are consistent with a reasonable evolutionary model. RCK’s reconstructions
+of clone- and haplotype-specific karyotypes will aid further studies of the role of intra-tumor heterogeneity in cancer
+development and response to treatment. RCK is available at https://github.com/raphael-group/RCK.
+
+1
+
+Introduction
+
+The somatic mutations that drive cancer development range across all genomic scales, from single nucleotide mutations
+through large-scale genome rearrangements [54, 20, 58, 47]. Whole-genome sequencing of tumor samples has enabled
+the detection of all classes of somatic mutations; however, specialized algorithms are required to identify each class of
+mutations from the short DNA sequence reads obtained by current technologies [31, 37, 28, 49, 30, 60]. In addition,
+nearly all cancer sequencing to date has been of bulk tumor tissue, which is generally a mixture of normal (noncancerous) cells and (sub)populations of cancerous cells, or clones, that often are not genetically identical. Quantifying
+this intra-tumor heterogeneity is essential for understanding the processes that drive cancer development and also helps
+inform treatment strategies [2, 44, 34].
+Here we consider the problem of describing the large-scale organization of one or more cancer genomes that are
+derived form a normal human reference genome via large-scale rearrangements. The large-scale organization of a
+cancer genome is described by two features. First, is the number of copies of each segment of the genome. Many
+methods (e.g. [57, 9, 7, 40, 24, 19, 43, 63]) have been developed to identify copy number values for heterogeneous,
+bulk tumor samples. Second, are genome rearrangements (e.g. chromosomal inversions and translocations) that link
+together distant segments of the normal genome. Many methods have been developed to predict such novel adjacencies
+(e.g. [51, 48, 30, 10, 60, 49, 16, 52, 66, 50, 27, 17]. However, these methods do not distinguish between adjacencies
+from different homologous chromosomes or from different cancer clones within a bulk sample; i.e. they assume the
+human genome is haploid reference and that the tumor is homogeneous.
+1
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+A more challenging problem is to combine and reconcile the information about segment copy numbers and novel
+adjacencies into genome karyotypes, or the alignment of cancer genome and the healthy genome that depicts the
+number of occurrences of every segment in the cancer genome, and the adjacencies between these segments on the
+cancer genome. Multiple methods have been developed to solve some variations of this cancer genomes karyotype
+reconstruction problem including [42, 32, 46, 35, 14, 11, 15]. However, each of these methods rely on simplifying assumptions that do not adequately address the challenges in real cancer sequencing data. For example, SVclone [11]
+focuses solely on inferring genome-specific copy numbers for novel adjacencies, without attempting to reconstruct
+complete karyotypes of the derived genomes. PREGO [42] and Karyotype Reconstruction [15] assume that
+the human reference genome is haploid, thus losing important information about alleles involved in rearrangements.
+Weaver [32, 46] assumes that the cancer sample contains only a single derived genome (with a possible admixture of
+the reference genome), and lacks a proper support of reciprocal novel adjacencies, which can emerge both from copy
+number neutral somatic rearrangements (e.g., inversions, balanced translocations, etc), as well as from more complex
+“catastrophic rearrangements” such as chromoplexy and chromothripsis [53, 6, 26, 4, 61, 41]. ReMixT [35] allows
+for tumor heterogeneity, but fixes the number of derived genomes in the observed cancer sample to 2. Moreover, while
+ReMixT aims to infer genome- and allele-specific segment copy numbers for a 2-genome sample (with a possible
+admixture of the reference genome), the genome-specific copy numbers for novel adjacencies that are inferred by
+ReMixT lack information about which homologous copies of the segments are actually involved in observed novel
+adjacencies. Lastly, Weaver, and ReMixT produce karyotypes with biologically unlikely scenarios where rearrangements occur repeatedly at the same homologous loci in different cancer clones. We summarize these limitations of
+existing methods in Table S1.
+Here we propose a novel algorithm, Reconstructing Cancer Karyotypes (RCK), for deriving the karyotypes of cancer genomes in a heterogeneous tumor sample from next-generation (and 3rd-generation, when available) sequencing
+data. RCK distinguishes itself from existing methods by several features including: (i) support for diploid reference
+genome distinguishing between alleles of segment copy numbers and novel adjacencies (ii) joint inference of both
+segment and adjacency copy numbers in both clone- and haplotype-specific fashion; (iii) comprehensive support for
+sample heterogeneity ranging from homogeneous samples with a single derived genome to heterogeneous samples
+with an arbitrary number of clones; (iv) enforcement of somatic evolutionary constraints on all genomes within a sample; (v) unique ability to incorporate groups of novel adjacencies from 3rd-generation sequencing technologies into
+the inference model. We demonstrate the advantages of RCK by comparing its performance to ReMixT on a dataset of
+17 primary and metastatic prostate cancer samples. We find that RCK infers more plausible karyotypes that conform to
+an evolutionary model and have allele-specific segment copy numbers that agree with leading copy number inference
+algorithms.
+
+2
+
+Results
+
+2.1 RCK algorithm
+We introduce Reconstructing Cancer Karyotypes (RCK), an algorithm to construct the large-scale organization of one
+or more cancer genomes present in a bulk tumor sample. Each cancer genome in the sample arises from a sequence
+of somatic genome rearrangements and copy number number aberrations that transform a healthy normal genome
+into a cancer genome. As a result of these somatic mutations, each cancer genome can be represented as a karyotype
+graph – or more briefly a karyotype. A karyotype graph includes: (1) a collection of contiguous segments from
+the human reference genome, each segment with a label (A or B) distinguishing the two homologous chromosomes;
+(2) an integer copy number for each segment; (3) a collection of adjacencies that join the ends of segments; (4) an
+integer copy number for each adjacency. The karyotype graph describes an alignment between the cancer genome and
+healthy genome (analogous to the breakpoint graph [1, 3] in genome rearrangement studies). The karyotype graph also
+represents the information about the cancer genome sequence that can be inferred from DNA sequencing technologies
+whose reads lengths are shorter than the length of genome rearrangements.
+RCK solves the following Cancer Karyotype Reconstruction Problem: given allele-specific segment copy numbers
+and a list of novel adjacencies (i.e. pairs of genomic loci that are measured as adjacent in the cancer genome, but
+distant in the normal reference) from a bulk tumor sample, derive karyotype graph(s) for the cancer genome(s) present
+in the tumor sample. Several challenges emerge in the development of an algorithm to solve this problem. The first
+challenge is that the many methods for inferring allele-specific copy numbers from bulk tumor sequencing data (e.g.
+[57, 9, 7, 40, 24, 19, 35, 63]) do not preserve the allelic information across multiple adjacent segments. Specifically,
+2
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+A)
+
+RCK Overview
+Alignments
+NGS reads from
+bulk tumor
+3rd-gen reads
+(optional)
+
+!"#$%"&'()*+,-.$'/&0.1+)12'3,.#4
+
+Clone- and allele-specific
+segment copy numbers
+
+Novel Adjacencies
+
+$
+
+!" (1, 1) (0, 1) (0, 1) (0, 1) (1, 1) (1, 1) (1, 1) (1, 1) (1, 1)
+!# (1, 1) (2, 1) (2, 1) (2, 1) (2, 1) (1, 1) (1, 1) (1, 1) (1, 1)
+
+%
+
+#$%&$'()*+,,$,$)-.//.'%0 12/3)'4&5$6)5+,+'7.'%)
+$
+
+!" %
+
+!# $
+%
+
+D
+A
+@
+
+A
+
+C'D'>'A'E
+C'@'>'A'E
+
+A
+
+A
+
+@
+
+D
+
+A
+
+B
+
+A
+
+A
+
+./%/*/0/+,(
+!"#$!%&#'(!")*+,&-&#'
+
+B:C+7$'73)%624/<)@62&)D6:E%$')<$F
+
+!" $
+
+!" $
+
+!# $
+
+!# $
+
+!# $
+
+%
+
+%
+
+=2/(.2'+,>
+
+./%/*/0/+,(
+$!)&1$/)2*(
+!"#$!%&#'(!")*+,&-&#'
+
+!" $
+
+%
+
+.46,9:0*;&)9;7/7:.&
+.46,9:0*;&)9&'.&11
+
+@
+
+8$'$6+,.9$:).';'.($)<.($<
+
+!"#$!%&#'(
+!")*+,&-&#'
+
+A
+
+/$
+
+6789'("3#20,*4
+
+;'<'=(>':>'/?
+
+(
+
+%
+
+:
+
+/
+
+%
+
+%
+
+!"#$%&'($)'*(+"#,-+%&.+%/01/'/($/%2'3%$#4%'5(2-#,-+%.
+!"
+
+$
+%
+
+!
+!
+
+!
+
+!
+
+!
+
+!#
+
+!
+
+"
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+$
+%
+
+!
+
+"
+
+"
+
+"
+
+"
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+"
+
+!
+
+!
+
+!
+
+!
+
+!
+
+!
+
+?$72'<(647(.2')2@)1+'7$6)A+632(3/$<)=?1A>
+Figure 1: Overview of the RCK algorithm. Read alignments from bulk tumor sample are input to existing algorithms
+to identify clone- and allele-specific segment copy numbers (left) and novel adjacencies (right). The RCK algorithm
+(blue shaded elements) builds a diploid interval adjacency graph integrating copy number and novel adjacency information. RCK solves an mixed-integer linear program (MILP) that finds an optimal assignment of copy numbers and
+novel adjacencies to alleles and clones, subject to copy number balance on segment ends and satisfying evolutionary
+constraints
+from a generalized infinite
+sites model. Constraints on groups34*4/45401-)&.+6)4.7/-&'()&*+(,-&'./01+2+(,
+of novel adjacencies from the 3rd generation
+34*4/45401-&'()&*+(,-&'./01+2+(,
+B) &'()&*+(,-&'./01+2+(,
+sequencing technologies may optionally be included. The output of RCK are clone- and haplotype-specific cancer
+$
+$
+!+
+genome karyotypes.
+!+
+!+ $
+%
+
+%
+
+%
+
+!8 $
+
+!8 $
+
+!8 $
+
+%
+
+%
+
+%
+
+3
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+these methods output a pair of copy number vectors, ö
+c = [ö
+c1 , cö2 , … , cöm ] and ú
+c = [ú
+c1 , cú2 , … , cúm ], where the pair
+(ö
+cj , cúj ) À N2 indicates the number of copies of each of the two homologous copies of segment j from the reference
+genome that are present in the cancer genome. However, each of these pairs are unordered: it is not known whether cöj
+is the number of segment from the maternal chromosome or the paternal chromosome; moreover, the identification of
+cöj as maternal or paternal is independent for each j.
+The second challenge results is that the many methods for inferring novel adjacencies from bulk tumor sequencing
+data [51, 48, 30, 10, 60, 49, 16, 52, 66, 50, 27, 17] generally do not include two important attributes in their output:
+(i) the alleles (maternal or paternal) that are joined by the adjacency; (ii) the copy number(s) of the adjacency in
+each genome in the sample. Because of this incomplete information in the allele-specific copy numbers and novel
+adjacencies, cancer genome karyotypes are not directly available.
+RCK derives optimal cancer genome karyotype(s) from allele-specific copy numbers and novel adjacencies by
+solving an optimization problem on a graph, called the Diploid Interval Adjacency Graph (DIAG) (Figure 1). The
+vertices of the DIAG are extremities, or the positions in the human reference genome of the endpoints of the segments
+that are rearranged to form the cancer genomes present in the sample. Specifically, we enumerate the segments of the
+t , j h ], where j t and j h are extremities. The label
+reference genome 1, … , m. Each segment j has the form jH = [jH
+H
+H
+H
+t indicates that the extremity is the tail, or starting coordinate of the segment in the reference genome, while the label
+h indicates the head, or ending coordinate in the reference genome. A haplotype label H À {A, B} indicates which
+copy of the two homologous chromosomes in the reference (A or B) is the source of the segment. Adjacent extremities
+of consecutive segments that follow each other along the chromosome in the genome constitute an adjacency. We
+distinguish between two types of adjacencies: reference adjacencies that are present in the reference genome, and novel
+adjacencies that are not present in the reference genome. Thus, the DIAG has three types of edges: (1) segment edges
+t , j h } join extremities from a segment; (2) reference adjacency edges {j h , (j + 1)t } join extremities of adjacent
+{jH
+H
+H
+H
+®
+segments on the reference genome; (3) novel adjacency edges {jH , kH ® }, where H, H ® À {A, B}, and , ® À {t, h}.
+®
+Importantly, since a measured novel adjacency a = {j , k } does not generally include allelic information, we add
+®
+®
+®
+®
+all 4 possible labeled versions of the adjacency ({jA , kA }, {jA , kB }, {jB , kA }, and {jB , kB }) to the DIAG.
+A chromosome in the cancer genome corresponds to a walk in the DIAG that alternates between segment edges
+and reference/novel adjacency edges, and where the number of times every segment/adjacency edge is visited encodes
+the respective segment/adjacency copy number (see Methods 4.2). Thus, all vertices (except telomere vertices) should
+satisfy the copy number balance condition: the copy number of the incident segment edge equals the sum of the copy
+numbers of the incident reference edge and novel adjacency edge(s).
+The Cancer Karyotype Reconstruction Problem thus can be formulated as the problem of finding an edge multiplicity G (e) for each edge e and each cancer genome G such that: (i) each extremity (vertex v) satisfies the copy
+number balancing conditions (Equations (9), (10) in Methods); (ii) the copy numbers G (jA ) and G (jB ) of homolcj and cúj ); (iii) most of the
+ogous segments jA and jB are approximately equal to the allele-specific copy numbers (ö
+novel adjacencies are present in at least one genome (i.e. G (e) g 0 for novel adjacency edge e in at least one genome
+G).
+A major difficulty with the above formulation of the Cancer Genome Karyotype Reconstruction Problem is that
+there are often numerous solutions, many of which are biologically implausible. Considerable ambiguity arises from
+the lack of A/B labels on the measured novel adjacencies. The lack of allelic label means that each measured novel
+adjacency corresponds to 4 edges in the DIAG. However, selecting one of these four possible allele-specific novel
+adjacencies independently for each measured novel adjacency is unwise. Rather, the somatic evolutionary process
+imposes several constraints on the possible structures of inferred karyotypes. In particular, we derive conditions on
+allowed novel adjacencies from the infinite sites (IS) assumption commonly used in evolutionary studies. The infinite
+sites assumption is that a mutation does not occur at the same locus more than once during the course of evolution.
+The locus of a single-nucleotide mutation is readily defined as a genomic position. However, the locus for a largescale genome rearrangement is not apparent, and could be defined as either (or both) of the genomic positions of the
+extremities in the adjacency as well as adjacent genomic positions of “reciprocal" extremities. We define multiple
+constraints on the extremities that may be involved in novel adjacencies (Figure 1). These constraints generalize
+the infinite sites assumption to the case of multiple genomes that are derived from a diploid reference genome by
+a sequence of large-scale genome rearrangements. First, extremity-exclusivity is the constraint that an extremity
+is involved in at most one novel adjacency. Second, homologous-extremity-exclusivity is the constraint that an
+extremity and its homolog cannot both be involved in a novel adjacency. Third, homologous-reciprocal-extremityexclusivity is the constraint that an extremity and its reciprocal mate of the homologous chromosome cannot both
+
+4
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+be involved in a novel adjacency. All of these constraints are natural generalizations of the infinite sites assumption;
+however, they have not been distinguished consistently in previous publications (See Methods). As a result, previous
+methods can yield implausible genome reconstructions, as we will demonstrate below.
+RCK solves the optimization problem of finding edge multiplicities (e) satisfying conditions (i), (ii), and (iii)
+above and also where the novel adjacencies inferred to be present ( G (e) > 0) satisfy the generalized infinite sites
+constraints jointly across all clones. We solve this problem using a mixed-integer linear program (see Supplement
+S2.2). RCK also allows for grouping of novel adjacencies that are measured to be present on the same cell or longer
+read when such information is available from 3rd generation sequencing technologies (e.g. single cell sequencing,
+linked read sequencing [66, 52, 16], or long read sequencing [49, 17, 50, 27]). See Methods 4.4 for further details.
+
+2.2
+
+Evaluation and comparison of RCK
+
+We compare RCK to ReMixT, the only other existing method which both derives multiple tumor clones from bulk
+sequencing data and distinguishes between homologous chromosomes. ReMixT takes read alignments and novel
+adjacencies as input and infers clone- and allele-specific copy numbers for segments, as well as clone-specific copy
+numbers for novel adjacencies. Importantly, ReMixT does not infer haplotype A/B labels for the extremities that
+are involved in each novel adjacency. We will show below that this lack of assignment of each novel adjacency to a
+homologous chromosome leads to unusual genome reconstructions in many cases.
+2.2.1
+
+Data processing
+
+We analyze a cancer sequencing dataset from Gundem et al. [23], which consists of whole-genome sequencing data
+from 49 samples from 10 metastatic prostate cancer patients. Segment copy numbers inferred by Battenberg [40]
+were obtained from the publication [23] and read alignments for every sample were obtained from the authors. For
+each sample, Battenberg output includes: (i) the number of clones; (ii) allele-specific copy numbers for each
+genomic segment in each clone; (iii) the occurrence of a whole genome duplication (WGD) when reported tumor
+ploidy > 3. We also used HATCHet [63], a recently developed algorithm that infers allele-specific copy numbers
+for one or more cancer clones as well as the presence of WGD by joint analysis of multiple sequenced samples from
+the same patient. We considered the 17 samples where both Battenberg and HATCHet agreed on the number of
+clones present.
+For novel adjacencies, we used the predictions from brass2 (https://github.com/cancerit/BRASS),
+which we obtained from the the original publication [23]. brass2, like most methods that identify novel adjacencies from aligned DNA sequence reads, has some uncertainty in the exact genomic coordinate involved in a novel
+adjacency. This uncertainty can be an issue when determining whether an adjacency is part of a reciprocal event (e.g.
+inversion or reciprocal translocation). Thus, we adjusted the coordinates of extremities to obtain refined coordinates
+for loci involved in reciprocal novel adjacencies. For RCK, we also aligned the positions of extremities of segments
+from Battenberg or HATCHet to the positions of extremities from novel adjacencies determined by brass2. See
+Methods 4.6 for further details.
+We divided the cancer samples into two groups according to the number of tumor clones predicted by both
+Battenberg and HATCHet: homogeneous samples containing only one tumor clone (samples A21g, A21h, A24c,
+A24d, A24e, A34a, A34c, A34d); and heterogeneous samples containing two tumor clones (samples A10c, A12c,
+A12d, A17d, A31a, A31d, A31e, A31f, A32e). Notably, there was only one sample (A12c) where Battenberg
+and HATCHet disagreed on the presence of a WGD.
+For each sample, we ran RCK requiring that: (1) the only telomeres in the inferred cancer genomes are telomeres
+from the reference genome (i.e. extremities that are not the endpoints of reference chromosomes have copy number
+balance); (2) at least a fraction P of the input novel adjacencies are present in at least one of the derived genomes in a
+sample, for P = 1.0, 0.9, 0.75, 0.5. ReMixT does not allow control over telomeres or the fraction of novel adjacencies,
+and thus we ran ReMixT using default parameters.
+2.2.2
+
+Heterogeneous tumor samples
+
+We first compared the allele-specific segment copy numbers inferred by ReMixT and the haplotype-specific segment copy numbers inferred by RCK to the allele-specific copy numbers from HATCHet and Battenberg, using
+a length-weighted segment copy number distance (equation (15) in Methods). We found that in all but two cases
+
+5
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Heterogeneous
+ReMixT + RCK & HATCHet
+(x109 )
+5
+
+B) 1
+
+4
+
+fraction of present NAs
+
+Distance from
+HATCHet copy numbers
+
+A)
+
+0.8
+
+3
+2
+
+0.6
+
+1
+0
+
+A10c
+
+A12c
+
+A12d
+
+A17d
+
+A31a
+
+A31d
+
+A31e
+
+A31f
+
+RCK-1.0
+
+ReMixT
+
+0.4
+
+A32e
+
+A10c
+
+A12c
+
+A12d
+
+A17d
+
+A31a
+
+RCK-0.75
+
+RCK-0.9
+
+A31d
+
+A31e
+
+A31f
+
+A32e
+
+RCK-0.5
+
+fraction of present NAs
+
+Distance from
+Battenberg copy numbers
+
+& Battenberg
+Figure 2: A) Length-weighted segment copyRCK
+number
+distances (eq. (15)) between segment copy numbers from
+9
+(x10
+)
+HATCHet and~12
+segment copy numbers output by ReMixT and 1RCK. B) Fractions of novel adjacencies (NAs) from
+A) 5
+B)
+input that are inferred to be present by ReMixT or RCK for each sample in the heterogeneous group. RCK used
+4
+segment copy
+numbers from HATCHet in input and novel adjacency utilization parameter P = 1.0, 0.9, 0.75, 0.5.
+3
+
+0.8
+
+# of novel telomeres
+
+(samples 2A10c and A12c with a NAs utilization parameter P = 1.0), the segment copy numbers inferred by RCK
+are more similar to the copy numbers from HATCHet (Figure0.62A) and Battenberg (Figure S2A). We also ob1 RCK’s ability to control the fraction of input novel adjacencies that are required to be utilized in the
+served that
+inferred karyotype (Methods 4.3, 4.5) allows for more plausible reconstructions: the distance between input copy
+0.4
+0
+A10c A12c
+A12dweA17d
+A31a RCK
+A31d toA31e
+A31fnovel
+A32e adjacencies,
+A10cbutA12c
+A12d A17ddecreases
+A31a A31d
+A31f when
+A32e a
+numbers is largest
+when
+require
+use all
+the distance
+andA31e
+stabilizes
+RCK-1.0
+ReMixT adjacencies are
+RCK-0.5 ReMixT and
+RCK-0.9
+small fraction of novel
+excluded (P f 0.9).
+We note that the RCK-0.75
+largest distances between
+Novel
+HATCHet (or Battenberg) inferred copy numbers
+aretelomeres
+on four samples (A31a, A31d, A31e, and A31f) where
+both Battenberg and HATCHet150inferred a WGD. In these four samples, the high segment copy number values
+output by ReMixT also suggest many copy number changes; however, the large distances indicate that these inferred
+copy numbers may not align well with copy numbers expected from a WGD.
+We next compared the fraction100
+of input novel adjacencies that were contained in the genomes reconstructed by
+ReMixT and RCK. This value ranged from 0.75 to 0.92 for ReMixT (Figure 2B). In contrast, for RCK fraction of
+utilized input novel adjacencies ranged from 0.5 to 1.0 with its lower bound explicitly controlled via the P parameter.
+50
+We observe that RCK frequently utilizes
+more novel adjacencies than the minimum required (value of P). This occurs
+on 6/9 cancer samples (A10c, A31a, A31d, A31e, A31f, A32e) with HATCHet copy numbers and P = 0.75,
+P = 0.5, and 5/9 samples with Battenberg input. RCK’s incorporation of novel adjacencies at a higher proportion
+than the minimum required fraction0 P A10c
+suggests
+that RCK
+is selectively
+including
+those novel adjacencies required to
+A12c
+A12d
+A17d
+A31a
+A31d
+A31e
+A31f
+A32e
+achieve copy number balance.
+Next, we analyzed the structure of karyotypes inferred by each method. Since ReMixT does not output A/B
+Intra-sample
+SCN distance
+labels for extremities involved in novel adjacencies,
+we investigated
+whether it was possible to derive A/B labels
+on ReMixT adjacencies to produce reasonable cancer genomes that would allow for a copy number balance/excess
+A)the
+B) (x104 with
+C)first
+(x10 )extremities of segments and comply
+)
+(x10 )observed that the karyotypes
+on
+generalized IS constraints. We
+4
+reconstructed by ReMixT had a large number of extremities that are not telomeres 4in the reference and have copy
+3
+number
+excess (ranging from 41 to 133 per genome),
+corresponding to a large number3 of novel telomeres (Figure S1).
+3
+Such karyotypes correspond to unlikely cancer genomes having dozens or even hundreds of linear chromosomes with
+2
+2
+novel2 telomeres, in addition to ~46 (~92 in WGD samples) derived linear chromosomes
+with reference telomeres. In
+contrast,
+the RCK results reported here use only
+reference telomeres and thus the karyotypes
+have at most 48 (89 in
+1
+1
+1
+WGD samples) linear chromosomes in total.
+0
+0
+0
+A10c
+A12c generalized
+A12d A17d A31a A31d IS
+A31e constraints.
+A31f A32e
+A10c
+A12c A12d A17d A31a
+A31e A31f A32e of violations of
+We
+examined
+theA31d
+frequency
+the
+By construction,
+have
+A10c A12c A12d RCK
+A17d A31akaryotypes
+A31d A31e A31f A32e
+no such violations. In contrast, we identified three types of violations of generalized IS conditions in the ReMixT
+karyotypes. The first is an intra-genome violation of the homologous-extremity-exclusivity constraint. This violation
+occurs when the inferred segment copy numbers require that a novel adjacency a be assigned both a label A and a label
+B in order to achieve copy number balance (Figure 3A). This situation requires that at least two large-scale somatic
+rearrangements occur independently at the same genomic position on both homologous chromosomes, which is highly
+unlikely. We find that karyotypes reconstructed by ReMixT contain such violations in 6/9 samples, ranging from 1 to
+8 violations per genome, and from 1 to 12 violations per sample ( Figure 3B).
+The second type of violation is an inter-genome violation of the homologous-extremity-exclusivity constraint.
+9
+
+Battenberg
+HATCHet
+
+RCK-0.0
+RCK-0.1
+
+RCK-0.25
+RCK-0.5
+
+6
+
+HATCHet
+
+intra-sample CN distance
+(HATCHet input for RCK)
+
+ReMixT
+
+9
+
+Battenberg
+
+intra-sample CN distance
+(Battenebrg input for RCK)
+
+intra-sample CN distance
+
+9
+
+RCK-0.0
+RCK-0.1
+RCK-0.25
+RCK-0.5
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Conflicts (heterogeneous)
+!"#$%&'()#*+),
+-*+*.*(*/0'
+)1$%)+"$2')13./0"4"$254"*.&$"*#
+
+A)
+
+!"#$)%'()#*+),
+-*+*.*(*/0'
+)1$%)+"$2')13./0"4"$254"*.&$"*#
+
+C)
+
+vA/B
+
+G1
+
+vA/B
+1
+
+vA/B
+
+2
+2
+
+1
+
+vA/B
+
+vA/B
+
+3
+
+1
+
+1
+
+2
+
+2
+
+2
+
+1
+
+1
+
+1
+
+3
+
+2
+
+2
+
+1
+3
+1
+
+4
+2
+0
+A10c A12c A12d A17d A31a A31d A31e A31f A32e
+
+uA/B
+
+1
+
+fraction of reciprocal locations
+with violating NAs
+
+6
+
+2
+2
+
+F)
+fraction of violating NAs
+
+8
+
+2
+1
+1
+
+D)
+
+B)
+# of violating NAs
+
+reciprocal
+location
+
+2
+
+Gi
+
+2
+2
+
+G2
+
+Gi
+
+3
+3
+
+-*+*.*(*/0'%)3"6%*3&.
+)1$%)+"$2')13./0"4"$254"*.&$"*#
+
+E)
+
+0.5
+0.4
+0.3
+0.2
+0.1
+0
+
+A10c A12c A12d A17d A31a A31d A31e A31f A32e
+
+1
+0.75
+0.5
+0.25
+0
+A10c A12c A12d A17d A31a A31d A31e A31f A32e
+
+# of violating NAs
+
+fraction of violating NAs
+
+fraction of reciprocal locations
+with violating NAs
+
+Figure 3: ReMixT karyotypes from the heterogeneous group of metastatic prostate cancer samples have numerous
+violations of the generalized IS constraints. In graph panels A), C), and E) solid edges represent segment edges,
+black-dashed edges represent reference adjacency edges, and red-dashed edges represent novel adjacency edges. InConflicts
+(homogeneous)
+teger values indicate copy numbers of corresponding
+segment
+and adjacency edges. A) Example of a violation of the
+!"#$)%'()#*+),
+!"#$%&'()#*+),
+homologous-extremity-exclusivity
+constraint.
+To
+obtain
+copy
+number balance, both homologous
+vertices 2hA and 2hB
+-*+*.*(*/0'%)3"6%*3&.
+-*+*.*(*/0'
+-*+*.*(*/0'
+A) be)1$%)+"$2')13./0"4"$254"*.&$"*#
+)1$%)+"$2')13./0"4"$254"*.&$"*#
+)1$%)+"$2')13./0"4"$254"*.&$"*#
+must
+involved in novel adjacencies. B)
+B) Number
+of novel adjacencies (NAs)C)
+in each cancer
+karyotype inferred by
+ReMixT in each sample that violate the homologous-extremity-exclusivity constraint. C) Example of a violation of
+1
+30
+the inter-genome
+homologous-extremity-exclusivity constraint. To obtain copy number
+balance, both homologous
+h
+h
+vertices 2A and 2B (in different genomes) must be involved in novel adjacencies. D)0.75Fractions x_y of the number
+(x) of20 novel adjacencies (NAs) violating the inter-genome homologous-extremity-exclusivity constraint (on at least
+one of the extremities involved in every novel adjacency) in ReMixT karyotypes, over0.5the total number (y) of novel
+10
+adjacencies
+reported by ReMixT as being present in both genomes in the every sample.
+0.25 E) Example of a violation
+of the intra-genome homologous-reciprocal-extremity-exclusivity constraint. To obtain copy number balance, both
+0
+0
+homologous-reciprocal
+2hA and 3tB must be
+involved in novel adjacencies. We note
+that
+inA24c
+addition
+theA34cvioA21g
+A21h
+A24d A24e to
+A34a
+A34d
+A21g A21h A24c A24d A24e vertices
+A34a A34c A34d
+A21g A21h A24c A24d A24e A34a A34c A34d
+lation of the intra-genome homologous-reciprocal-extremity-exclusivity) constraint, violations of the inter-genome
+or both version(s) of this constraint are also possible (See Figure S7). F) Fractions x_y of the number (x) of reciproConflicts
+reciprocal
+(inter & mix)
+cal locations with violations of either intraor inter-genome
+(orexamples
+both) homologous-reciprocal-extremity-exclusivity
+constraint in ReMixT karyotypes,
+over
+the
+total
+number
+(y)
+of
+reciprocal
+locations with both
+involved NAs reported
+reciprocal
+A) by ReMixT.reciprocal
+B)
+location
+as being present
+location
+
+G1
+
+3
+1
+
+uA/B
+
+2
+
+1
+2
+1
+
+vA/B
+
+4
+1
+
+1
+3
+1
+
+G1
+
+vA/B
+
+2
+1
+
+2
+3
+2
+
+vA/Bv
+
+2
+2
+1
+
+2
+4
+2
+
+uA/B
+
+7
+
+2
+3
+
+G2
+
+G2
+
+2
+3
+
+vA/B
+
+2
+2
+1
+
+uA/B
+2
+4
+
+2
+
+uA/B
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+This violation occurs when a novel adjacency a is reported as being present in more than one genome in the sample,
+but a label A must be assigned to at least one a’s extremities in in one genome, and a label B must be assigned to at
+least one a’s extremities in another genome. This situation requires at least two large-scale somatic rearrangements
+occur independently at the same homologous genomic location in two different tumor clones, which is highly unlikely.
+We found that the karyotypes produced by ReMixT had such violations in all samples, with a substantial fraction
+(ranging from 0.09 to 0.28) of novel adjacencies containing such violations (Figure 3D).
+The third type of violation concerns pairs of reciprocal novel adjacencies. For a pair a = {x, uh }, b = {(u + 1)t , y}
+of reciprocal novel adjacencies that involve reference adjacent extremities uh , (u+1)t possible violations of generalized
+IS include intra/inter-genome violation of the homologous-extremity-exclusivity or intra/inter-genome violation of
+the homologous-reciprocal-extremity-exclusivity constraints, or both. Any such violation requires that at least two
+large-scale somatic rearrangements occur independently on the same or homologous genomic location both producing
+pairs of reciprocal novel adjacencies, a situation which is highly unlikely. We found that karyotypes produced by
+ReMixT had such violations in all samples; furthermore in 6/9 samples more than half of reciprocal novel adjacencies
+had such violations (Figure 3F).
+2.2.3
+
+Homogeneous tumor samples
+
+We ran RCK and ReMixT on cancer samples from the homogeneous group and analyzed the karyotypes output by
+both methods, following the procedures described above for the heterogeneous samples. Since ReMixT assumes
+that an input sample contains exactly two cancer clones, ReMixT’s results disagree with both Battenberg’s and
+HATCHet’s predictions of one cancer clone in these samples. To obtain a partial comparison of the segment copy
+number profiles inferred by ReMixT with the profiles inferred by Battenberg and HATCHet in each sample, we
+used ReMixT’s clone with the highest cellular frequency. Overall, our analysis of inferred cancer genomes karyotypes
+in the homogeneous group aligned with the findings for the heterogeneous group. In particular, we found that on every
+sample in the homogeneous group, the segment copy numbers inferred by RCK (with P f 0.9) are more similar to
+the copy numbers from Battenberg (Figure S6A) and HATCHet (Figure S6B) compared to the segment copy
+numbers inferred by ReMixT. We also found that the fraction of input novel adjacency that were present in inferred
+karyotypes ranged from 0.82 to 0.94 in ReMixT results and from 0.5 to 1.0 in RCK results (Figure S5). As in the case
+of heterogeneous samples, we observed that segment copy number distances are largest for RCK when we require RCK
+to use all novel adjacencies (a larger proportion than used in ReMixT), but the distances decrease and stabilize when
+some novel adjacencies are excluded (P f 0.9).
+Similar to the heterogeneous samples, we observed that karyotypes inferred by ReMixT had implausible features
+including a large number (and multiplicity) of novel telomeres (Figure S3) and violations of the generalized infinite
+sites constraints (Figures S4). In contrast, karyotypes inferred by RCK had no such issues. Overall, our analysis of
+inferred cancer genomes karyotypes in the homogeneous group aligned with the findings for the heterogeneous group.
+
+3
+
+Discussion
+
+We presented RCK, a novel algorithm for reconstructing clone- and haplotype-specific cancer genomes karyotypes
+from bulk tumor samples. RCK accounts for heterogeneity in the observed tumor sample, correctly models the diploid
+reference genome, and enforces biologically reasonable evolutionary constraints that generalize the infinite sites constraints to somatic large-scale rearrangements. RCK is, to the best of our knowledge, the only algorithm with these
+features and also the only algorithm that can combine both next- and 3rd-generation sequencing data into the reconstruction process, leveraging the long-range adjacency information from 3rd-generation sequencing technologies.
+On real cancer sequencing data, we found that RCK infers cancer karyotypes which inferred segment copy numbers
+are closer to those produced by state-of-the-art copy number inference tools (HATCHet and Battenberg), and
+which novel adjacencies conform with constraints from an infinite sites evolutionary model. In contrast, ReMixT’s
+approach of using novel adjacencies to “adjust” copy numbers generally led to allele-specific segment copy numbers
+that were different from those of HATCHet and Battenberg. Moreover, the novel adjacencies that are present in
+ReMixT inferred karyotypes often require biologically implausible rearrangements. These results demonstrate that
+“linking” of copy numbers via novel adjacencies without considering the underlying somatic evolutionary process is
+not advisable.
+While the proposed RCK method uses a very comprehensive somatic evolutionary model and addresses several
+shortcomings of the previous approaches, there are limitations and avenues for future improvements. First, in the RCK
+8
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+results presented here, we assume that no new telomeres are introduced in the cancer genomes, i.e. all telomeres are
+telomeres of the reference genome. RCK allows for non-reference telomeres to be specified; however, we have not incorporated telomere selection into the objective function of the optimization. Such novel telomeres can correspond to
+real telomeres, but in many cases are likely due to missing novel adjacencies in the input data. Second, we can further
+generalize RCK to simultaneously analyze multiple samples from the same individual, perhaps including a phylogenetic [62] or longitudinal constraints [38]. Simultaneously analysis of multiple samples has proved useful in copy
+number inference [63]. Third, it would be helpful to model a patient-specific germline genome that includes germline
+structural variations, long repetitive segments, etc. Finally, one could further leverage information in 3rd-generation
+sequencing data by including haplotype-specific labeling of extremities involved in groups of novel adjacencies.
+RCK’s inference of clone- and haplotype-specific cancer karyotypes enables further studies of the somatic mutational processes that produce highly rearranged cancer genomes, as well as improved characterization of specific
+functional changes (e.g., loss of heterozygosity, novel haplotype-specific fusion genes, etc). Higher-resolution reconstructions of cancer karyotypes can also help researchers illuminate differences/similarities between different types of
+cancer in general and lead to a more targeted and personalized medical treatments in specific patients.
+
+4
+
+Methods
+
+We start by considering the case of “perfect” input data and the problem of reconstructing karyotype of a single
+mutated genome in sections 4.1 – 4.2. Then we extend to the case of a heterogeneous cancer sample (section 4.3). and
+describe how our model can incorporate (when available) information from 3rd-generation sequencing technologies
+(section 4.4). In section 4.5 we describe a more general case where there is uncertainty in input segment copy number
+values.
+
+4.1
+
+Single derived genome
+
+We view cancer as a process propagated by a sequential application of somatic large-scale rearrangements starting
+with a diploid reference genome R and ending with a derived genome G. Every chromosome in a diploid reference
+genome R is present in two homologous copies, which we label by A and B respectively. A segment jA = [jAt , jAh ]
+is a contiguous part of a reference chromosome labeled A; its endpoints jAt and jAh are called extremities. We label
+segments 1 through m in a multichromosomal diploid reference genome R. In a mutated genome that is derived from
+the reference via large-scale rearrangements, segments can be absent, present more than once, and appear both in
+forward and reverse orientation. We denote by *jA = [jAh , jAt ] a reversed instance of segment jA .
+Extremities that demarcate the beginning and the end of a chromosome are called telomeres and we define by T (G)
+the set of telomeres in genome G .
+A pair (jA , kB ) of consecutive segments on a chromosome determines an adjacency {jAh , ktB } (i.e., a pair of extremities that are adjacent on a chromosome). A genome G determines a set A(G) of adjacencies present in it.
+For a diploid reference genome R with k chromosomes we define a set T (R) = {1tA , 1tB , … , mhA , mhB } of reference
+telomeres and note that T (R) = 4k. We further note that a multichromosomal diploid reference R determines a set
+A(R) of reference adjacencies as follows:
+h
+A(R) = {{jH
+, (j + 1)tH } › j À {1, 2, … , m * 1}; H À {A, B}; j h , (j + 1)t Ã T (R)}.1
+
+(1)
+
+A derived genome G corresponds to a collection of concatenation of segments (i.e., derived chromosomes), where
+segments in each novel concatenation can originate from any homologous copy of any of the chromosomes in the
+diploid reference R. Each derived chromosome thus corresponds to a word from the following alphabet:
+⌃ = {jH › j À {±1, ±2, … , ±m}; H À {A, B}}.
+
+(2)
+
+Adjacencies that are present in a mutated genome G but are not present in the reference are called novel and we
+denote by AN (G) a set of novel adjacencies in genome G. We note that since there are no novel adjacencies in the
+reference we have AN (R) = Á. We say that a set A of adjacencies satisfies infinite sites if no two adjacencies in A
+1 We
+
+assume that every segment appears exactly once in a forward orientation the reference genome.
+
+9
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Structures
+
+A)
+B)
+
+1
+
+2
+
+3
+
+4
+
+5
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+R =< (1 A, 2A, 3A, 4A, 5 A), (1 B , 2B , 3B , 4B , 5 B ), (6 A, 7 A, 8 A, 9 A, 10 A, 11A, 12A), (6 B , 7 B , 8 B , 9 B , 10 B , 11B , 12B ) >
+1A
+
+2A
+
+3A
+
+1B
+
+2B
+
+3B
+
+4A
+4B
+
+5A
+
+6A
+
+7A
+
+8A
+
+9A
+
+10A
+
+11A
+
+12 A
+
+5B
+
+6B
+
+7B
+
+8B
+
+9B
+
+10 B
+
+11B
+
+12 B
+
+= [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+= [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+=
+
+R
+
+C)
+
+6
+
+G =< (1A, 2A, 3A, −7 B , −6 B ), (1 B , 2B , −9 B , −8 B , 4A, −4A, 8 B , 5 A), (−5 B , −4B , −3B , 10 B , 11B , 12B ), (6 A, 11A, 12A) >
+1A
+
+2A
+
+1B
+
+2B
+
+3A
+9B
+
+7B
+8B
+
+6B
+
+5B
+
+4A
+
+4A
+
+G
+
+8B
+
+4B
+
+3B
+
+5A
+
+10 B
+
+11B
+
+12 B
+
+6A
+
+11A
+
+12 A
+
+= [ 1, 1, 1, 2, 1, 1, 0 , 0 , 0 , 0 , 1, 1]
+= [ 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1]
+
+=
+
+Figure 4: A) Example of a diploid reference genome R containing two pairs of homologous chromosomes (chromosomes labeled by A are shown in dark blue/green, and homologous copies labeled by B are shown in light blue/green)
+that are “partitioned” into 12 consecutive segments labeled 1 through 12. B) Reference genome R is shown as a collection of concatenations of segments, with segments located on chromosomes labeled A shown in dark blue/green
+and segments located on chromosomes labeled B shown in light blue/green. The “pointy” end of each segment j correspond to extremity j h , while the “flat” end corresponds to extremity j t . Dashed lines determine adjacencies between
+segments’ extremities. A set T (R) = {1tA , 1tB , 5hA , 5hB , 6tA , 6tB , 12hA , 12hB } corresponds to telomeres in the shown diploid
+reference genome R. A diploid segment copy number profile CR = (a, b) is shown for the genome R with colors
+(dark/light blue/green) corresponding to A/B labeled segments. C) A derived genome G obtained via multiple largescale rearrangements from the reference genome R. Red dashed lines correspond to novel adjacencies (e.g., {3hA , 7hB }).
+(a, b) inference
+is shown forerrors
+the genome G with colors (dark/light blue/green)
+A diploid segment copy number profile CG = SCN
+corresponding to A/B labeled segments. A set T (G) = T (R) of telomeres in the derived genome G equals to that in
+the original reference genome R.
+
+A)
+
+1A
+
+2A
+
+3A
+
+2A
+
+3A
+
+2A
+
+3A
+
+1A
+
+4A
+
+2A
+
+3A
+
+4A
+
+2B
+
+3B
+
+1B
+
+2B
+
+1B
+
+2B
+
+3B
+
+3B
+
+4B
+
+4B
+
+h , (j + 1)t } À A(R) we call extremities j h and (j + 1)t
+involve the same extremity. For a reference adjacency {jH
+H
+H
+H
+G 2 =< (1 A, 2A, 3A, 4A), (1 B , 2B , 3B , 4B ),
+=<
+(1
+,
+2
+,
+3
+,
+2
+,
+3
+,
+2
+,
+3
+,
+4
+),
+G
+reciprocal.
+1
+A A A A A A A A
+,
+2
+,
+1
+,
+2
+,
+3
+,
+4
+),
+(1
+,
+2
+,
+3
+,
+4
+)
+>
+(1
+, 2B , 1B , 2B , 3B ,somatic
+4B ) >
+(1 Blarge-scale
+B B B chromosomes
+B B B
+B B do
+B not
+B
+We assume that the
+rearrangements that “break” and “reglue”
+affect the
+same genomic locations (on either of the or A/B copies) more than once during the entire somatic evolutionary process
+(i.e., generalized infinite sites). We note that under generalized IS only reference adjacencies can participate in breaks,
+= [other
+1, 2, 3, 1]
+1via
+however we also note that novel adjacencies produced by rearrangements can further be amplified/deleted
+=
+®
+®
+=
+[3
+,
+5
+,
+4,
+2]
+=
+[
+1,
+3,
+2,
+2]
+1
+=
+[
+1, 4,
+rearrangements.
+IS1, 3]
+= [4 , 5 , 4,For
+3] a break r of an adjacency {jH , kH ® } involving extremities jH and kH ® under the generalized
+2
+=
+[5
+,
+5
+,
+4,
+4]
+at every point before and after r in the
+evolutionary process none
+of the reference/novel adjacencies involving
+= somatic
+[ 3, 2, 2, 1]
+2
+= [ 2, 3, 1, 1]
+®
+®
+ö1= B, and
+B}, A
+either jH , kH ® or j ö , k ö ® can be involved in any other rearrangement(s) (breaks), where H, H ® À {A, =
+H H
+2 = [ 4, 1, 3, 1]
+ö = A. Examples of rearrangements that violate the generalized IS and consecutive implications for novel adjacencies
+B
+in the derived genomes are shown in supplementary Figure S9.
+With the generalized IS assumption for somatic evolution propagated by large-scale rearrangements we naturally
+obtain several constraints for the derived genome which we list below:
+1B
+
+B)
+
+2B
+
+1B
+
+C)
+
+2B
+
+3B
+
+4B
+
+1B
+
+D)
+
+4B
+
+1B
+
+2B
+
+E)
+
+a) extremity-exclusivity: every extremity jH is involved in at most one novel adjacency from AN (G). This constraint is based on the fact that for a novel adjacency a to involve an extremity jH there must have been a
+large-scale rearrangement breaking a reference adjacency involving jH in the first place (and possible several
+10
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+other reference adjacencies). Having more than 1 novel adjacency involving jH would correspond to the scenario where some other rearrangement must have broken some adjacency involving jH , which is prohibited
+under generalized IS.
+
+b) homologous-extremity-exclusivity: if an extremity jH is involved in a novel adjacency from AN (G), then
+the homologous extremity j Ç is not involved in any novel adjacency from AN (G). This constraint follows
+H
+the logic outlined in extremity-exclusivity, but considers A/B labeled homologous extremities jH and j ö : for
+H
+both jH and j ö extremities to be involved in novel adjacencies there must have been at least two large-scale
+H
+rearrangements breaking homologous reference adjacencies involving both extremities jH and j ö , which is
+H
+prohibited under the generalized IS.
+®
+
+c) homologous-reciprocal-extremity-exclusivity: if an extremity jH from the reference adjacency {jH , kH } is
+involved in a novel adjacency from AN (G), then the homologous extremity k Ç , is not involved in any novel adH
+jacency from AN (G). This constraint follows the justification provided in homologous-extremity-exclusivity:
+®
+for both extremities jH and k ö to be involved in novel adjacencies there must have been two large-scale rearH
+
+®
+
+®
+
+rangements breaking both homologous reference adjacencies {jH , kH } and {j ö , k ö } which is prohibited under
+H H
+the generalized IS.
+
+We call a genome G proper, if the above three conditions are met.
+A genome G determines a diploid segment copy number profile CG = (a = [a1 , a2 , … , am ], b = [b1 , b2 , … , bm ]),
+where values (aj , bj ) À N2 indicate the number of copies of segments jA and jB in G. We note that in a diploid
+reference R we have aj = bj = 1 for every segment j. An example of a diploid segment copy number profiles CG and
+CR for a derived genome G and a reference R are shown in Figure 4.
+When a mutated genome G is derived from a diploid reference R current technologies do not allow us to measure
+its diploid segment copy number profile CG directly. Rather there exist several methods [57, 9, 7, 40, 24, 19, 35, 63]
+c = [ú
+c1 , cú2 , … , cúm ] of vectors, where for every segment j an
+that are capable of measuring a pair ö
+c = [ö
+c1 , cö2 , … , cöm ], ú
+unlabeled (allele-specific) pair (ö
+cj , cúj ) À N2 represents copy numbers of segments jA and jB in G, but without A/B
+cj , cúj }, but it is unclear
+labels explicitly associated with the measured values. In other words, we know that {aj , bj } = {ö
+cj , cúj ) or (aj , bj ) = (ú
+cj , cöj ) (example shown in Figure 6).
+whether (aj , bj ) = (ö
+Furthermore, when a genome G derives from a diploid reference R we can not measure a set A(G) of adjacencies
+in G directly, but rather we can only measure an obfuscated version of the set AN (G) of novel adjacencies in G. That
+®
+is, for every novel adjacency {jH , kH ® } À AN (G) we can only measure an unlabeled (i.e., with involved extremities
+®
+missing the A/B labels) adjacency {j , k } (e.g., for a derived genome G shown in Figure 4 instead of measuring a
+novel adjacency {3hA , 7hB } À AN (G) we measure an unlabeled novel adjacency {3h , 7h }). There exist several methods
+capable of producing the unlabeled novel adjacencies both from a standard short-read bulk sequencing data [51, 48,
+30, 10, 60] as well as from 3rd-generation sequencing technologies [49, 16, 52, 66, 50, 27, 17].
+We note that if a set AÉ of unlabeled novel adjacencies is measured from a proper derived genome, it satisfies the
+generalized infinite sites conditions: since in unlabeled novel adjacencies involved extremities lack A/B labels, only
+the (unlabeled) extremity-exclusivity constraint (i.e., on unlabeled extremities) must be satisfied, which is achieved,
+because in proper genome conditions extremity-exclusivity and homologous-extremity-exclusivity guarantee that
+for every pair jA , jB of homologous extremities at most one of them is involved in any novel adjacency from AN (G),
+and thus the unlabeled extremity j is also involved in at most one measured unlabeled novel adjacency from AÉ N .
+We assume that large-scale rearrangements that generated a mutated genome G from a diploid reference R have
+not created novel telomeres (i.e., T (G) ” T (R)), and formulate the following problem of reconstructing mutated
+genome from measurement data:
+Problem 1. Given a diploid reference R, allele-specific copy number measurements (ö
+cj , cúj ) À N2 for every segment j,
+and a set AÉ N of unlabeled novel adjacencies that satisfies (unlabeled) extremity-exclusivity constraint, find a proper
+genome G satisfying:
+®
+®
+1. for every adjacency a = {jH , kH ® } À A(G) either {j , k } À AÉ N or a À A(R);
+
+®
+®
+2. for every adjacency {j , k } À AÉ N there exist labels H, H ® À {A, B}, such that {jH , kH ® } À AN (G);
+
+11
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+3. for every (aj , bj ) À CG either (aj , bj ) = (ö
+cj , cúj ) or (aj , bj ) = (ú
+cj , cöj );
+4. T (G) ” T (R).
+
+Since the measured unlabeled novel adjacencies do not have the A/B labels, we do not know the true underlying
+®
+novel adjacencies that produced a measurement. For an unlabeled novel adjacency a = {j , k } we defined by
+®
+h(a) = {{jH , kH ® } › H, H ® À {A, B}} a set of the four possible novel adjacencies that can be obtained by A/B
+labeling extremities in a. For a given set A of unlabeled novel adjacencies we define a set H(A) of all possible novel
+adjacencies as follows:
+H(A) = {h(a) › a À A} = {{jH , kH ® } › {j , k } À A; H, H ® À {A, B}}.
+®
+
+®
+
+(3)
+
+We note that when a set AÉ N of measured unlabeled novel adjacencies comes from a genome G, it follows that
+AN (G) ” H(AÉ N ). A union A(R) ‰ H(AÉ N ) of sets A(R) and H(AÉ N ) represents all possible adjacencies that can be
+present in the observed mutated genome G.
+
+4.2
+
+Diploid Interval Adjacency Graph
+
+We reformulate Problem 1 of finding a proper derived genome G from the measurement data as a graph-theoretic
+problem. First, we define the diploid interval adjacency graph (DIAG), which can be viewed as a generalization of a
+breakpoint graph used in the area of comparative genomics [1, 65, 3], or graphs used in the area of structural analysis
+of normal and cancer genomes with haploid reference structure [36, 42, 32, 12, 15, 35]. A DIAG G(R, AÉ N ) = (V , E)
+is constructed on a set {1, 2, … , m} of segments, and a set A = A(R) ‰ H(AÉ N ) of adjacencies.
+The set V of vertices is in one-to-one correspondence with all segments’ extremities. Formally we define V as
+follows:
+V = {jH › j À {1, 2, … , m}; À {t, h}; H À {A, B}}.
+(4)
+The set E of edges in a DIAG is comprised of two types of edges: segment edges ES and adjacency edges EA .
+The set ES of segment edges represents segments as follows:
+t
+h
+, jH
+} › j À {1, 2, … , m}; H À {A, B}}.
+ES = {{jH
+
+(5)
+
+The set EA of adjacency edges is in a one-to-one correspondence with a set A = A(R) ‰ H(AÉ N ) of adjacencies: i.e.,
+®
+®
+every adjacency a = {jH , kH ® } À A is represented by a corresponding adjacency edge ea = {jH , kH ® } À EA (e.g.,
+an example DIAG is shown in Figure 5).
+Every adjacency edge ea À EA that corresponds a reference adjacency a À A(R) we call a reference adjacency
+edge, and we denote by ER ” EA a set of all reference adjacency edges in EA . We also define a set EN = EA ‰ ER of
+novel adjacency edges, with edges in EN respectively corresponding to novel adjacencies in H(AÉ N ). Since adjacency
+edges and adjacencies are in one-to-one correspondence we allow ourselves to use adjacencies when referring to
+adjacency edges and vice versa.
+t , j h } À E , we define e (v) À E to
+Since every vertex v = jH À V is incident to exactly one segment edge {jH
+S
+S
+S
+H
+be a segment edge incident to a vertex v, and define eS (jH ) À ES to be a segment edge corresponding to a segment
+jH . Every vertex v À V is incident to at most one reference adjacency edge, and we define eR (v) À ER to be a
+reference adjacency edge containing vertex v, if such adjacency exists. Naturally, we define EN (v) ” EN to be a set
+of novel adjacency edges incident to v À V .
+Every chromosome in a derived genome G determines a segment-adjacency edge alternating walk in the corresponding DIAG, that starts and ends at telomere vertices in T (G) (examples are shown in the supplement Figure S8B).
+Such an alternating walk spells out a concatenation of segments from the reference genome, corresponding to a derived
+chromosome in G. Thus, a derived genome G determines a collection of segment-adjacency edge alternating walks.
+t , j h } À E is traversed (in either direction) across all walks determined by
+The number of times a segment edge {jH
+S
+H
+G corresponds to the segment copy number (e.g., ({jAt , jAh }) = aj ). Similarly, the number of times an adjacency edge
+®
+e = {jH , kH ® } À EA is traversed (in either direction) across all walks determined by G corresponds to an adjacency
+copy number (i.e., the number of times an adjacency corresponding to an edge e is present in G). A genome G thus
+determines an edge multiplicity function : E ô N on both segment and adjacency edges (example is shown in the
+supplement Figure S8A). We call the corresponding DIAG G(R, AN , ) a weighted DIAG.
+12
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+DIAGa license to display the preprint in perpetuity. It is made available
+not certified by peer review) is the author/funder, who has granted bioRxiv
+under aCC-BY-NC-ND 4.0 International license.
+
+Figure 5: A DIAG G(R, AÉ N ) = (V , E) constructed on a set {1, 2, … , 12} of segments, and a set A(R) ‰ H(AÉ N ) of
+adjacencies, where a set A(R) corresponds to reference adjacencies in a diploid reference R shown in Figure 4B, and a
+set AÉ N = {{3h , 7h }, {2h , 9h }, {4t , 8t }, {4h , 4h }, {5t , 8h }, {3t , 10t }, {6h , 11t }} represents unlabeled novel adjacencies
+that were measured from a derived genome G shown in Figure 4C. Telomere vertices T (G) = T (R) ” V are shown
+as squares, and non-telomere vertices are shown as circles. Solid edges correspond to segment edges in ES , with dark
+blue/green edges corresponding to segments labeled A, and light blue/green edges corresponding to segments labeled
+B. Reference adjacency edges ER are shown as black-dashed edges, and novel adjacency edges EN are shown as
+red-dotted edges.
+
+A)
+
+We note that DIAG is allowed to have self-loop adjacency edges that correspond to a self-loop novel adjacencies
+in H(AÉ N ). Such self-loop novel adjacencies can be produced by breakage-fusion-bridge cycles, inverted tandem
+duplications, and other more complex large-scale genome rearrangements that have been observed in cancer [22, 64,
+2
+function that outputs 2 if a is a self-loop adjacency (edge), and
+33, 25]. We define by l(a) : EA ô {1, 2} an auxiliary
+1 otherwise. We say that a vertex v À V exhibits a copy number balance provided:
+2
+…
+l(e) (e).
+(6)
+(eS (v)) = (eR (v)) +
+eÀEN (v)
+
+2
+Similarly, we say that a vertex v À V exhibits a copy number excess
+provided:
+…
+(eS (v)) > (eR (v)) +
+l(e) (e).
+
+(7)
+
+eÀEN (v)
+
+The following theorem follows directly from previous work [29, 45]:
+Theorem 1. A weighted DIAG G = (V , E, ), can be decomposed into a collection of segment-adjacency edge
+alternating walks that start and end at a set T ” V of telomere vertices, such that every edge e À E is traversed (e)
+times, if:
+
+B)
+
+6
+1
+7 number
+6
+1. every non-telomere
+vertex v2 À V ‰ 3T is copy
+balanced,
+A
+
+A
+
+A
+
+B
+
+A
+
+B
+
+2. and every telomere vertex v À T ” V has a copy number excess.
+
+11A
+
+12 A
+
+When the derived genome is allowed to have circular chromosomes, which have been extensively observed and
+studied in cancer [8, 21, 59, 18, 56], Theorem 1 provides not only a necessary, but also a sufficient condition for
+a derived genome to exist. For an extended discussion about DIAG decomposition into segment-adjacency edge
+alternating walks please refer to supplementary material section S2.1.
+For every unlabeled novel adjacency a À AÉ N and a DIAG G(R, AÉ N ) we define by hE (a) ” EN a subset of novel
+adjacency edges corresponding to adjacencies in h(a). Furthermore, given a weighted DIAG G(R, AÉ N ) = (V , E, ),
+
+13
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+E
+for every unlabeled novel adjacency a À AÉ N we define by hE
++ (a) ” h (a) ” EN a subset of adjacency edges with
+positive multiplicities as follows:
+E
+(8)
+hE
++ (a) = {e › e À h (a); (e) > 0}.
+
+Now we readily reformulate the Problem 1, allowing a derived genome to contain circular chromosomes, into a
+problem of finding edge multiplicities in the associated DIAG as follows:
+Problem 2. Given a DIAG G(R, AÉ N ), where the set AÉ N of unlabeled novel adjacencies satisfies (unlabeled) extremityexclusivity constraint, and allele-specific copy number measurements (ö
+cj , cúj ) À N2 for every segment j of telomere
+vertices find an edge multiplicity function : E ô N such that:
+1. for every unlabeled adjacency a À AÉ N , hE
++ (a) = 1;
+
+2. for every self-loop unlabeled adjacency a = {j , j } À AÉ N , ({jA , jB }) = 0;
+
+h , (j + 1)t } À
+3. for every pair a = {u, j h }, b = {(j + 1)t , v} À AÉ N of unlabeled novel adjacencies, such that {jH
+H
+h
+t
+®
+E
+®
+E
+®
+A(R), there exist a = {uH , jH ® } À h+ (a) and b = {(j + 1)H ® , vH ®® } À h+ (b), where H, H , H ®® À {A, B};
+
+4. for every segment j, either ( (eS (jA )), (eS (jB ))) = (ö
+cj , cúj ) or ( (eS (jA )), (eS (jB ))) = (ú
+cj , cöj );
+5. every non-telomere vertex v À V ‰ T (R) exhibits copy number balance (eq. (6));
+
+6. every telomere vertex v À T (R) ” V exhibits either copy number balance (eq. (6)) or copy number excess
+(eq. (7)).
+
+We note, that finding an edge multiplicity function in Problem 2 guarantees the existence of a proper derived
+genome that determines , but such derived genome does not necessarily need to be unique. A resulting weighted
+DIAG G = (V , E, ) thus determines a haplotype-specific karyotype of the derived genome in question.
+
+4.3
+
+Multiple derived genomes
+
+The sequencing assays in cancer genomics can involve biological samples that can be genetically heterogeneous (i.e.,
+comprised of cells with different derived genomes, also sometimes referred to in the literature as clones). Let us
+assume that a sample (i.e., set of genomes) S = (G1 , G2 , … , Gn ) in question is comprised of n genomes all of which
+have derived from a diploid reference R via large-scale rearrangements. A sample S = (G1 , G2 , … , Gn ) determines
+a pair CS = (A = [a1 , a2 , … , an ]T , B = [b1 , b2 , … , bn ]T ) of n ù m diploid segment copy number matrices, where
+genome-specific segment copy number vectors ai = [ai,1 , ai,2 , … , ai,m ] and bi = [bi,1 , bi,2 , … , bi,m ] contain integer
+values ai,j , bi,j À N that correspond to the number of times segments jA and jB appear in genome Gi À S respectively.
+We denote by A[j] = [a1,j , a2,j , … , an,j ]T and by B[j] = [b1,j , b2,j , … , bn,j ]T vectors of copy number values for
+segments jA and jB across all genomes Gi À S.
+For a sample s = (G1 , G2 , … , Gn ) we do not measure the pair CS = (A, B) of its nùm diploid segment copy matriú = [ú
+É = (C
+ö = [ö
+c2 , … , ö
+c n ]T , C
+c1 , ú
+c2 , … , ú
+cn ]T ) of n ù m allele-specific segces directly, but rather we measure a pair C
+c1 , ö
+ö [j] , C
+ú [j] ) or (A[j] , B[j] ) = (C
+ú [j] , C
+ö [j] ).
+ment copy number matrices, such that for every segment j either (A[j] , B[j] ) = (C
+Examples of allele-specific vs diploid alongside other errors in a noise-free segment copy number inferences with
+different limiting assumptions about the sample’s structure are∑
+shown in Figure 6.
+For a sample S = (G1 , G2 , … , Gn ) we define by A(S) = Gi ÀS A(Gi ) a set of all adjacencies and by AN (S) =
+∑
+Gi Às AN (G i ) a set of all novel adjacencies present in any (subset) of the genomes in S.
+Similarly to the case of a single derived genome, out ability to measure novel adjacencies from a sample S =
+®
+(G1 , G2 , … , G2 ) is obfuscated. For every novel adjacency a = {jH , kH ® } À AN (S) we can only measure an unlabeled
+®
+counterpart {j , k } and we also loose the information about which genome(s) in sample S the underlying novel
+adjacency a is actually present in. We define by AÉ N a set of unlabeled adjacencies measured from a sample S.
+We generalize the previously introduced constraints on possible structures of the derived genomes Gi À S for
+the sample S. We call a sample s = (G1 , G2 , … , Gn ) proper if the extremity-exclusivity, homologous-extremityexclusivity, and homologous-reciprocal-extremity-exclusivity assumptions hold, with a set AN (G) substituted with
+a set AN (S) (i.e., considering a set AN (S) of novel adjacencies across all of the genomes in the observed sample S).
+Substituting AN (G) with AN (S) allows us to impose the generalized IS constraints for the whole somatic evolutionary
+14
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+SCN inference errors
+
+A)
+
+1A
+
+2A
+1B
+
+3A
+2B
+
+2A
+1B
+
+3A
+2B
+
+2A
+3B
+
+3A
+
+1A
+
+4A
+
+2A
+
+4B
+
+1B
+
+C)
+= [4 , 5 , 4, 3]
+
+= [ 1, 3, 2, 2]
+= [ 3, 2, 2, 1]
+
+4A
+
+2B
+
+3B
+
+1B
+
+2B
+
+4B
+
+1B
+
+1B
+2B
+
+2B
+
+3B
+
+3B
+
+4B
+
+4B
+
+G 2 =< (1 A, 2A, 3A, 4A), (1 B , 2B , 3B , 4B ),
+(1 B , 2B , 1B , 2B , 3B , 4B ), (1 B , 2B , 3B , 4B ) >
+
+G 1 =< (1 A, 2A, 3A, 2A, 3A, 2A, 3A, 4A),
+(1 B , 2B , 1B , 2B , 3B , 4B ) >
+
+B)
+
+3A
+
+D)
+1
+2
+
+= [3 , 5 , 4, 2]
+= [5 , 5 , 4, 4]
+
+E)
+
+=
+=
+
+1
+
+= [ 1, 2, 3, 1]
+
+2
+
+= [ 1, 4, 1, 3]
+
+1
+2
+
+= [ 2, 3, 1, 1]
+= [ 4, 1, 3, 1]
+
+Figure 6: Description of errors in noise-free segment copy number (SCN) inference for a heterogeneous (i.e., 2
+genomes) and haplotype-specific (i.e., A/B labeled segments) sample S = (G1 , G2 ) under different limiting assumption
+about the sample’s structure. A) A 2-genome proper sample S = (G1 , G2 ) with every genome Gi À S depicted
+both as collections of adjacent blocks as well as corresponding sequences of signed block. B) SCN inference under
+the assumption that the sample in question is homogeneous (i.e., comprised of a single derived genome) and with
+no consideration given to the fact that every segment has two distinct A/B instances of it (haploid-reference). In a
+vector c = [c1 , c2 , c3 , c4 ] for a segment j a value cj corresponds to an average over sums ai,j + bi,j = cöi,j + cúi,j
+of diploid/allele-specific SCNs across genomes Gi À S. C) SCN inference under the assumption that the sample
+is homogeneous, but distinguishing between A/B labeled copies of every segment, though not preserving the alleles
+labels mapping to true A/B labels across segments. Colors encode true labeling (dark blue – A, light blue – B), flipped
+alleles are shown for segments 2 and 4). In vectors ö
+c = [ö
+c1 , cö2 , cö3 , cö4 ] and ú
+c = [ú
+c1 , cú2 , cú3 , cú4 ] for a segment j values
+c1,j + cö2,j )_2 and (ú
+c1,j + cú2,j )_2 of genome- and allele-specific copy number values. D)
+cöj , cúj correspond to averages (ö
+SCN inference under the assumption that the sample is heterogeneous, but with a haploid-reference assumption. In
+vectors c1 = [c1,1 , c1,2 , c1,3 , c1,4 ] and c2 = [c2,1 , c2,2 , c2,3 , c2,4 ] for a segment j and genome Gi the value ci,j equals
+to the sum cöi,j + cúi,j of allele-specific copy number values in a genome Gi . E) Allele- and genome specific SCN
+inference. Colors encode true labeling (dark blue – A, light blue – B), flipped alleles are shown for segment 2 and 4
+c1,2 , cö2,2 ) and (a1,4 , b2,4 ) = (ú
+c1,4 , cö2,4 )).
+(i.e., (a1,2 , b2,2 ) = (ú
+process (i.e., take into account rearrangement that occur on all the branches of the somatic phylogenetic tree) that
+produced the observed sample S. We note that if a set AÉ N of unlabeled novel adjacencies comes from a proper sample
+S, then AÉ N satisfies the generalized IS conditions (by satisfying the (unlabeled) extremity-exclusivity constraint).
+Moreover, we note that if a sample S = (G1 , G2 , … , Gn ) is proper, then any subsample (including individual derived
+genomes Gi À S) of S is also proper.
+A generalized version of Problem 1 for a sample S = (G1 , G2 , … , Gn ) is stated below:
+É = (C,
+ö C)
+ú of n ù m allele-specific segment copy number matrices,
+Problem 3. Given a diploid reference R, a pair C
+É
+and a set AN of measured unlabeled novel adjacencies that satisfies (unlabeled) extremity-exclusivity constraint, find
+a proper sample s = (G1 , G2 , … , Gn ) such that:
+®
+®
+1. for every adjacency a = {jH , kH ® } À A(s), either {j , k } À AÉ N or a À A(R);
+
+®
+®
+®
+2. for every adjacency {j , k } À AÉ N , there exists a unique pair H, H ® À {A, B} of labels, such that {jH , kH ® } À
+A(s);
+
+ö [j] , C
+ú [j] ) or (A[j] , B[j] ) = (C
+ú [j] , C
+ö [j] );
+3. for every segment j, either (A[j] , B[j] ) = (C
+4. for every genome Gi À s, the telomere set T (Gi ) ” T (R).
+
+In a sample S = (G1 , G2 , … , Gn ) and a set AÉ N of unlabeled novel adjacencies measured form S, we observe a
+DIAG G(R, AÉ N ) = (V , E). Every genome Gi À S determines a genome-specific edge multiplicity function i : E ô
+N as was previously described in a case of a single derived genome.
+
+15
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+We extend previously introduced copy number balancing conditions (6) and (7) on vertices in V , using genomespecific edge multiplicity functions. For a genome Gi À S, a vertex v À V exhibits copy number balance provided:
+…
+l(e) i (e),
+(9)
+i (eS (v)) = i (eR (v)) +
+eÀEN (v)
+
+and a vertex v À V exhibits copy number excess provided:
+i (eS (v))
+
+>
+
+i (eR (v)) +
+
+…
+eÀEN (v)
+
+i (e).
+
+l(e)
+
+(10)
+
+E
+For every unlabeled adjacency a À AÉ N and a genome Gi À S we define by hE
+i,+ (a) ” h (a) a subset of novel
+E
+adjacency edges in h (a) with positive copy number as determined by the genome-specific edge multiplicity function
+i as follows:
+E
+(11)
+hE
+i,+ (a) = {e › e À h (a), i (e) > 0},
+
+and we then naturally generalize the definition of hE
++ (a) for the sample S = (G 1 , G 2 , … , G n ) case:
+hE
++ (a) =
+
+Õ
+
+Gi ÀS
+
+hE
+i,+ (a).
+
+(12)
+
+For every segment jH we define by [j,H] = [ 1 (eS (jH )), 2 (eS (jH )), … , n (eS (jH ))]T a vector of genomespecific edge multiplicity functions’ values on the segment edge eS (jH ) À ES .
+We now reformulate a general Problem 3 of finding a proper sample S = (G1 , G2 , … , Gn ) in terms of finding edge
+multiplicity functions 1 , 2 , … , n : E ô N in the corresponding DIAG as follows:
+
+Problem 4. Given a DIAG G(R, AÉ N ) = (V , E), where a set AÉ N of unlabeled novel adjacencies satisfies (unlaÉ = (C,
+ö C)
+ú of n ù m allele-specific segment copy number matrices,
+beled) extremity-exclusivity constraint, and a pair C
+find edge multiplicity functions 1 , 2 , … , n : E ô N such that:
+1. for every adjacency a À AÉ N , hE
++ (a) = 1;
+
+2. for every i À [n] and every adjacency a = {j , j } À AÉ N ,
+
+i ({jA , jB
+
+®
+
+}) = 0;
+
+3. for every pair a = {u, j h }, b = {(j + 1)t , v} À AÉ N of unlabeled novel adjacencies, such that {jAh , (j + 1)tA } À
+h } À hE (a) and b® = {(j + 1)t , v
+E
+®
+®® À {A, B};
+A(R), there exists a® = {uH , jH
+®® } À h (b), where H, H , H
+®
++
++
+H® H
+4. for every segment j, either (
+
+[j,A] ,
+
+[j,B] )
+
+ö [j] , C
+ú [j] ) or (
+= (C
+
+[j,A] ,
+
+[j,B] )
+
+ú [j] , C
+ö [j] );
+= (C
+
+5. for every i À [n] and every non-telomere vertex v À V ‰ T (R) the equality (9) holds;
+
+6. for every i À [n] and every telomere vertex v À T (R) ” V either the equality (9) or the inequality (10) hold.
+
+4.4
+
+3rd generation sequencing technologies and novel adjacency groups
+
+Besides the cost-efficient next-generation sequencing technologies (i.e., bulk-sequencing with short paired-end reads),
+there exist other, more expensive, 3rd-generation sequencing technologies (e.g., single-cell, barcoded linked reads, and
+long-read sequencing) that can provide additional insight about measured unlabeled novel adjacencies [16, 52, 66, 49,
+50, 27, 17]. We observe a sample S = (G1 , G2 , … , Gn ) and a set AÉ N of unlabeled novel adjacencies coming from S.
+We define a 3rd-generation sequencing experiment as either all reads obtained in a single-cell sequencing essay, a set of
+reads annotated with the same barcode in the barcoded sequencing experiment, or a single long read obtained by a longread sequencing technology. Let us assume that a 3rd-generation sequencing experiment on a S = (G1 , G2 , … , Gn )
+identifies a group u ” AÉ N of unlabeled novel adjacencies. Since every 3rd-generation sequencing experiment is
+conducted either on a single cell (e.g., single-cell) and thus produces data from a single derived genome, or on a part
+of a single derived chromosome (e.g., bar-codded, long-range) present in a single derived genome, the group u of
+unlabeled adjacencies is guaranteed to originate from a single derived genome Gi À S.
+
+16
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+®
+
+We note that for every unlabeled novel adjacency a = {j , k } measured from a sample S = (G1 , G2 , … , Gn )
+®
+there exist a unique novel adjacency counterpart {jH , kH ® } À AN (S), when S is proper. Or, more formally, h(a) „
+AN (S) = 1. Thus, for every group u ” AÉ N of unlabeled novel adjacencies measured via a single 3rd-generation
+sequencing experiment on a proper sample S = (G1 , G2 , … , Gn ) for at least one genome Gi À S we have:
+…
+AN (Gi ) „ h(a) = AN (Gi ) „ H(u) = u.
+(13)
+aÀu
+
+4.5
+
+Uncertainty in copy number measurements
+
+As we have stated before, there exist several methods that for a given sample S = (G1 , G2 , … , Gn ) aim to infer a
+É = (C,
+ö C)
+ú of n ù m allele-specific segment copy number matrices. Loss of explicit information about A/B labels
+pair C
+across segments in such inference (while preserving segment’s specific allele separation across all genomes in S) is
+often not the only limitation of these methods. It is also often the case for sequences of reference-adjacent segments
+to be grouped together into larger non overlapping fragments, for which the allele-specific copy numbers are inferred.
+More formally, we call a sequence (j, j + 1, … , j + l) of reference adjacent segments a fragment and denote it by
+f[j,l] . We denote by F a collection of non overlapping fragments that cover all of the segments.
+When allele-specific copy numbers are inferred on fragments, rather than individual segments, we naturally obtain
+the same copy number values for all segments within every overarching fragment, which may be incorrect for some
+or even all segments within the observed fragment. On the other hand, allele-specific nature of the inferred fragments
+copy numbers preserves allele separation not only across genomes, but also across segments within each fragment.
+We thus view available allele-specific copy numbers for fragments as an approximation of the true underlying segment
+copy numbers, and try to infer the true underlying diploid segment copy number values, while leveraging the allele
+separation preservation across segments within each fragment.
+É = (C,
+ö C)
+ú of n ù m allele-specific segment copy number matrices, a pair C = (A, B) of
+Let us observe a pair C
+n ù m diploid segment copy number matrices, and a set F of fragments. For every fragment f À F we define a
+É f as follows:
+length-weighted copy number distance C * C
+⇡
+……⇠
+®
+É f =
+min®
+ L(j),
+(14)
+ai,j * di,j  + bi,j * di,j
+C * C
+d,d
+jÀf iÀ[n]
+{d,d ® }={ö
+c ,ú
+c}
+
+where L(j) is the total number of base pairs (i.e., length) of segment j. We further define a copy number distance
+É of diploid and allele-specific segment copy number matrices as follows:
+É F between pairs C and C
+C * C
+…
+É f.
+É F =
+C * C
+(15)
+C * C
+f ÀF
+
+We now extend the previous Problem 3 of finding a sample from the measured data to the case when the measured allele-specific segment copy numbers are noisy and (optionally) information from 3rd-generation sequencing
+experiments is available:
+É = (C,
+ö C)
+ú of nùm allele-specific segment copy number matrices, a set
+Problem 5. Given a diploid reference R, a pair C
+É
+F of fragments, a set AN of measured unlabeled novel adjacencies that satisfies (unlabeled) extremity-exclusivity constraint, and (optionally) a set U of groups of unlabeled novel adjacencies, find a proper sample s = (G1 , G2 , … , Gn )
+such that:
+®
+®
+1. for every adjacency a = {j , k } À A(s) either {j , k } À AÉ N or a À A(R);
+
+®
+2. for every adjacency a = {j , k } À AÉ N there exists a unique pair H, H ® À {A, B} of labels, such that
+®
+{jH , kH ® } À AN (s);
+
+3. for every adjacency group u À U , there exists (at least one) genome Gi À s such that AN (Gi ) „ H(u) = u;
+
+4. for every genome Gi À s the T (Gi ) ” T (R);
+
+É F is minimized.
+and the copy number distance Cs * C
+
+17
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+A reformulation of Problem 5 in terms of finding edge multiplicity functions on the edges of the corresponding
+DIAG is provided below:
+
+Problem 6. Given a DIAG G(R, AÉ N ) = (V , E), where a set AÉ N of unlabeled measured novel adjacencies satisfies
+(unlabeled) extremity-exclusivity constraint, a (optionally) set U of groups of unlabeled novel adjacencies, a pair
+É = (C,
+ö C)
+ú of n ù m allele-specific segment copy number matrices, and a set F of fragments, find edge multiplicities
+C
+functions 1 , 2 , … , n : E ô N such that:
+1. for every adjacency a À AÉ N we have hE
++ (a) = 1;
+
+2. for every i À [n] and every adjacency a = {j , j } À AÉ N ,
+
+i ({jA , jB })
+
+= 0;
+
+3. for every adjacency group u À U there exists (at least one) i À [n] such that
+
+≥
+
+E
+aÀu hi,+ (a)
+
+= u;
+
+4. for every pair a = {u, j h }, b = {(j + 1)t , v} À AÉ N of unlabeled novel adjacencies, such that {jAh , (j + 1t )A } À
+h } À hE (a) and b® = {(j + 1)t , v } À hE (b), where H, H ® , H ®® À {A, B};
+A(R), there exists a® = {uH , jH
+®
+®
++
++
+H® H
+
+5. for every i À [n] and every non-telomere vertex v À V ‰ T (R) the equality (9) holds;
+
+6. for every i À [n] and every telomere vertex v À T (R) ” V either the equality (9) or the inequality (10) hold;
+and such that for a pair C = (A , B ) of diploid segment copy number matrices (determined by values of edge
+É F is minimized.
+multiplicity functions 1 , 2 , … , n on segments edges ES ), the copy number distance C * C
+In the Supplement, we derive a mixed integer linear program (MILP) optimization problem that solves Problem 6.
+
+4.6
+
+Deriving extremities and novel adjacencies from data
+
+Segment copy number inference methods often define a fixed-size partition of the reference genome into segments and
+thus constrain the coordinates of segments extremities. Every measured unlabeled novel adjacency determines a pair
+{(chr1 , coord1 , str1 ), (chr2 , coord2 , str2 )}, where chri determines the chromosome of origin the genomic
+loci i, coordi determined the coordinate of the genomic loci i on the respective chromosome chri , and stri À
+{+, *} determined the strand of origin of the genomic loci i.
+Extremities of segments that are inferred by methods that measure clone- and allele-specific segment copy numbers
+and those involved in measured unlabeled novel adjacencies do not always align. Moreover, there is often a small
+uncertainty in the exact values of the coordinate coordi of the genomic loci i involved in a novel adjacencies.
+We first address the issue of refining the positions of extremities involved in reciprocal novel adjacencies. For
+every sample S we first observe all unlabeled novel adjacencies AÉ N measured from S and sort the positions involved
+in adjacencies from AÉ N on every chromosome (in descending order of the coord values). Then, using a sliding
+window approach, we update the coordinates for any consecutive pair pi , pj of positions which resembles a reciprocal
+signature: i.e., if the distance coordi * coordj  was less than 50 base pairs and stri ë strj , we update the values
+of the coordinates in positions pi and pj so that they have a coordinate distance of 1, with the position having a +
+strand appearing prior to the position having a * strand (Figure 7A).
+Then, for allele-specific segment copy number input (e.g., from Battenberg and HATCHet) we partition fragments, on which allele-specific copy number values are measured, into smaller segments such that extremities of
+obtained segments either correspond to the coordinates of extremities involved in the preprocessed novel adjacencies
+from AÉ N , or to the extremities of the original fragments (Figure 7B). Copy numbers on newly obtained segments are
+inherited from the values of the “parent” fragments.
+Lastly, in order to compute length-weighted segment copy number distances between RCK, ReMixT,
+Battenberg, and HATCHet inferences on the prostate cancer samples, we refined the fragments/segments on which
+the copy numbers were inferred as demonstrate in Figure S10).
+
+Acknowledgments
+This work is supported by a US National Institutes of Health (NIH) grants R01HG007069 and U24CA211000 and US
+National Science Foundation (NSF) CAREER Award (CCF-1053753) to BJR.
+
+18
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Preprocesssing (NAs & fragments to segments)
+
+A)
+
+p2 = (a, 107, -) p3 = (a, 200, +)
+p5 = (a, 600, -)
+p6 = (a, 800, +)
+
+p4 = (a, 500, +)
+
+p1 = (a, 100, +)
+
+a
+
+p7 = (a, 1000, -)
+
+Derivation of Novel Adjacencies
+
+p’2 = (a, 104, -) p3 = (a, 200, +)
+
+a
+
+p5 = (a, 600, -)
+p6 = (a, 800, +)
+
+p4 = (a, 500, +)
+
+p’1 = (a, 103, +)
+
+p7 = (a, 1000, -)
+
+reciprocal location
+
+B)
+F
+a
+
+f1
+
+p’1
+
+p’2
+
+p3
+
+f2
+
+p4
+
+p5
+
+f3
+
+f4
+
+p6
+
+p7
+
+Partitioning of allele-specific
+fragments into segments
+
+S
+a
+
+s1
+
+p’1
+
+p’2
+
+s2
+
+p3
+
+s3
+
+p4
+
+s4
+
+p5
+
+s5
+
+s6
+
+p6
+
+s7
+
+p7
+
+s8
+
+Figure 7: Derivation of the input for ReMixT and RCK. A) An example of derivation of coordinates that resemble
+a reciprocal signature in measured unlabeled novel adjacencies on a chromosome a. Positions p1 = (a, 100, +) and
+p2 = (a, 107, *) have reciprocal signature (i.e., coord1 * coord2  = 7 < 50 and str1 = * ë str2 = +).
+Updated pair {p®1 = (a, 103, +), p®2 = (a, 104, *)} of coordinates constitutes a reciprocal location. B) An example
+of partitioning of a set F = {f1 , f2 , f3 , f4 } of fragments from allele-specific copy number calls into a set S =
+Preprocesssing
+Extremities (multiple
+of segmentssegmentations)
+in S correspond to either preprocessed coordinates
+{s1 , s2 , s3 , s4 , s5 , s6 , s7 , s8 } of segments.
+h
+t
+®
+®
+of unlabeled
+novel adjacencies (e.g., s1 = p1 , s2 = p2 ) or to the extremities of fragments in F (e.g. sh3 = f2h , st4 = f3t ).
+F1
+F2
+F3
+F4
+a
+Refining multiple
+segmentations
+
+a
+
+S
+
+s1
+
+s2
+
+s3
+
+s4
+19
+
+s5
+
+s6
+
+s7
+
+s8
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+Code availability
+RCK is available on GitHub at https://github.com/raphael-group/RCK.
+
+20
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+References
+[1] Max A Alekseyev and Pavel A Pevzner. Breakpoint graphs and ancestral genome reconstructions. Genome
+Research, 19(5):943–957, 5 2009.
+[2] Samuel Aparicio and Carlos Caldas. The Implications of Clonal Genome Evolution for Cancer Medicine. New
+England Journal of Medicine, 368(9):842–851, 2 2013.
+[3] Pavel Avdeyev, Shuai Jiang, Sergey Aganezov, Fei Hu, and Max A. Alekseyev. Reconstruction of Ancestral
+Genomes in Presence of Gene Gain and Loss. Journal of Computational Biology, 23(3):150–164, 3 2016.
+[4] Sylvan C. Baca, Davide Prandi, Michael S. Lawrence, Juan Miguel Mosquera, Alessandro Romanel, Yotam
+Drier, Kyung Park, Naoki Kitabayashi, Theresa Y. MacDonald, Mahmoud Ghandi, Eliezer Van Allen, Gregory V. Kryukov, Andrea Sboner, Jean Philippe Theurillat, T. David Soong, Elizabeth Nickerson, Daniel Auclair,
+Ashutosh Tewari, Himisha Beltran, Robert C. Onofrio, Gunther Boysen, Candace Guiducci, Christopher E. Barbieri, Kristian Cibulskis, Andrey Sivachenko, Scott L. Carter, Gordon Saksena, Douglas Voet, Alex H. Ramos,
+Wendy Winckler, Michelle Cipicchio, Kristin Ardlie, Philip W. Kantoff, Michael F. Berger, Stacey B. Gabriel,
+Todd R. Golub, Matthew Meyerson, Eric S. Lander, Olivier Elemento, Gad Getz, Francesca Demichelis, Mark A.
+Rubin, and Levi A. Garraway. Punctuated evolution of prostate cancer genomes. Cell, 153(3):666–677, 4 2013.
+[5] Jonathan R Belyeu, Thomas J Nicholas, Brent S Pedersen, Thomas A Sasani, James M Havrilla, Stephanie N
+Kravitz, Megan E Conway, Brian K Lohman, Aaron R Quinlan, and Ryan M Layer. SV-plaudit: A cloud-based
+framework for manually curating thousands of structural variants. GigaScience, 7(7), 7 2018.
+[6] Michael F. Berger, Michael S. Lawrence, Francesca Demichelis, Yotam Drier, Kristian Cibulskis, Andrey Y.
+Sivachenko, Andrea Sboner, Raquel Esgueva, Dorothee Pflueger, Carrie Sougnez, Robert Onofrio, Scott L.
+Carter, Kyung Park, Lukas Habegger, Lauren Ambrogio, Timothy Fennell, Melissa Parkin, Gordon Saksena,
+Douglas Voet, Alex H. Ramos, Trevor J. Pugh, Jane Wilkinson, Sheila Fisher, Wendy Winckler, Scott Mahan,
+Kristin Ardlie, Jennifer Baldwin, Jonathan W. Simons, Naoki Kitabayashi, Theresa Y. MacDonald, Philip W.
+Kantoff, Lynda Chin, Stacey B. Gabriel, Mark B. Gerstein, Todd R. Golub, Matthew Meyerson, Ashutosh Tewari,
+Eric S. Lander, Gad Getz, Mark A. Rubin, and Levi A. Garraway. The genomic complexity of primary human
+prostate cancer. Nature, 470(7333):214–220, 2 2011.
+[7] Valentina Boeva, Tatiana Popova, Kevin Bleakley, Pierre Chiche, Julie Cappo, Gudrun Schleiermacher, Isabelle
+Janoueix-Lerosey, Olivier Delattre, and Emmanuel Barillot. Control-FREEC: a tool for assessing copy number
+and allelic content using next-generation sequencing data. Bioinformatics, 28(3):423–425, 2 2012.
+[8] S M Carroll, M L DeRose, P Gaudray, C M Moore, D R Needham-Vandevanter, D D Von Hoff, and G M Wahl.
+Double minute chromosomes can be produced from precursors derived from a chromosomal deletion. Molecular
+and cellular biology, 8(4):1525–33, 4 1988.
+[9] Scott L Carter, Kristian Cibulskis, Elena Helman, Aaron McKenna, Hui Shen, Travis Zack, Peter W Laird,
+Robert C Onofrio, Wendy Winckler, Barbara A Weir, Rameen Beroukhim, David Pellman, Douglas A Levine,
+Eric S Lander, Matthew Meyerson, and Gad Getz. Absolute quantification of somatic DNA alterations in human
+cancer. Nature biotechnology, 30(5):413–21, 5 2012.
+[10] Xiaoyu Chen, Ole Schulz-Trieglaff, Richard Shaw, Bret Barnes, Felix Schlesinger, Morten Källberg, Anthony J.
+Cox, Semyon Kruglyak, and Christopher T. Saunders. Manta: rapid detection of structural variants and indels
+for germline and cancer sequencing applications. Bioinformatics, 32(8):1220–1222, 4 2016.
+[11] Marek Cmero, Cheng Soon Ong, Ke Yuan, Jan Schröder, Kangbo Mo, PCAWG Evolution Group, Heterogeneity
+Working, Niall M. Corcoran, Anthony Troy Papenfuss, Christopher M. Hovens, Florian Markowetz, and Geoff
+Macintyre. SVclone: inferring structural variant cancer cell fraction. bioRxiv, page 172486, 8 2017.
+[12] Misko Dzamba, Arun K Ramani, Pawel Buczkowicz, Yue Jiang, Man Yu, Cynthia Hawkins, and Michael Brudno.
+Identification of complex genomic rearrangements in cancers using CouGaR. Genome Research, 27(1):107–117,
+1 2017.
+
+21
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+[13] Misko Dzamba, Arun K. Ramani, Pawel Buczkowicz, Yue Jiang, Man Yu, Cynthia Hawkins, and Michael
+Brudno. Identification of complex genomic rearrangements in cancers using CouGaR. Genome Research, 27(1),
+2017.
+[14] Jesse Eaton, Jingyi Wang, and Russell Schwartz. Deconvolution and phylogeny inference of structural variations
+in tumor genomic samples. bioRxiv, page 257014, 1 2018.
+[15] Rami Eitan and Ron Shamir. Reconstructing cancer karyotypes from short read data: The half empty and half
+full glass. BMC Bioinformatics, 2017.
+[16] Rebecca Elyanow, Hsin-Ta Wu, and Benjamin J Raphael. Identifying structural variants using linked-read sequencing data. Bioinformatics, 34(2):353–360, 1 2018.
+[17] Adam C English, William J Salerno, and Jeffrey G Reid. PBHoney: identifying genomic variants via long-read
+discordance and interrupted mapping. BMC Bioinformatics, 15(1):180, 6 2014.
+[18] Yihui Fan, Renfang Mao, Hongpei Lv, Jie Xu, Lei Yan, Yanhong Liu, Meng Shi, Guohua Ji, Yang Yu, Jing Bai,
+Yan Jin, and Songbin Fu. Frequency of double minute chromosomes and combined cytogenetic abnormalities
+and their characteristics. Journal of Applied Genetics, 52(1):53–59, 2 2011.
+[19] Andrej Fischer, Ignacio Vázquez-García, ChristopherÂăJ.R. Illingworth, and Ville Mustonen. High-Definition
+Reconstruction of Clonal Composition in Cancer. Cell Reports, 7(5):1740–1752, 6 2014.
+[20] LeviÂăA. Garraway and EricÂăS. Lander. Lessons from the Cancer Genome. Cell, 153(1):17–37, 3 2013.
+[21] DaleÂăW. Garsed, OwenÂăJ. Marshall, VincentÂăD.A. Corbin, Arthur Hsu, Leon DiÂăStefano, Jan Schröder,
+Jason Li, Zhi-Ping Feng, BoÂăW. Kim, Mark Kowarsky, Ben Lansdell, Ross Brookwell, Ola Myklebost, Leonardo Meza-Zepeda, AndrewÂăJ. Holloway, Florence Pedeutour, K.H.ÂăAndy Choo, MichaelÂăA.
+Damore, AndrewÂăJ. Deans, AnthonyÂăT. Papenfuss, and DavidÂăM. Thomas. The Architecture and Evolution of Cancer Neochromosomes. Cancer Cell, 26(5):653–667, 11 2014.
+[22] Chris D. Greenman, Erin D. Pleasance, Scott Newman, Fengtang Yang, Beiyuan Fu, Serena Nik-Zainal, David
+Jones, King Wai Lau, Nigel Carter, Paul A. W. Edwards, P. Andrew Futreal, Michael R. Stratton, and Peter J.
+Campbell. Estimation of rearrangement phylogeny for cancer genomes. Genome Research, 22(2):346–361, 2
+2012.
+[23] Gunes Gundem, Peter Van Loo, Barbara Kremeyer, Ludmil B. Alexandrov, Jose M. C. Tubio, Elli Papaemmanuil,
+Daniel S. Brewer, Heini M. L. Kallio, Gunilla Högnäs, Matti Annala, Kati Kivinummi, Victoria Goody, Calli
+Latimer, Sarah O’Meara, Kevin J. Dawson, William Isaacs, Michael R. Emmert-Buck, Matti Nykter, Christopher
+Foster, Zsofia Kote-Jarai, Douglas Easton, Hayley C. Whitaker, David E. Neal, Colin S. Cooper, Rosalind A.
+Eeles, Tapio Visakorpi, Peter J. Campbell, Ultan McDermott, David C. Wedge, G. Steven Bova, and G Steven
+Bova. The evolutionary history of lethal metastatic prostate cancer. Nature, 520(7547):353–357, 4 2015.
+[24] Gavin Ha, Andrew Roth, Jaswinder Khattra, Julie Ho, Damian Yap, Leah M Prentice, Nataliya Melnyk, Andrew
+McPherson, Ali Bashashati, Emma Laks, Justina Biele, Jiarui Ding, Alan Le, Jamie Rosner, Karey Shumansky,
+Marco A Marra, C Blake Gilks, David G Huntsman, Jessica N McAlpine, Samuel Aparicio, and Sohrab P Shah.
+TITAN: inference of copy number architectures in clonal cell populations from tumor whole-genome sequence
+data. Genome research, 24(11):1881–93, 11 2014.
+[25] J. Hicks, A. Krasnitz, B. Lakshmi, N. E. Navin, M. Riggs, E. Leibu, D. Esposito, J. Alexander, J. Troge, V. Grubor, S. Yoon, M. Wigler, K. Ye, A.-L. Borresen-Dale, B. Naume, E. Schlicting, L. Norton, T. Hagerstrom,
+L. Skoog, G. Auer, S. Maner, P. Lundin, and A. Zetterberg. Novel patterns of genome rearrangement and their
+association with survival in breast cancer. Genome Research, 16(12):1465–1479, 10 2006.
+[26] Daniela Hirsch, Ralf Kemmerling, Sean Davis, Jordi Camps, Paul S Meltzer, Thomas Ried, and Timo Gaiser.
+Chromothripsis and focal copy number alterations determine poor outcome in malignant melanoma. Cancer
+research, 73(5):1454–60, 3 2013.
+
+22
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+[27] John Huddleston, Mark J P Chaisson, Karyn Meltz Steinberg, Wes Warren, Kendra Hoekzema, David Gordon,
+Tina A Graves-Lindsay, Katherine M Munson, Zev N Kronenberg, Laura Vives, Paul Peluso, Matthew Boitano,
+Chen-Shin Chin, Jonas Korlach, Richard K Wilson, and Evan E Eichler. Discovery and genotyping of structural
+variation from long-read haploid genome sequence data. Genome research, 27(5):677–685, 2017.
+[28] Daniel C. Koboldt, Ken Chen, Todd Wylie, David E. Larson, Michael D. McLellan, Elaine R. Mardis, George M.
+Weinstock, Richard K. Wilson, and Li Ding. VarScan: variant detection in massively parallel sequencing of
+individual and pooled samples. Bioinformatics, 25(17):2283–2285, 9 2009.
+[29] Anton Kotzig. Moves Without Forbidden Transitions in a Graph. Matematický časopis, 18(1):76–80, 1968.
+[30] Ryan M Layer, Colby Chiang, Aaron R Quinlan, and Ira M Hall. LUMPY: a probabilistic framework for structural variant discovery. Genome Biology, 15(6):R84, 6 2014.
+[31] Heng Li, Bob Handsaker, Alec Wysoker, Tim Fennell, Jue Ruan, Nils Homer, Gabor Marth, Goncalo Abecasis,
+and Richard Durbin. The Sequence Alignment/Map format and SAMtools. Bioinformatics, 25(16):2078–2079,
+8 2009.
+[32] Yang Li, Shiguo Zhou, David C. Schwartz, and Jian Ma. Allele-Specific Quantification of Structural Variations
+in Cancer Genomes. Cell Systems, 3(1):21–34, 7 2016.
+[33] Gloria Lim, Jana Karaskova, Ben Beheshti, Bisera Vukovic, Jane Bayani, Shamini Selvarajah, Spencer K. Watson, Wan L. Lam, Maria Zielenska, and Jeremy A. Squire. An integrated mBAND and submegabase resolution
+tiling set (SMRT) CGH array analysis of focal amplification, microdeletions, and ladder structures consistent
+with breakage-fusion-bridge cycle events in osteosarcoma. Genes, Chromosomes and Cancer, 42(4):392–403, 4
+2005.
+[34] Nicholas McGranahan and Charles Swanton. Biological and therapeutic impact of intratumor heterogeneity in
+cancer evolution. Cancer cell, 27(1):15–26, 1 2015.
+[35] Andrew W. McPherson, Andrew Roth, Gavin Ha, Cedric Chauve, Adi Steif, Camila P. E. de Souza, Peter Eirew,
+Alexandre Bouchard-Côté, Sam Aparicio, S Cenk Sahinalp, and Sohrab P Shah. ReMixT: clone-specific genomic
+structure estimation in cancer. Genome Biology, 18(1):140, 2017.
+[36] Paul Medvedev, Marc Fiume, Misko Dzamba, Tim Smith, and Michael Brudno. Detecting copy number variation
+with mated short reads. Genome Research, 20(11):1613–1622, 11 2010.
+[37] Michael L. Metzker. Sequencing technologies âĂŤ the next generation. Nature Reviews Genetics, 11(1):31–46,
+1 2010.
+[38] Matthew A. Myers, Gryte Satas, and Benjamin J. Raphael. Inferring tumor evolution from longitudinal samples.
+bioRxiv, page 526814, 1 2019.
+[39] Maria Nattestad, Sara Goodwin, Karen Ng, Timour Baslan, Fritz Sedlazeck, Philipp Resheneder, Tyler Garvin,
+Han Fang, James Gurtowski, Elizabeth Hutton, Elizabeth Tseng, Jason Chin, Timothy Beck, Yogi Sundaravadanam, Melissa Kramer, Eric Antoniou, John McPherson, James Hicks, William Richard McCombie, and
+Michael C. Schatz. Complex rearrangements and oncogene amplifications revealed by long-read DNA and RNA
+sequencing of a highly rearranged cancer cell line. bioRxiv, pages 1–12, 2017.
+[40] Serena Nik-Zainal, Peter Van Loo, David C Wedge, Ludmil B Alexandrov, Christopher D Greenman, King Wai
+Lau, Keiran Raine, David Jones, John Marshall, Manasa Ramakrishna, Adam Shlien, Susanna L Cooke, Jonathan
+Hinton, Andrew Menzies, Lucy A Stebbings, Catherine Leroy, Mingming Jia, Richard Rance, Laura J Mudie,
+Stephen J Gamble, Philip J Stephens, Stuart McLaren, Patrick S Tarpey, Elli Papaemmanuil, Helen R Davies, Ignacio Varela, David J McBride, Graham R Bignell, Kenric Leung, Adam P Butler, Jon W Teague, Sancha Martin,
+Goran Jönsson, Odette Mariani, Sandrine Boyault, Penelope Miron, Aquila Fatima, Anita Langerød, Samuel A
+J R Aparicio, Andrew Tutt, Anieta M Sieuwerts, ÃĚke Borg, Gilles Thomas, Anne Vincent Salomon, Andrea L
+Richardson, Anne-Lise Børresen-Dale, P Andrew Futreal, Michael R Stratton, Peter J Campbell, and Breast
+Cancer Working Group of the International Cancer Genome Breast Cancer Working Group of the International
+Cancer Genome Consortium. The life history of 21 breast cancers. Cell, 149(5):994–1007, 5 2012.
+23
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+[41] Layla Oesper, Simone Dantas, and Benjamin J Raphael. Identifying simultaneous rearrangements in cancer
+genomes. Bioinformatics (Oxford, England), 34(2):346, 11 2017.
+[42] Layla Oesper, Anna Ritz, Sarah J Aerni, Ryan Drebin, and Benjamin J Raphael. Reconstructing cancer genomes
+from paired-end sequencing data. BMC bioinformatics, 13 Suppl 6(Suppl 6):S10, 4 2012.
+[43] Layla Oesper, Gryte Satas, and Benjamin J. Raphael. Quantifying tumor heterogeneity in whole-genome and
+whole-exome sequencing data. Bioinformatics, 30(24):3532–3540, 12 2014.
+[44] Ann-Marie Patch, Elizabeth L. Christie, Dariush Etemadmoghadam, Dale W. Garsed, Joshy George, Sian Fereday, Katia Nones, Prue Cowin, Kathryn Alsop, Peter J. Bailey, Karin S. Kassahn, Felicity Newell, Michael C. J.
+Quinn, Stephen Kazakoff, Kelly Quek, Charlotte Wilhelm-Benartzi, Ed Curry, Huei San Leong, Anne Hamilton,
+Linda Mileshkin, George Au-Yeung, Catherine Kennedy, Jillian Hung, Yoke-Eng Chiew, Paul Harnett, Michael
+Friedlander, Michael Quinn, Jan Pyman, Stephen Cordner, Patricia OâĂŹBrien, Jodie Leditschke, Greg Young,
+Kate Strachan, Paul Waring, Walid Azar, Chris Mitchell, Nadia Traficante, Joy Hendley, Heather Thorne, Mark
+Shackleton, David K. Miller, Gisela Mir Arnau, Richard W. Tothill, Timothy P. Holloway, Timothy Semple, Ivon
+Harliwong, Craig Nourse, Ehsan Nourbakhsh, Suzanne Manning, Senel Idrisoglu, Timothy J. C. Bruxner, Angelika N. Christ, Barsha Poudel, Oliver Holmes, Matthew Anderson, Conrad Leonard, Andrew Lonie, Nathan Hall,
+Scott Wood, Darrin F. Taylor, Qinying Xu, J. Lynn Fink, Nick Waddell, Ronny Drapkin, Euan Stronach, Hani
+Gabra, Robert Brown, Andrea Jewell, Shivashankar H. Nagaraj, Emma Markham, Peter J. Wilson, Jason Ellul,
+Orla McNally, Maria A. Doyle, Ravikiran Vedururu, Collin Stewart, Ernst Lengyel, John V. Pearson, Nicola
+Waddell, Anna deFazio, Sean M. Grimmond, David D. L. Bowtell, and David D L Bowtell. WholeâĂŞgenome
+characterization of chemoresistant ovarian cancer. Nature, 521(7553):489–494, 5 2015.
+[45] P A Pevzner. DNA physical mapping and alternating Eulerian cycles in colored graphs. Algorithmica, 13(1):77–
+105, 2 1995.
+[46] Ashok Rajaraman and Jian Ma. Toward Recovering Allele-specific Cancer Genome Graphs. Journal of Computational Biology, page cmb.2018.0022, 4 2018.
+[47] Benjamin J Raphael, Jason R Dobson, Layla Oesper, and Fabio Vandin. Identifying driver mutations in sequenced
+cancer genomes: computational approaches to enable precision medicine. Genome Medicine, 6(1):5, 2014.
+[48] T. Rausch, T. Zichner, A. Schlattl, A. M. Stutz, V. Benes, and J. O. Korbel. DELLY: structural variant discovery
+by integrated paired-end and split-read analysis. Bioinformatics, 28(18):i333–i339, 9 2012.
+[49] Anna Ritz, Ali Bashir, Suzanne Sindi, David Hsu, Iman Hajirasouliha, and Benjamin J Raphael. Characterization
+of Structural variants with single molecule and hybrid sequencing approaches. Bioinformatics, 30(24):3458–
+3466, 12 2014.
+[50] Fritz J. Sedlazeck, Philipp Rescheneder, Moritz Smolka, Han Fang, Maria Nattestad, Arndt von Haeseler, and
+Michael C. Schatz. Accurate detection of complex structural variations using single-molecule sequencing. Nature
+Methods, 15(6):461–468, 6 2018.
+[51] Suzanne S Sindi, Selim Önal, Luke C Peng, Hsin-Ta Wu, and Benjamin J Raphael. An integrative probabilistic
+model for identification of structural variation in sequencing data. Genome Biology, 13(3):R22, 3 2012.
+[52] Noah Spies, Ziming Weng, Alex Bishara, Jennifer McDaniel, David Catoe, Justin M Zook, Marc Salit, Robert B
+West, Serafim Batzoglou, and Arend Sidow. Genome-wide reconstruction of complex structural variants using
+read clouds. Nature Methods, 14(9):915–920, 7 2017.
+[53] Philip J. Stephens, Chris D. Greenman, Beiyuan Fu, Fengtang Yang, Graham R. Bignell, Laura J. Mudie, Erin D.
+Pleasance, King Wai Lau, David Beare, Lucy A. Stebbings, Stuart McLaren, Meng-Lay Lin, David J. McBride,
+Ignacio Varela, Serena Nik-Zainal, Catherine Leroy, Mingming Jia, Andrew Menzies, Adam P. Butler, Jon W.
+Teague, Michael A. Quail, John Burton, Harold Swerdlow, Nigel P. Carter, Laura A. Morsberger, Christine
+Iacobuzio-Donahue, George A. Follows, Anthony R. Green, Adrienne M. Flanagan, Michael R. Stratton, P. Andrew Futreal, and Peter J. Campbell. Massive Genomic Rearrangement Acquired in a Single Catastrophic Event
+during Cancer Development. Cell, 144(1):27–40, 1 2011.
+24
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+[54] Michael R Stratton, Peter J Campbell, and P Andrew Futreal. The cancer genome. Nature, 458(7239):719–24, 4
+2009.
+[55] Peter H. Sudmant, Tobias Rausch, Eugene J. Gardner, Robert E. Handsaker, Alexej Abyzov, John Huddleston,
+Yan Zhang, Kai Ye, Goo Jun, Markus Hsi-Yang Fritz, Miriam K. Konkel, Ankit Malhotra, Adrian M. Stütz,
+Xinghua Shi, Francesco Paolo Casale, Jieming Chen, Fereydoun Hormozdiari, Gargi Dayama, Ken Chen, Maika
+Malig, Mark J. P. Chaisson, Klaudia Walter, Sascha Meiers, Seva Kashin, Erik Garrison, Adam Auton, Hugo
+Y. K. Lam, Xinmeng Jasmine Mu, Can Alkan, Danny Antaki, Taejeong Bae, Eliza Cerveira, Peter Chines,
+Zechen Chong, Laura Clarke, Elif Dal, Li Ding, Sarah Emery, Xian Fan, Madhusudan Gujral, Fatma Kahveci,
+Jeffrey M. Kidd, Yu Kong, Eric-Wubbo Lameijer, Shane McCarthy, Paul Flicek, Richard A. Gibbs, Gabor Marth,
+Christopher E. Mason, Androniki Menelaou, Donna M. Muzny, Bradley J. Nelson, Amina Noor, Nicholas F. Parrish, Matthew Pendleton, Andrew Quitadamo, Benjamin Raeder, Eric E. Schadt, Mallory Romanovitch, Andreas
+Schlattl, Robert Sebra, Andrey A. Shabalin, Andreas Untergasser, Jerilyn A. Walker, Min Wang, Fuli Yu, Chengsheng Zhang, Jing Zhang, Xiangqun Zheng-Bradley, Wanding Zhou, Thomas Zichner, Jonathan Sebat, Mark A.
+Batzer, Steven A. McCarroll, Ryan E. Mills, Mark B. Gerstein, Ali Bashir, Oliver Stegle, Scott E. Devine, Charles
+Lee, Evan E. Eichler, Jan O. Korbel, and Jan O Korbel. An integrated map of structural variation in 2,504 human
+genomes. Nature, 526(7571):75–81, 10 2015.
+[56] Kristen M. Turner, Viraj Deshpande, Doruk Beyter, Tomoyuki Koga, Jessica Rusert, Catherine Lee, Bin Li, Karen
+Arden, Bing Ren, David A. Nathanson, Harley I. Kornblum, Michael D. Taylor, Sharmeela Kaushal, Webster K.
+Cavenee, Robert Wechsler-Reya, Frank B. Furnari, Scott R. Vandenberg, P. Nagesh Rao, Geoffrey M. Wahl,
+Vineet Bafna, and Paul S. Mischel. Extrachromosomal oncogene amplification drives tumour evolution and
+genetic heterogeneity. Nature, 543(7643):122–125, 3 2017.
+[57] Peter Van Loo, Silje H Nordgard, Ole Christian Lingjærde, Hege G Russnes, Inga H Rye, Wei Sun, Victor J
+Weigman, Peter Marynen, Anders Zetterberg, BjÃÿrn Naume, Charles M Perou, Anne-Lise Børresen-Dale, and
+Vessela N Kristensen. Allele-specific copy number analysis of tumors. Proceedings of the National Academy of
+Sciences of the United States of America, 107(39):16910–5, 9 2010.
+[58] B. Vogelstein, N. Papadopoulos, V. E. Velculescu, S. Zhou, L. A. Diaz, and K. W. Kinzler. Cancer Genome
+Landscapes. Science, 339(6127):1546–1558, 3 2013.
+[59] D D Von Hoff, D R Needham-VanDevanter, J Yucel, B E Windle, and G M Wahl. Amplified human MYC oncogenes localized to replicating submicroscopic circular DNA molecules. Proceedings of the National Academy of
+Sciences of the United States of America, 85(13):4804–8, 7 1988.
+[60] Jeremiah A Wala, Pratiti Bandopadhayay, Noah F Greenwald, Ryan O’Rourke, Ted Sharpe, Chip Stewart, Steve
+Schumacher, Yilong Li, Joachim Weischenfeldt, Xiaotong Yao, Chad Nusbaum, Peter Campbell, Gad Getz,
+Matthew Meyerson, Cheng-Zhong Zhang, Marcin Imielinski, and Rameen Beroukhim. SvABA: genome-wide
+detection of structural variants and indels by local assembly. Genome research, 28(4):581–591, 4 2018.
+[61] Caleb Weinreb, Layla Oesper, and Benjamin J Raphael. Open adjacencies and k-breaks: detecting simultaneous
+rearrangements in cancer genomes. BMC Genomics, 15(Suppl 6):S4, 10 2014.
+[62] Simone Zaccaria, Mohammed El-Kebir, Gunnar W. Klau, and Benjamin J. Raphael. The copy-number tree mixture deconvolution problem and applications to multi-sample bulk sequencing tumor data. In Lecture Notes in
+Computer Science (including subseries Lecture Notes in Artificial Intelligence and Lecture Notes in Bioinformatics), volume 10229 LNCS, pages 318–335. Springer, Cham, 5 2017.
+[63] Simone Zaccaria and Benjamin J. Raphael. Accurate quantification of copy-number aberrations and wholegenome duplications in multi-sample tumor sequencing data. bioRxiv, page 496174, 12 2018.
+[64] Shay Zakov, Marcus Kinsella, and Vineet Bafna. An algorithmic approach for breakage-fusion-bridge detection in tumor genomes. Proceedings of the National Academy of Sciences of the United States of America,
+110(14):5546–51, 4 2013.
+[65] Daniel R Zerbino, Tracy Ballinger, Benedict Paten, Glenn Hickey, and David Haussler. Representing and decomposing genomic structural variants as balanced integer flows on sequence graphs. BMC Bioinformatics, 17:1–25,
+2013.
+25
+
+bioRxiv preprint doi: https://doi.org/10.1101/560839; this version posted February 25, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available
+under aCC-BY-NC-ND 4.0 International license.
+
+[66] Grace X Y Zheng, Billy T Lau, Michael Schnall-Levin, Mirna Jarosz, John M Bell, Christopher M Hindson, Sofia
+Kyriazopoulou-Panagiotopoulou, Donald A Masquelier, Landon Merrill, Jessica M Terry, Patrice A Mudivarti,
+Paul W Wyatt, Rajiv Bharadwaj, Anthony J Makarewicz, Yuan Li, Phillip Belgrader, Andrew D Price, Adam J
+Lowe, Patrick Marks, Gerard M Vurens, Paul Hardenbol, Luz Montesclaros, Melissa Luo, Lawrence Greenfield,
+Alexander Wong, David E Birch, Steven W Short, Keith P Bjornson, Pranav Patel, Erik S Hopmans, Christina
+Wood, Sukhvinder Kaur, Glenn K Lockwood, David Stafford, Joshua P Delaney, Indira Wu, Heather S Ordonez,
+Susan M Grimes, Stephanie Greer, Josephine Y Lee, Kamila Belhocine, Kristina M Giorda, William H Heaton,
+Geoffrey P McDermott, Zachary W Bent, Francesca Meschi, Nikola O Kondov, Ryan Wilson, Jorge A Bernate,
+Shawn Gauby, Alex Kindwall, Clara Bermejo, Adrian N Fehr, Adrian Chan, Serge Saxonov, Kevin D Ness,
+Benjamin J Hindson, and Hanlee P Ji. Haplotyping germline and cancer genomes with high-throughput linkedread sequencing. Nature Biotechnology, 34(3):303–311, 3 2016.
+
+26
+
+

@@ -63,6 +63,37 @@ class(med_open_data_results)
 write_csv(med_open_data_results, 'outputs/data/med_open_data_results.csv')
 
 
+
+
+
+#### Pre-pandemic data ####
+# See comments above for suggests. Need to keep processing in this step same as sampled COVID-19 pre-prints above.
+med_2019_text_sentences <- 
+  oddpub::pdf_load(here::here("outputs/control-data/text-medRxiv/")) # Requires closing backslash
+
+#### Identify open data markers ####
+med_2019_open_data_results <- 
+  oddpub::open_data_search(med_2019_text_sentences)
+
+# Join med_data_2019 to med_2019_open_data_results and save as med_2019_open_data_results
+# TODO: Double check join_id
+med_2019_open_data_results$join_id <- med_2019_open_data_results$article %>% str_remove(".txt") %>% str_replace_all("_", "/") %>% substr(start=2, stop=50)
+# med_data_2019$join_id <- str_sub(med_data_2019$doi, start = -19)
+med_2019_open_data_results <- left_join(med_data_2019, med_2019_open_data_results, by = c("doi" = "join_id"))
+
+# Reassign published values to 0 or 1 based on presence of publication
+med_2019_open_data_results$published[!is.na(med_2019_open_data_results$published)] <- 1
+med_2019_open_data_results$published[is.na(med_2019_open_data_results$published)] <- 0
+
+# Convert TRUE/FALSE in ODDPub output to 1/0
+med_2019_open_data_results$is_open_code <- as.integer(med_2019_open_data_results$is_open_code)
+med_2019_open_data_results$is_open_data <- as.integer(med_2019_open_data_results$is_open_data)
+
+# Save it 
+class(med_2019_open_data_results)
+write_csv(med_2019_open_data_results, 'outputs/control-data/med_2019_open_data_results.csv')
+
+
 #### Summary statistics ####
 # Read in data
 # TODO

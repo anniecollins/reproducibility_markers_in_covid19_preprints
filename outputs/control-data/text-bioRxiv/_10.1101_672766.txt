@@ -1,0 +1,994 @@
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+1
+2
+
+flexiMAP: A regression-based method for discovering differential
+
+3
+
+alternative polyadenylation events in standard RNA-seq data
+
+4
+
+Krzysztof J. Szkop1, David S. Moss1 and Irene Nobeli1*
+
+5
+6
+
+1
+
+7
+
+Birkbeck, Malet Street, London WC1E 7HX, UK
+
+Institute of Structural and Molecular Biology, Department of Biological Sciences,
+
+8
+9
+
+* To whom correspondence should be addressed.
+
+10
+
+11
+
+Abstract
+
+12
+
+Summary
+
+13
+
+We present flexiMAP (flexible Modeling of Alternative PolyAdenylation), a new
+
+14
+
+beta-regression-based method implemented in R, for discovering differential
+
+15
+
+alternative polyadenylation events in standard RNA-seq data. Importantly, flexiMAP
+
+16
+
+allows modeling of multiple known covariates that often confound the results of
+
+17
+
+RNA-seq data analysis. We show, using simulated data, that flexiMAP is very
+
+18
+
+specific and outperforms in sensitivity existing methods, especially at low fold
+
+19
+
+changes. In addition, the tests on simulated data reveal some hitherto unrecognised
+
+20
+
+caveats of existing methods.
+
+21
+
+Availability
+
+22
+
+The flexiMAP R package is available at:
+
+23
+
+https://github.com/kszkop/flexiMAP
+
+24
+
+Scripts and data to reproduce the analysis in this paper are available at:
+
+25
+
+https://doi.org/10.5281/zenodo.3238619
+
+26
+27
+
+Contact
+
+28
+
+Irene Nobeli, i.nobeli@bbk.ac.uk
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+29
+
+Introduction
+
+30
+
+Alternative polyadenylation (APA) is the selection of alternative cleavage and
+
+31
+
+polyadenylation sites during transcription of eukaryotic genes, resulting in isoforms
+
+32
+
+with distinct 3’ untranslated regions. APA has been shown to be prevalent in
+
+33
+
+mammalian transcripts and alternative isoforms are linked to different stages of
+
+34
+
+development, cell types and disease status (Elkon et al., 2013; Szkop et al., 2017).
+
+35
+
+APA events can be identified on a genome-wide scale using 3’ end-focused
+
+36
+
+sequencing or, more recently, long-read sequencing, but as these methods are still not
+
+37
+
+widely used and many legacy transcriptome surveys were carried out using standard
+
+38
+
+RNA-seq sequencing instead, it would be useful to have computational methods that
+
+39
+
+can identify differential APA in RNA-seq data. A few such methods exist already
+
+40
+
+(Xia et al., 2014; Grassi et al., 2016; Ha et al., 2018; Ye et al., 2018; Arefeen et al.,
+
+41
+
+2018) but they have caveats (Szkop and Nobeli, 2017). For example, all methods
+
+42
+
+must solve the problem of how to deal with biological replicates; some test the
+
+43
+
+replicates individually, losing the advantage of having replicates in the first place;
+
+44
+
+others, average values from replicates, effectively losing track of the within-group
+
+45
+
+variability. In designing a method for differential APA analysis, we considered the
+
+46
+
+following: a) the reconstruction and quantification of the individual isoforms is both
+
+47
+
+challenging and not strictly necessary for this task; b) the errors in modeling RNA-seq
+
+48
+
+read counts are neither normal nor Poisson-distributed; c) multiple covariates can
+
+49
+
+affect APA.
+
+50
+51
+
+Inspired by the use of Generalized Linear Models (GLMs) in differential gene
+
+52
+
+expression (Robinson et al., 2010; Love et al., 2014) we present here a regression-
+
+53
+
+based method and associated pipeline (flexible modeling of APA or flexiMAP) that
+
+54
+
+satisfactorily addresses the above requirements. In addition, we show, using simulated
+
+55
+
+data, that the method is both sensitive and specific across a range of fold changes and
+
+56
+
+numbers of samples and that its performance is superior to three alternatives (DaPars
+
+57
+
+(Xia et al., 2014), Roar (Grassi et al., 2016) and APAtrap (Ye et al., 2018)) in most
+
+58
+
+tests we carried out. The method is available as an R package from:
+
+59
+
+https://github.com/kszkop/flexiMAP
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+60
+
+Method Description
+
+61
+
+Our method can be applied to all pairs of polyadenylation sites in a gene, where one
+
+62
+
+site is considered “distal” (i.e. located furthest away from the end of the coding region)
+
+63
+
+and one is “proximal” (Supp. Fig. 1). The proximal site separates the 3 ‘UTR into
+
+64
+
+two regions: the “short” region, starting at the end of the coding region and ending at
+
+65
+
+the proximal site, and the “long” region starting at the proximal site and ending at the
+
+66
+
+end of the transcript (Supp. Fig. 1). Assuming the separation of samples into groups
+
+67
+
+based on the condition of interest, the question we want to answer is: given a total
+
+68
+
+number of reads falling in the 3’ UTR, is the proportion of reads falling in the long
+
+69
+
+region dependent on the sample group membership?
+
+70
+71
+
+We count RNA-seq reads falling in the “long” and “short” regions of the 3’ UTR
+
+72
+
+(Nlongij and Nshortij respectively), and define the ratio, R, for gene i in sample j as:
+𝑅!" = !
+
+73
+
+!
+
+long !"
+
+short !"
+
+!!long !"
+
+(1)
+
+74
+75
+
+Reads falling in the long region can only originate from transcripts using the distal
+
+76
+
+site, whereas reads falling in the short region may come from transcripts using either
+
+77
+
+the distal or the proximal site. The ratio Rij is the proportion of reads falling in the
+
+78
+
+long region and is thus strictly contained in the interval (0,1). We note that the
+
+79
+
+extreme value of zero is only encountered in the complete absence of a long isoform,
+
+80
+
+whereas values greater than 0.5 would be observed only in cases where the long
+
+81
+
+region is longer than the short region, or where strong 3’ biases in the read coverage
+
+82
+
+are observed.
+
+83
+84
+
+Our initial tests modeling APA events using logistic regression with quasi-binomial
+
+85
+
+error distribution (within the Generalised Linear Model framework) showed that this
+
+86
+
+approach was not sensitive enough for small numbers of samples or small fold
+
+87
+
+changes. Different link functions did not improve the results. To allow more
+
+88
+
+flexibility in modeling errors, we adopted instead a model where the response variable
+
+89
+
+is assumed to be beta-distributed. This beta-regression model was implemented using
+
+90
+
+the betareg package in R (Cribari-Neto and Zeileis, 2010). Results from the GLM
+
+91
+
+approach with a quasi-binomial error family are included below for comparison.
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+92
+93
+
+Finally, our method incorporates two filtering steps to improve accuracy, employing
+
+94
+
+TIN values (Wang et al., 2012) to filter on transcript integrity and removing
+
+95
+
+transcripts with too few reads mapping to the short region (see Supplemental Methods
+
+96
+
+for details).
+
+97
+
+Comparison to other methods using simulated data
+
+98
+
+We compared flexiMAP to three existing methods for APA analysis (DaPars (Xia et
+
+99
+
+al., 2014), Roar (Grassi et al., 2016) and APAtrap (Ye et al., 2018)) using simulated
+
+100
+
+data we produced with the polyester R package (Frazee et al., 2015) (see
+
+101
+
+Supplementary Methods for details). Our method is specific (none of the transcripts
+
+102
+
+with no APA events are predicted as having such events) and outperforms in
+
+103
+
+sensitivity DaPars and APAtrap up to a fold change of 4 (Fig. 1A, Supp. Fig. 2). For
+
+104
+
+larger fold changes, all methods appear to perform equally well. Surprisingly, the
+
+105
+
+application of post-detection filters recommended by the developers of both DaPars
+
+106
+
+and APAtrap appear to remove the majority of significant events across all fold
+
+107
+
+changes, which renders questionable the usefulness of these filters (Fig. 1A). Finally,
+
+108
+
+although Roar appears to be more sensitive than flexiMAP at small fold changes, in
+
+109
+
+reality it predicts all transcripts as having APA events, regardless of whether they do
+
+110
+
+or not, making its predictions unusable in practice (see also Supplementary Methods).
+
+111
+112
+
+All methods, including flexiMAP, were sensitive to the expression level of the
+
+113
+
+transcript tested for differential polyadenylation (Fig. 1B). APA events that were
+
+114
+
+missed originated in transcripts of lower overall expression but the beta-regression
+
+115
+
+approach displayed improved sensitivity.
+
+116
+117
+
+Unlike methods that average across samples from the same condition, the
+
+118
+
+performance of flexiMAP depends on the number of samples available in each group,
+
+119
+
+as expected for a method that needs to model the variance within each group (see
+
+120
+
+Supp. Fig. 3). However, flexiMAP is much more sensitive than the GLM-quasi-
+
+121
+
+binomial method at small sample sizes (<6), often encountered in RNA-seq datasets.
+
+122
+123
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+124
+
+Figure 1.
+
+125
+
+flexiMAP detects differential polyadenylation events with high specificity and
+
+126
+
+outperforms in sensitivity DaPars and APAtrap at small fold changes.
+
+●
+
+1.0
+
+●
+
+NM_003613
+●
+
+males
+
+●
+
+●●●
+
+●
+
+●
+●
+
+●
+
+1000
+
+Number of counts
+
+0.8
+0.6
+0.4
+
+True positive rate
+
+0.2
+
+0.4
+
+0.0
+
+0.2
+
+●
+
+females
+
+●
+
+500
+
+1.0
+
+1500
+
+●
+
+0.6
+
+0.00
+
+0.01
+
+0.02
+
+0.03
+
+0.04
+
+0.05
+
+0.0
+●
+
+40
+
+●
+●
+●
+
+●
+
+●
+
+●
+
+20
+
+●
+
+●
+
+●
+
+●
+●
+
+●
+●
+
+●
+
+●
+●
+
+●
+●
+
+●
+●
+
+●
+●
+
+●
+●
+
+0
+
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+
+100
+
+200
+
+300
+
+400
+
+500
+
+600
+
+700
+
+Number of simulated reads
+
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+
+●
+
+●
+
+●
+●
+
+Condition 1
+
+D
+
+flexiMAP: quasi−binomial
+flexiMAP: beta−regression
+dapars
+APAtrap
+
+●
+
+●●
+
+1.0
+
+60
+
+●
+
+●
+
+800
+
+900
+
+1000
+
+Condition 2
+
+200
+
+150
+
+100
+
+50
+
+0
+
+APAtrap
+
+0.8
+
+flexiMAP
+beta−regression
+
+100
+
+●
+●
+
+80
+
+0.6
+
+False positive rate
+
+B
+Percent of transcripts detected as significant
+
+0.4
+
+●●●
+
+●
+
+0
+
+0.2
+
+Number of false positives APA events
+(adjusted p−value <0.05)
+
+0.0
+
+●
+
+●●●
+
+False positive rate
+
+DaPars
+
+True positive rate
+
+C
+
+flexiMAP: beta−regression● flexiMAP: quasi−binomial
+DaPars ● APAtrap ● Roar
+DaPars with default filter● APAtrap with default filter
+
+0.8
+
+A
+
+●
+
+a) Receiver operating characteristic (ROC) curves representing the accuracy of detecting
+differential alternative polyadenylation events using flexiMAP, DaPars, APAtrap and Roar.
+Only transcripts where the polyadenylation site has been correctly predicted by DaPars and
+APAtrap are included in this plot. FlexiMAP clearly outperformed DaPars and APAtrap by
+perfect specificity and improved sensitivity. Although application of the PDUI post-hoc filter
+(DaPars) and PD filter (APAtrap) (in dark blue and dark red respectively) corrected the false
+positives problem of these methods, it did so at the cost of sensitivity. The Roar method
+essentially predicts every change to be significant so, unsurprisingly, its results do not differ
+from random guesses.
+b) Dependence of method sensitivity on the overall expression level of the transcript (only
+results for fold change=1.5 are shown). Transcripts with correctly predicted proximal sites
+whose APA events have been (correctly) identified as being significantly different between
+the two conditions show higher levels of expression across the whole 3’ UTR, whereas events
+that are missed originate in transcripts of lower overall expression. The beta-regression
+approach displays improved sensitivity, with the remaining methods showing the same
+overall trend but performing less well overall.
+c) Example from the imbalanced simulated dataset of a situation where a covariate of no
+interest (in this case, sex) affects the ratio of reads assigned to short and long isoforms. Male
+samples display much higher expression of the short region of transcript NM_003613
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+146
+147
+148
+149
+150
+151
+152
+153
+
+compared with female ones, regardless of the condition group samples belong to. In addition,
+the dataset is imbalanced, with more males present in condition 1 than condition 2. The mean
+expression for condition 1 is thus higher than the mean for condition 2, but the effect is due to
+the covariate sex, not the condition to which the samples belong to.
+d) DaPars and APAtrap report a large number of false positives for an imbalanced simulated
+dataset. In contrast, flexiMAP reports only one false positive in this case, highlighting its
+main advantage over alternative approaches.
+
+154
+
+The development of flexiMAP was primarily driven by the need to model multiple
+
+155
+
+known covariates in APA analysis. Indeed, flexiMAP successfully discriminates
+
+156
+
+between the effect of the condition of interest and that of an additional covariate in a
+
+157
+
+simple simulated scenario of imbalanced datasets, where APA originates from the sex
+
+158
+
+attribute of the samples rather than the condition of interest (Fig. 1C-D). Methods that
+
+159
+
+cannot account for multiple covariates misinterpret the origin of this variation,
+
+160
+
+resulting in increased false positive rates.
+
+161
+
+Conclusion
+
+162
+
+We presented here flexiMAP, a beta-regression-based method for detecting
+
+163
+
+alternative polyadenylation events in RNA-seq data, given a list of putative
+
+164
+
+polyadenylation sites. Our method is both sensitive and specific, even when small
+
+165
+
+numbers of samples are used, and has the distinct advantage of being able to model
+
+166
+
+contributions from known covariates that would otherwise confound the results of
+
+167
+
+APA analysis. flexiMAP compares favourably with existing alternatives in tests
+
+168
+
+involving simulated datasets. Importantly, these tests have highlighted some hitherto
+
+169
+
+overlooked caveats of existing methods.
+
+170
+
+Acknowledgements / Funding
+
+171
+
+This work was supported by grants from the Birkbeck / Wellcome Trust Institutional
+
+172
+
+Strategic Support Fund awarded to KJS and IN.
+
+173
+
+References
+
+174
+
+Arefeen,A. et al. (2018) TAPAS: tool for alternative polyadenylation site analysis.
+
+175
+176
+
+Bioinformatics, 34, 2521–2529.
+Cribari-Neto,F. and Zeileis,A. (2010) Beta Regression in R. J. Stat. Soft., 34, 1–24.
+
+bioRxiv preprint doi: https://doi.org/10.1101/672766; this version posted June 17, 2019. The copyright holder for this preprint (which was
+not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made
+available under aCC-BY-NC-ND 4.0 International license.
+
+177
+178
+179
+180
+181
+182
+
+Elkon,R. et al. (2013) Alternative cleavage and polyadenylation: extent,
+regulation and function. Nat. Rev. Genet., 14, 496–506.
+Frazee,A.C. et al. (2015) Polyester: simulating RNA-seq datasets with differential
+transcript expression. Bioinformatics, 31, 2778–2784.
+Grassi,E. et al. (2016) Roar: detecting alternative polyadenylation with standard
+mRNA sequencing libraries. BMC Bioinformatics, 17, 423.
+
+183
+
+Ha,K.C.H. et al. (2018) QAPA: a new method for the systematic analysis of
+
+184
+
+alternative polyadenylation from RNA-seq data. Genome Biol., 19, 45.
+
+185
+
+Love,M.I. et al. (2014) Moderated estimation of fold change and dispersion for
+
+186
+187
+
+RNA-seq data with DESeq2. Genome Biol., 15, 550.
+Robinson,M.D. et al. (2010) edgeR: a Bioconductor package for differential
+
+188
+
+expression analysis of digital gene expression data. Bioinformatics, 26, 139–
+
+189
+
+140.
+
+190
+
+Szkop,K.J. and Nobeli,I. (2017) Untranslated Parts of Genes Interpreted: Making
+
+191
+
+Heads or Tails of High-Throughput Transcriptomic Data via Computational
+
+192
+
+Methods: Computational methods to discover and quantify isoforms with
+
+193
+
+alternative untranslated regions. Bioessays, 39, 1700090.
+
+194
+
+Szkop,K.J. et al. (2017) Dysregulation of Alternative Poly-adenylation as a
+
+195
+
+Potential Player in Autism Spectrum Disorder. Frontiers in Molecular
+
+196
+
+Neuroscience, 10, 279.
+
+197
+198
+
+Wang,L. et al. (2012) RSeQC: quality control of RNA-seq experiments.
+Bioinformatics, 28, 2184–2185.
+
+199
+
+Xia,Z. et al. (2014) Dynamic analyses of alternative polyadenylation from RNA-
+
+200
+
+seq reveal a 3'-UTR landscape across seven tumour types. Nat Commun, 5,
+
+201
+
+5274.
+
+202
+203
+204
+205
+206
+
+Ye,C. et al. (2018) APAtrap: identification and quantification of alternative
+polyadenylation sites from RNA-seq data. Bioinformatics, 34, 1841–1849.
+
+

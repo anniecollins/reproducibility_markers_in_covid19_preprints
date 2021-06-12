@@ -1,0 +1,2766 @@
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Efficient estimation and applications of
+cross-validated genetic predictions.
+Joel Mefford,1 Danny Park,1 Zhili Zheng,2 Arthur Ko,3 Mika Ala-Korpela,4
+Markku Laakso,5 Päivi Pajukanta,3 Jian Yang,2 John Witte,6 Noah Zaitlen7
+1 School
+
+of Medicine, University of California - San Francisco, California, USA
+for Molecular Bioscience, University of Queensland, Australia
+3 Department of Human Genetics, University of California - Los Angeles, California, USA
+4 Systems Epidemiology, Baker Heart and Diabetes Institute, Melbourne, Victoria,
+Australia; Computational Medicine, Faculty of Medicine, University of Oulu and
+Biocenter Oulu, Oulu, Finland; NMR Metabolomics Laboratory, School of Pharmacy,
+University of Eastern Finland, Kuopio, Finland; Population Health Science, Bristol
+Medical School, University of Bristol, Bristol, UK; Medical Research Council Integrative
+Epidemiology Unit at the University of Bristol, Bristol, UK; Department of Epidemiology
+and Preventive Medicine, School of Public Health and Preventive Medicine, Faculty of
+Medicine, Nursing and Health Sciences, The Alfred Hospital, Monash University,
+Melbourne, Victoria, Australia
+5 School of Medicine, University of Eastern Finland, Kuopio, Finland
+6 Departments of Epidemiology and Biostatistics, and Urology, University of California San Francisco, California, USA
+7 Department of Neurology, University of California - Los Angeles, California, USA
+2 Institute
+
+ABSTRACT
+Large-scale cohorts with combined genetic and phenotypic data, coupled with methodological
+advances, have produced increasingly accurate genetic predictors of complex human phenotypes called polygenic risk scores (PRS). In addition to the potential translational impacts
+of identifying at-risk individuals, PRS are being utilized for a growing list of scientific applications including causal inference, identifying pleiotropy and genetic correlation, and powerful
+gene-based and mixed model association tests. Existing PRS approaches rely on external
+large-scale genetic cohorts that have also measured the phenotype of interest. They further
+require matching on ancestry and genotyping platform or imputation quality. In this work we
+present a novel reference-free method to produce PRS that does not rely on an external
+cohort. We show that naive implementations of reference-free PRS either result in substantial over-fitting or prohibitive increases in computational time. We show that our algorithm
+avoids both of these issues, and can produce informative in-sample PRS over any existing
+cohort without over-fitting. We then demonstrate several novel applications of reference-free
+PRS including detection of pleiotropy across 246 metabolic traits and efficient mixed-model
+association testing.
+
+Keywords: PRS, polygenic risk score, linear mixed model, PCA, population structure, cryptic
+relatedness, confounding, BLUP, cross-validation
+
+INTRODUCTION
+Individual genetic polymorphisms typically explain only a small proportion of the heritability,
+even for traits that are highly heritable [Nolte et al. (2017)]. Polygenic risk scores (PRS),
+aggregate the contributions of multiple genetic variants to a phenotype [Torkamani et al. (2018)].
+These scores can be calculated using routinely recorded genotypes [Torkamani et al. (2018);
+Nolte et al. (2017)], are strongly associated with heritable traits [Nolte et al. (2017)], and are
+1
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+independent of environmental exposures or other factors that are uncorrelated with germ line
+genetic variants. These properties have motivated a rapidly expanding list of applications from
+basic science (e.g. causal inference and Mendelian randomization [Burgess and Thompson
+(2013)], hierarchical disease models [Cortes et al. (2017)], and identification of pleiotropy
+[Krapohl et al. (2016)]) to translation (e.g. estimating disease risk [Khera et al. (2018); Maas
+et al. (2016)], identifying patients who are likely to respond well to a particular therapy [Natarajan
+et al. (2017)], or flagging subjects for modified screening [Seibert et al. (2018)]).
+Polygenic risk scores are calculated as a weighted sum of genotypes. In some applications all
+genotyped SNPs may be used, but often only a small set are given nonzero weight. A subset of
+SNPs selected to contribute to a PRS may be a genome-spanning-but-uncorrelated (LD-pruned)
+set or a set of SNPs with independent evidence of association with the phenotype of interest.
+Gene-specific polygenic risk scores are also generated using selected sets of SNPs within a
+region of the genome, such as a window around the coding region of a particular gene [Gusev
+et al. (2016); Gamazon et al. (2015)]. The weights on the SNPs included in a polygenic score
+are often derived from the marginal regression coefficients of an external GWAS [Dudbridge
+(2016); Wray et al. (2007)], but they may instead be based on predictive models using all SNPs.
+Joint predictive models include LMMs and their sparse extensions [Yang et al. (2011); Zhou
+et al. (2013); Vilhjálmsson et al. (2015)] and other regularized regression models such as the
+lasso or elastic net [Warren et al. (2014); Gusev et al. (2016); Gamazon et al. (2015); Rakitsch
+et al. (2012)]. The predictions from these joint analyses using genome wide variation are also
+approximated by post-processing of GWAS summary statistics [Vilhjálmsson et al. (2015);
+Gusev et al. (2016)].
+For these SNP weights to accurately reflect the SNPs’ joint association with the phenotype
+and to generate informative and interpretable polygenic risk scores, the reference data set must
+match the target data set in many ways: the populations must have similar ancestry; the trait
+of interest must be measured and in a similar way; and identical genotypes must be assayed or
+imputed. Further, the reference data must be large enough to accurately learn the PRS weights.
+An alternative approach is to use the studied data set to build a reference-free PS. This
+eliminates the need for an external reference data set with matched genotypes, phenotypes, and
+populations. However, as we show below, naive approaches can easily over-fit genetic effects.
+This over-fitting results in PRS correlated with non-genetic components of phenotype, that will
+induce bias or other errors in downstream applications. Cross-validation is one established
+approach to mitigate over-fitting, which in this context involves holding out and computing a
+polygenic score for each sample in turn. The main hurdle to this approach is computation time,
+as standard leave-one-out cross validation requires fitting the PRS model N times in a sample
+with N individuals.
+Here we report an efficient method to generate PRS by using the out-of-sample predictions
+from a cross-validated linear mixed model (LMM). Our approach generates leave-one-out
+(LOO) polygenic risk scores, which we call cvBLUPs, with computational complexity linear
+in sample size after a single LMM fit. In addition to eliminating the reliance on external
+data and guaranteeing the PRS are generated from a relevant population and phenotype, we
+describe several applications that are only feasible with cvBLUPs. We first demonstrate several
+desirable statistical properties of cvBLUPs and then consider applications including evidence
+of polygenicity across metabolic phenotypes, a novel formulation of mixed model association
+studies, and selection of relevant principal components for control of confounding by population
+structure. To facilitate their use, we have incorporated the calculation of cvBLUPs in the in the
+genetic analysis program GCTA [Yang et al. (2011)].
+
+2
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+METHODS
+We consider the continuous phenotype y measured on N individuals which depends on an
+N-by-M matrix of additively coded genotypes G, other covariates X, and random noise e:
+y = Xb + GbG + e
+
+(1)
+
+e ⇠ N 0, se2 IN
+For each subject i, the polygenic score PSi is calculated as in Equation 2:
+PRSi =
+
+Â
+
+SNP j2S
+
+gi j bbg, j .
+
+(2)
+
+where S is the set of SNPs in the polygenic model, gi j is the number of alleles corresponding to
+the SNP weights at SNP j carried by subject i, and bbg, j is the SNP weight. bbg, j is often chosen to
+be the estimated effect size of SNP j in an external GWAS.
+Our objective is to produce a leave-one-out cross-validated polygenic score (PRS) for each
+subject. We generate our PRS as a genetic prediction from a linear mixed model (LMM). LMMs
+are widely used for genetic prediction [Robinson et al. (1991)], heritability estimation [Yang et al.
+(2010); Kang et al. (2008, 2010); Lippert et al. (2011); Zhou and Stephens (2012)], and other
+polygenic analyses [Lee et al. (2012); Zhou and Stephens (2012); Kang et al. (2008); Lippert
+et al. (2011)]. The LMM (Equation 3) jointly models the contributions of all SNPs Z and other
+covariates X to the phenotype y. Following others [Yang et al. (2011)], we define Z by centering
+and scaling columns of G to have mean 0 and variance 1.
+y = Xb + Zb + e
+⌘
+⇣
+s2
+b ⇠ N 0, Mg IM
+
+(3)
+
+e ⇠ N 0, se2
+
+The key LMM parameters are the genetic variance sg2 and the noise variance var(e) = se2 .
+We estimate these by REML [Patterson and Thompson (1971); Kang et al. (2008); Yang et al.
+(2011)] or Hasman-Elston regression [Chen (2014)]. These variance estimates are then used to
+estimate b, the genetic effect sizes (i.e. weights), or Zb, the genetic predictions (i.e. BLUPs):
+b
+b =
+
+sbg2 T b 1
+M Z S (y
+b2
+s
+
+X bb),
+
+b 1 (y
+Zb
+b = Z Mg Z T S
+b 1 (y
+= sbg2 K S
+
+= H ỹ
+
+X bb)
+
+X bb)
+
+(4)
+
+(5)
+
+= ybBLUP
+
+where K is the genetic relatedness matrix (GRM) computed from the centered and scaled
+b=s
+bg2 K + sbe2 IN , where IN
+genotypes Z by K = M1 ZZ T . The estimated phenotypic covariance, S
+
+3
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+is the N-by-N identity matrix, decomposes the covariance to components due to shared genetics
+(Zb) and to noise (e).
+While the BLUPs in Zb
+b could be used as a polygenic score, we show below that this in general
+over-fits the noise (e) and is therefore inappropriate for most PRS applications. To address this
+problem, we propose to use leave-one-out (LOO) cross-validated BLUPs instead of ordinary
+BLUPs, which guarantees independence between genetic predictions and e. Unfortunately,
+standard LOO approaches will multiply computational time by a factor of N.
+We avoid this penalty by leveraging the fact that for linear models, where fitted values are
+a linear transformation of phenotypes, yb = H ỹ, the LOO prediction errors can be calculated
+from a single model fit [Hastie et al. (2009)]. BLUPs from LMMs fall in this category of
+b 1 to ỹ := (y X bb), i.e. the phenotype after removing
+linear predictors by applying H := sbg2 K S
+estimated fixed effects.
+In more detail, the LOO prediction errors are the differences between the LOO genetic
+predictions and the observed residual phenotypes after subtracting fixed effects, ei,loo = yi,loo ỹi .
+The residuals r are the difference between the BLUPs and the residual phenotypes ri = Zib
+b ỹi .
+For a linear model, these are related by a simple equation [Hastie et al. (2009)]:
+ei,loo =
+
+1
+
+ri
+Hi,i
+
+(6)
+
+where Hi,i is the i’th diagonal element of the matrix H. Intuitively this says that due to over-fitting,
+the in-sample residuals ri are deflated by (1 Hi,i ) relatively to their unbiased LOO counterparts.
+We can rearrange these expressions to calculate the LOO predictions, or cvBLUPs, given
+the standard BLUPs, the phenotype residuals ỹ = y X bb, and the diagonal elements of the H
+matrix:
+ybi,cvBLUP =
+
+ybi,BLUP Hi,i ỹi
+1 Hi,i
+
+(7)
+
+Because all of these elements are computed when fitting an LMM, cvBLUPs can be produced
+with no additional computational complexity.
+
+RESULTS
+Empirical confirmation of cross-validated predictions
+To examine the properties of the proposed cvBLUP formulation we conducted a set of simulations.
+We generated 1000 data sets with N = 1000 subjects under the model y = Xb + gbg + Zb + e.
+X consists of 5 normally distributed covariates and Xb jointly explain 20% of the phenotypic
+variance. g represents an additively coded SNP with allele frequency 0.5, and gbg contributes
+2% of the phenotypic variance. Z represents M = 1000 independent SNPs with minor allele
+frequencies drawn i.i.d. and uniformly from [0.05, 0.5]. Effect sizes b j are drawn i.i.d. from
+⌘
+⇣
+s2
+N 0, Mg with the genetic variance sg2 accounting for 39% of the phenotypic variance. The
+residual noise e ⇠ N 0, se2 also accounts for 39% of the phenotypic variance, giving a heritability h2 ⇡ 50%. For each simulated data set, we first estimate variance components and then
+compute BLUPs and cvBLUPs as described above.
+Figure 1 shows scatter plots for one simulation of non-genetic (e) and genetic factors (Zb)
+plotted against in-sample BLUPs (Left) and cvBLUPs (Right). As expected, the standard BLUPs
+are highly correlated with e but the cvBLUPs are not, a central required property of genetic
+4
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+predictors for most applications. In contrast, both BLUPs and cvBLUPs are highly correlated
+with the true Zb, emphasizing the subtlety in constructing valid polygenic risk scores.
+Table 1 shows the mean correlations of true simulated values with standard BLUPs and
+cvBLUPs. Again, standard BLUPs are clearly correlated with the noise term e due to over-fitting,
+but cvBLUPs are appropriately uncorrelated with e. Standard BLUPs, but not cvBLUPs, are
+also correlated with the unmodeled causal SNP. This type of correlation causes downstream
+problems for residual analyses, predictions, and causal inference. Importantly, the cvBLUPs are
+independent of all unmodeled effects as desired.
+y
+Xb
+Zb
+e
+Unmodeled Causal SNP
+Unmodeled Null SNP
+
+BLUP
+0.8241 (0.0013)
+0.0004 (0.0007)
+0.7884 (0.0005)
+0.4749 (0.0008)
+0.0840 (0.0010)
+0.0006 (0.0010)
+
+cvBLUP
+0.4058 (0.0013)
+0.0005 (0.0009)
+0.6212 (0.0008)
+0.0009 (0.0012)
+0.0009 (0.0010)
+0.0012 (0.0010)
+
+Table 1. Mean correlations (and standard errors) of BLUPs and cvBLUPs with each
+component of the additive simulation model, y = Xb + gbg + Zb + e. Statistically significant
+correlations (a = 0.05) in bold face.
+
+5
+
+3
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+p−value: 5.1e−54
+
+p−value: 0.17
+
+B
+
+3
+
+−3
+
+−2
+
+−1
+
+0
+
+1
+
+2
+
+Non−genetic factors ε
+
+A
+
+p−value: 1.5e−225
+
+p−value: 2.2e−105
+
+D
+
+1
+0
+−1
+−2
+−3
+
+Genetic factors Zb
+
+2
+
+C
+
+−2
+
+−1
+
+0
+
+BLUP
+
+1
+
+2
+
+−2
+
+−1
+
+0
+
+1
+
+2
+
+cvBLUP
+
+Figure 1. Correlations of genetic predictions, BLUP and cvBLUP, with true genetic factors Zb
+and independent environmental factors e in a simulation of a continuous phenotype with
+h2 ⇡ 50%, 1000 subjects, and 1000 independent SNPs having random effect sizes. BLUPs are
+correlated with e while cvBLUPs are not. Lines and p-values are from linear regression fits. R2
+values: A:0.21, B:0.0019, C:0.64, D:0.38.
+Genetic predictions and cross-trait predictions using cvBLUPs
+We next applied cvBLUP in an analysis of Finnish men from the METSIM cohort [Laakso et al.
+(2017)]. This cohort is comprised of 10197 men aged 45 to 73 at recruitment between 2005 and
+2010 in Kuopio, Finland. Blood serum samples were collected from each participant, and 228
+metabolites in the samples were quantified by NMR. In addition to the metabolites, biometric
+traits including height and weight, and epidemiological traits such as diagnoses or family history
+of diabetes and CHD were recorded for a total of 248 phenotypes. Continuous phenotypes were
+quantile normalized. All samples were genotyped at 665,478 SNPs on the Illumina OmniExpress
+chip. After removing subjects with missing rates above 5 percent and SNPs with missing rates
+above 5 percent, 10070 subjects and 609131 SNPs remain.
+We initially consider genetic predictions of the metabolic, biometric, and epidemiological
+traits in an unrelated subset of subjects (with genetic relatedness less than 0.05). Since the
+metabolic traits are expected to be affected by statins and by pharmaceutical interventions
+for diabetes, we exclude subjects with diabetes or who use statins from the initial analysis
+and calculation of cvBLUPs. There are no comparable data sets with the set of metabolic
+6
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+measurements available in the METSIM cohort, but cvBLUPs allow computationally efficient
+genetic predictions of all 246 phenotypes (excluding diabetes status and statin use). With the
+genetic prediction models learned in the restricted set of subjects, we extended predictions to the
+excluded subjects with standard BLUP effect size estimates (Equation 4). Thus, cvBLUPs allow
+analyses of reference-free genetic predictions in a subset of subjects that is restricted to avoid
+confounding by known environmental exposures (statins and responses to diagnoses of diabetes)
+or by family structure; and these genetic predictions may then be extended to subjects who are
+initially excluded to avoid confounding.
+We first estimated sg2 and se2 for each phenotype using linear mixed models [Yang et al.
+(2011)]. Overall, 198 of 246 phenotypes have statistically significant heritability at the 0.05
+significance level by Wald tests. The significant heritabilities range from 14.6 to 46.1 percent
+with a mean and standard deviation of 27.5 and 8.0 percent respectively. The 48 non-significant
+heritabilities range from 0 to 14.4 percent with a mean and standard deviation of 8.3 and
+4.3 percent respectively. We next used the method described above to compute leave-one-out
+polygenic risk scores (i.e. cvBLUPs). Figure 2 and Supplemental Table 12 show the correlation of
+the phenotypes (rows) with cvBLUPs (columns) for all 246 phenotypes grouped by hierarchical
+clustering [Kolde and Kolde (2018)] of rows and applying the same permutation to columns. The
+blue diagonal shows the expected positive correlation between a cvBLUP and its own phenotype
+with mean 0.065 and standard deviation 0.037. Focusing on the 198 traits with significant
+heritabilities the correlations of cvBLUP and phenotype have mean 0.078 and standard deviation
+0.027.
+The off-diagonal blue patches in the figure represent cvBLUPs that are positively correlated
+and predictive of different phenotypes, while red patches represent cvBLUPs that are predictive
+but negatively correlated with different phenotypes. The off-diagonal correlations show the
+widespread pleiotropy of genetic effects on metabolism with over 16203 off-diagonal cvBLUPphenotype associations at FDR=0.05 [Benjamini and Yekutieli (2001)]. Many cvBLUP-trait
+correlations are sign-consistent with the respective trait-trait correlations. For example, HDL and
+LDL cholesterol are well known be negatively correlated [Terry et al. (1989)], and our results
+demonstrate this is partially due to negative genetic pleiotropy. That is, we observe that SNPs
+associated with increased LDL are also associated with decreased HDL in aggregate (and vice
+versa).
+
+7
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+S_VLDL_TG_p
+XS_VLDL_TG_p
+Ile
+S_HDL_TG
+MUFA_FA
+XL_HDL_TG_p
+Gp
+Leu
+S_VLDL_PL
+S_VLDL_L
+S_VLDL_P
+M_VLDL_CE
+VLDL_C
+M_HDL_TG
+S_VLDL_FC
+XS_VLDL_TG
+XXL_VLDL_C
+XXL_VLDL_CE
+ApoB_ApoA1
+M_HDL_TG_p
+M_VLDL_C
+TG_PG
+VLDL_D
+XL_VLDL_TG
+XL_VLDL_L
+XL_VLDL_P
+XXL_VLDL_FC
+XXL_VLDL_PL
+XXL_VLDL_TG
+XXL_VLDL_L
+XXL_VLDL_P
+XL_VLDL_FC
+XL_VLDL_PL
+S_HDL_TG_p
+XL_VLDL_C
+XL_VLDL_CE
+L_VLDL_TG
+M_VLDL_TG
+VLDL_TG
+L_VLDL_FC
+L_VLDL_PL
+L_VLDL_L
+L_VLDL_P
+L_VLDL_C
+L_VLDL_CE
+M_VLDL_L
+M_VLDL_P
+M_VLDL_FC
+M_VLDL_PL
+S_VLDL_TG
+Serum_TG
+S_tottg
+L_LDL_CE
+L_LDL_C
+L_LDL_PL
+L_LDL_L
+L_LDL_P
+IDL_CE
+IDL_C
+IDL_L
+IDL_P
+FreeC
+EstC
+Serum_C
+M_LDL_TG
+L_LDL_TG
+LDL_TG
+M_LDL_L
+M_LDL_P
+S_LDL_L
+S_LDL_P
+M_LDL_C
+M_LDL_CE
+S_LDL_C
+S_LDL_CE
+S_LDL_FC
+LDL_C
+M_LDL_FC
+L_VLDL_PL_p
+L_LDL_FC
+IDL_FC
+IDL_PL
+SM
+TotPG
+PC
+TotCho
+L_VLDL_C_p
+L_VLDL_CE_p
+L_VLDL_FC_p
+XL_HDL_TG
+DHA
+FAw3
+XXL_VLDL_C_p
+XXL_VLDL_CE_p
+XS_VLDL_C
+XS_VLDL_CE
+XS_VLDL_FC
+XS_VLDL_PL
+IDL_TG_p
+S_LDL_TG_p
+M_HDL_PL_p
+IDL_CE_p
+XL_VLDL_CE_p
+AcAce
+Crea
+L_LDL_CE_p
+XL_HDL_FC_p
+HDL_TG
+L_HDL_TG_p
+MUFA
+SFA
+TotFA
+ApoB
+S_VLDL_CE
+Remnant_C
+S_VLDL_C
+XS_VLDL_L
+XS_VLDL_P
+S_ldlc
+S_totalc
+LA
+FAw6
+PUFA
+M_LDL_PL
+S_LDL_PL
+S_LDL_TG
+IDL_TG
+M_VLDL_FC_p
+S_HDL_PL
+S_HDL_FC
+S_HDL_L
+S_HDL_P
+Alb
+His
+Ace
+Gln
+XXL_VLDL_TG_p
+L_VLDL_TG_p
+SFA_FA
+bOHBut
+L_LDL_C_p
+M_LDL_CE_p
+GLTOL5_6
+Glc
+P_gl0
+IDL_C_p
+Pyr
+totalcw
+XXL_VLDL_FC_p
+XXL_VLDL_PL_p
+L_LDL_TG_p
+M_LDL_TG_p
+betabloc
+diuretic
+dm
+smoke
+statin
+Ala
+Cit
+Lac
+fmchd
+fmdm
+L_LDL_PL_p
+S_HDL_PL_p
+height
+M_LDL_PL_p
+S_LDL_PL_p
+M_VLDL_TG_p
+XL_HDL_C_p
+XL_HDL_CE_p
+L_HDL_PL_p
+Tyr
+XL_VLDL_TG_p
+waist
+weight
+BMI
+hip
+Glol
+P_ins0
+Val
+Phe
+WHR
+M_VLDL_C_p
+M_VLDL_CE_p
+LDL_D
+XL_VLDL_C_p
+UnSat
+DHA_FA
+FAw3_FA
+L_HDL_TG
+XL_HDL_PL_p
+XL_VLDL_FC_p
+XL_VLDL_PL_p
+XS_VLDL_PL_p
+S_HDL_C
+S_HDL_CE
+Gly
+S_HDL_C_p
+S_HDL_CE_p
+S_LDL_C_p
+M_LDL_C_p
+S_LDL_CE_p
+XS_VLDL_C_p
+XS_VLDL_CE_p
+S_HDL_FC_p
+M_LDL_FC_p
+S_LDL_FC_p
+LA_FA
+XS_VLDL_FC_p
+FAw6_FA
+PUFA_FA
+L_HDL_C_p
+L_HDL_CE_p
+S_VLDL_PL_p
+M_HDL_P
+M_HDL_L
+M_HDL_PL
+M_HDL_FC
+M_HDL_C
+M_HDL_CE
+L_LDL_FC_p
+IDL_PL_p
+M_HDL_C_p
+M_HDL_CE_p
+ApoA1
+L_HDL_FC_p
+HDL_D
+XL_HDL_PL
+XL_HDL_L
+XL_HDL_P
+XL_HDL_FC
+XL_HDL_C
+XL_HDL_CE
+HDL3_C
+S_VLDL_FC_p
+M_VLDL_PL_p
+S_VLDL_C_p
+S_VLDL_CE_p
+IDL_FC_p
+M_HDL_FC_p
+L_HDL_C
+L_HDL_CE
+L_HDL_PL
+L_HDL_FC
+L_HDL_L
+L_HDL_P
+S_hdlc
+HDL_C
+HDL2_C
+
+0.1
+0.05
+0
+−0.05
+−0.1
+
+HDL2_C
+HDL_C
+S_hdlc
+L_HDL_P
+L_HDL_L
+L_HDL_FC
+L_HDL_PL
+L_HDL_CE
+L_HDL_C
+M_HDL_FC_p
+IDL_FC_p
+S_VLDL_CE_p
+S_VLDL_C_p
+M_VLDL_PL_p
+S_VLDL_FC_p
+HDL3_C
+XL_HDL_CE
+XL_HDL_C
+XL_HDL_FC
+XL_HDL_P
+XL_HDL_L
+XL_HDL_PL
+HDL_D
+L_HDL_FC_p
+ApoA1
+M_HDL_CE_p
+M_HDL_C_p
+IDL_PL_p
+L_LDL_FC_p
+M_HDL_CE
+M_HDL_C
+M_HDL_FC
+M_HDL_PL
+M_HDL_L
+M_HDL_P
+S_VLDL_PL_p
+L_HDL_CE_p
+L_HDL_C_p
+PUFA_FA
+FAw6_FA
+XS_VLDL_FC_p
+LA_FA
+S_LDL_FC_p
+M_LDL_FC_p
+S_HDL_FC_p
+XS_VLDL_CE_p
+XS_VLDL_C_p
+S_LDL_CE_p
+M_LDL_C_p
+S_LDL_C_p
+S_HDL_CE_p
+S_HDL_C_p
+Gly
+S_HDL_CE
+S_HDL_C
+XS_VLDL_PL_p
+XL_VLDL_PL_p
+XL_VLDL_FC_p
+XL_HDL_PL_p
+L_HDL_TG
+FAw3_FA
+DHA_FA
+UnSat
+XL_VLDL_C_p
+LDL_D
+M_VLDL_CE_p
+M_VLDL_C_p
+WHR
+Phe
+Val
+P_ins0
+Glol
+hip
+BMI
+weight
+waist
+XL_VLDL_TG_p
+Tyr
+L_HDL_PL_p
+XL_HDL_CE_p
+XL_HDL_C_p
+M_VLDL_TG_p
+S_LDL_PL_p
+M_LDL_PL_p
+height
+S_HDL_PL_p
+L_LDL_PL_p
+fmdm
+fmchd
+Lac
+Cit
+Ala
+statin
+smoke
+dm
+diuretic
+betabloc
+M_LDL_TG_p
+L_LDL_TG_p
+XXL_VLDL_PL_p
+XXL_VLDL_FC_p
+totalcw
+Pyr
+IDL_C_p
+P_gl0
+Glc
+GLTOL5_6
+M_LDL_CE_p
+L_LDL_C_p
+bOHBut
+SFA_FA
+L_VLDL_TG_p
+XXL_VLDL_TG_p
+Gln
+Ace
+His
+Alb
+S_HDL_P
+S_HDL_L
+S_HDL_FC
+S_HDL_PL
+M_VLDL_FC_p
+IDL_TG
+S_LDL_TG
+S_LDL_PL
+M_LDL_PL
+PUFA
+FAw6
+LA
+S_totalc
+S_ldlc
+XS_VLDL_P
+XS_VLDL_L
+S_VLDL_C
+Remnant_C
+S_VLDL_CE
+ApoB
+TotFA
+SFA
+MUFA
+L_HDL_TG_p
+HDL_TG
+XL_HDL_FC_p
+L_LDL_CE_p
+Crea
+AcAce
+XL_VLDL_CE_p
+IDL_CE_p
+M_HDL_PL_p
+S_LDL_TG_p
+IDL_TG_p
+XS_VLDL_PL
+XS_VLDL_FC
+XS_VLDL_CE
+XS_VLDL_C
+XXL_VLDL_CE_p
+XXL_VLDL_C_p
+FAw3
+DHA
+XL_HDL_TG
+L_VLDL_FC_p
+L_VLDL_CE_p
+L_VLDL_C_p
+TotCho
+PC
+TotPG
+SM
+IDL_PL
+IDL_FC
+L_LDL_FC
+L_VLDL_PL_p
+M_LDL_FC
+LDL_C
+S_LDL_FC
+S_LDL_CE
+S_LDL_C
+M_LDL_CE
+M_LDL_C
+S_LDL_P
+S_LDL_L
+M_LDL_P
+M_LDL_L
+LDL_TG
+L_LDL_TG
+M_LDL_TG
+Serum_C
+EstC
+FreeC
+IDL_P
+IDL_L
+IDL_C
+IDL_CE
+L_LDL_P
+L_LDL_L
+L_LDL_PL
+L_LDL_C
+L_LDL_CE
+S_tottg
+Serum_TG
+S_VLDL_TG
+M_VLDL_PL
+M_VLDL_FC
+M_VLDL_P
+M_VLDL_L
+L_VLDL_CE
+L_VLDL_C
+L_VLDL_P
+L_VLDL_L
+L_VLDL_PL
+L_VLDL_FC
+VLDL_TG
+M_VLDL_TG
+L_VLDL_TG
+XL_VLDL_CE
+XL_VLDL_C
+S_HDL_TG_p
+XL_VLDL_PL
+XL_VLDL_FC
+XXL_VLDL_P
+XXL_VLDL_L
+XXL_VLDL_TG
+XXL_VLDL_PL
+XXL_VLDL_FC
+XL_VLDL_P
+XL_VLDL_L
+XL_VLDL_TG
+VLDL_D
+TG_PG
+M_VLDL_C
+M_HDL_TG_p
+ApoB_ApoA1
+XXL_VLDL_CE
+XXL_VLDL_C
+XS_VLDL_TG
+S_VLDL_FC
+M_HDL_TG
+VLDL_C
+M_VLDL_CE
+S_VLDL_P
+S_VLDL_L
+S_VLDL_PL
+Leu
+Gp
+XL_HDL_TG_p
+MUFA_FA
+S_HDL_TG
+Ile
+XS_VLDL_TG_p
+S_VLDL_TG_p
+
+Figure 2. Correlations of phenotypes (rows) and genetic predictions (cvBLUPs, columns)
+across 246 phenotypes. Many cvBLUPs are strongly correlated with additional phenotypes. A
+larger version of the figure and a table of the correlations are included in the supplementary
+materials
+cvBLUPs in association testing
+
+In addition to use in detection of pleiotropy, polygenic modelling is a widely used tool in
+association testing [Kang et al. (2008); Yang et al. (2014); Lippert et al. (2011); Zhou and
+Stephens (2012); Loh et al. (2015)], and we therefore consider cvBLUPs in this this context. We
+compare the relative performance of five groups of methods. First, unadjusted regression; second,
+principal component adjusted regression; third, standard linear mixed model (LMM) association
+tests; fourth, LMM residual based methods; and fifth, cvBLUP adjusted regression. Standard
+LMM-based methods use association tests where the covariance of the observations based on
+the genetic relatedness of the subjects is estimated and used to calculate effect estimates and
+test statistics by generalized least squares [Kang et al. (2008); Yang et al. (2014); Lippert et al.
+(2011); Zhou and Stephens (2012)]. The LMM residual-based methods perform association tests
+on the BLUP residualized phenotypes and possibly genotypes. Then, to try and account for the
+bias inherent in using the overfit BLUPs, they perform an adjustment step on the resulting test
+statistics and effect sizes. These methods were pioneered by GRAMMAR/GRAMMAR-g and
+include the recent BOLT and BOLT-INF methods [Aulchenko et al. (2007); Svishcheva et al.
+(2012); Loh et al. (2015)].
+The typical sources of confounding for associations with germ-line genetic markers are
+population structure, family structure, and batch effects in the data collection [Listgarten et al.
+8
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+(2010)]. Genetic principal components as adjustment covariates may suffice to control for
+confounding by population structure or batch effects but linear mixed models are often more
+effective at controlling these sources of confounding [Kang et al. (2010)], while also helping
+to control confounding by family structure and boosting power to detect true associations over
+standard fixed-effect regression models [Yang et al. (2014)]. These benefits of linear mixed
+models come at the expense of an increased computational burden over standard linear regression.
+In genome wide association studies the statistical significance of each variant g j is tested
+individually. Here, the SNP is jointly analyzed with covariates X and the contributions of
+unmodeled variants contribute to a larger error term h = Z ( j) b( j) + e.
+y = Xb + g j bg, j + h
+
+(8)
+
+Often a better estimate of the effect size for a particular SNP g j may be made by accounting
+for the contributions of the other variants to the phenotype y, and by blocking the effects
+of confounders of the associations of genotypes and the phenotype – by adjustment with an
+appropriate set of fixed effect covariates or other means [Zaitlen et al. (2012a,b); Yang et al.
+(2014)].
+Here we demonstrate the use of cvBLUPs as adjustment covariates in a linear regression
+model that efficiently captures some of the benefits of a standard mixed model association study.
+To compare the performance cvBLUP adjusted analyses to existing methods for association
+testing under a range of study scenarios, simulations were used. Methods compared were:
+unadjusted linear regression, PC adjusted linear regression, a standard LMM association test
+(GCTA), and BOLT association tests. BOLT results were collected both for the infinetissimal
+genetic model (BOLT-INF) and the sparse causal genetic model (BOLT-LMM). Association tests
+conducted with cvBLUP adjustment, GCTA, and BOLT were done with leave-one-chromosomeout schemes wherein the variance components, cvBLUPs, and phenotypic predictions and
+residuals (BOLT) were calculated using only SNPs that are on different chromosomes than the
+test-SNPs.
+In each simulation, data sets were generated with N = 2000 subjects under the model
+y = Xb + gbg + Zb + e. Here X consists of normally distributed covariates drawn to contribute
+i.i.d. noise to the phenotypes in the independent-subject simulation, but to be correlated with the
+subjects’ ancestral populations in the simulations with population structure and with family in
+the simulations with confounding by family structure. Xb was scaled to contribute 10% of the
+phenotypic variance. g represents a set of 5 additively coded causal SNPs with effect sizes bg set
+to a common fixed value of 0.25. A set of 5 null SNPs were also drawn but did not contribute to
+the phenotype y. Z represents M = 2000 independent SNPs modeled with random effect sizes.
+For simulations run under the infinitessimal genetic model, the random effects b j were drawn
+⇣
+⌘
+s2
+from N 0, Mg IM with the genetic variance sg2 accounting for 40% of the phenotypic variance.
+For the sparse non-infinitessimal model,⇣a fraction ⌘
+mc = 2% of the SNPs in Z were selected to be
+s2
+
+causal with effect sizes drawn from N 0, Mmg c IM The residual noise e ⇠ N 0, se2 accounts
+
+for 40% of the phenotypic variance, giving a heritability h2 ⇡ 50%. Effect estimates and test
+statistics produced by the various analysis methods are summarized for 1000 null SNPs and
+1000 causal SNPs.
+In Table 2, the results of analyzing data sets with independent subjects and an infinitessimal
+genetic architecture are shown. All methods produced unbiased effect estimates and well
+2
+calibrated tests under the null (cNull
+⇡ 1), but the cvBLUP and mixed-model based methods
+were more powerful – with greater average test statistics for the causal SNPs. The BOLT effect
+estimates were biased, with effect sizes deflated towards zero. This deflation of BOLT effect
+9
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+estimates is seen across the simulation scenarios, however we do not detect deflation of the
+BOLT effect estimates in the real-data analyses of the METSIM cohort data below, where there
+are much ratios of counts of SNPs to number of subjects. Bias in BOLT may be due to the
+empirical estimation of a deflation-correction factor for the residual based test based on the
+GRAMMAR-g adjusted residual analysis method Loh et al. (2015); Svishcheva et al. (2012).
+In analogous simulations with a sparse genetic model (Table 9, Supplement), BOLT-LMM is
+considerably more powerful because it explicitly models the sparse genetic architecture. When
+the true genetic contribution to the phenotype, Zb, (not including the test-SNPs) is included as a
+covariate in a linear regression association test of causal SNPs g, the power is greatly increased.
+In Table 3, the results of analyzing data sets with confounding by population structure are
+shown. Subjects were drawn from 5 distinct populations with pairwise Fst set to 0.03. Population
+specific allele frequencies were generated by the Balding-Nickels model [Balding and Nichols
+(1995)]. The component Xb in the generating model was drawn to be correlated with population,
+but X was not used in the analyses. In this scenario, unadjusted linear regression and linear
+regression with fewer than 4 principal components as adjustment covariates give inflated test
+2
+statistics and excessive false positives under the null, cNull
+> 1. Correcting for population
+structure by inclusion of 4 principal components, cvBLUP adjustment, or use of the mixed model
+2
+based methods gives well calibrated test statistics under the null, cNull
+⇡ 1. For causal test SNPs,
+cvBLUP and mixed model based methods give greater test statistics than PC-adjusted linear
+regression with 4 PCs, indicating greater power. Linear regression with adjustment with the true
+genetic effect Zb gives high power for detecting causal SNPs, but does not control for inflation of
+2
+test statistics at null SNPs due to population structure – cNull
+= 3.55 1. Covariate adjustment
+with cvBLUPs controls the confounding by population structure and improves the power as do
+the LMM based methods. These methods use all SNPs and detect the shifts in allele frequencies
+across populations when there is confounding by population structure.
+cvBLUPs correct for population structure because they are weighted combinations of ALL
+principal components, where weights are based on the the singular value corresponding to the
+principal component and on the strength of the association of the principal component with the
+outcome (see Supplement). Conceptually, cvBLUPs control for population structure as if all PCs
+were considered and the most relevant ones for the analysis were kept.
+In Table 4, the results of analyzing data sets with confounding by family structure are
+shown. Here the 2000 subjects in each simulation represented 200 families with 10 subjects
+each. Families were generated in pedigrees with four founders and six of their descendants,
+with descendants’ genotypes selected independently by drop-down from their parents. In the
+data generating model, there were covariate effects correlated with family membership, Xb but
+these covariates were not included in the analyses, creating confounding by family structure.
+In this scenario, unadjusted linear regression, and PC-adjusted linear regression have inflated
+2
+test statistics (cNull
+> 1) and correspondingly high false discovery rates. Standard linear mixed
+models (GCTA) control for the confounding by family structure, with accurate effect estimates
+2
+having
+bbg under the null and alternate, and barely inflated test statistics under the null – cNull
+mean and standard deviation 1.10 and 0.05 respectively. In this scenario, cvBLUP adjusted
+analyses and the results from BOLT have biased effect estimates under the alternative, and
+deflated (conservative) test statistics under the null. This suggests over-adjustment for family
+structure in both cvBLUP-adjusted analyses and BOLT.
+
+10
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Model
+LR
+LR + 4 PCs
+LR + cvBLUP
+LR + BLUP
+LMM
+BOLT-INF
+BOLT-LMM
+LR + true genetic effect
+
+mean(bg0 )
+-4.00E-04
+-5.00E-04
+-1.30E-03
+-1.00E-03
+-1.30E-03
+-1.30E-03
+-1.30E-03
+-1.00E-03
+
+se(bg0 )
+1.30E-03
+1.30E-03
+1.10E-03
+6.00E-04
+1.10E-03
+1.00E-03
+1.00E-03
+9.00E-04
+
+2 )
+mean(cNull
+0.99
+0.99
+1.00
+1.05
+1.00
+1.01
+1.00
+1.04
+
+2 )
+se(cNull
+0.05
+0.05
+0.05
+0.05
+0.05
+0.05
+0.05
+0.05
+
+mean(bg )
+0.250
+0.250
+0.249
+0.096
+0.249
+0.219
+0.219
+0.250
+
+se(bg )
+1.30E-03
+1.30E-03
+1.20E-03
+6.00E-04
+1.20E-03
+1.00E-03
+1.00E-03
+9.00E-04
+
+mean(c 2 )
+47.11
+46.97
+58.53
+36.63
+56.62
+56.13
+56.04
+96.28
+
+se(c 2 )
+0.66
+0.66
+0.81
+0.56
+0.76
+0.76
+0.75
+1.26
+
+Table 2. Simulations with infinitesimal genetic model, without population or family structure.
+Mean and standard errors for effect estimates and test statistics of association tests at 1000 Null
+2
+SNPs with true bg0 : bc
+g0 and cNull ; and at 1000 causal SNPs with an alternative hypothesis of
+true bg = 0.25: bbg and c 2
+
+Model
+LR
+LR + 1 PC
+LR + 2 PCs
+LR + 3 PCs
+LR + 4 PCs
+LR + cvBLUP
+LMM
+BOLT-INF
+BOLT-LMM
+LR + true genetic effect
+
+mean(bg0 )
+-1.2E-03
+-8.00E-04
+-1.00E-04
+-3.00E-04
+1.00E-03
+4.00E-04
+-2.00E-04
+-1.00E-04
+-1.00E-04
+2.20E-03
+
+se(bg0 )
+2.30E-03
+2.10E-03
+1.80E-03
+1.60E-03
+1.30E-03
+1.20E-03
+1.20E-03
+1.00E-03
+1.00E-03
+1.80E-03
+
+2 )
+mean(cNull
+2.94
+2.44
+1.94
+1.49
+1.02
+1.00
+0.99
+0.97
+0.97
+3.55
+
+2 )
+se(cNull
+0.14
+0.12
+0.09
+0.07
+0.05
+0.04
+0.05
+0.04
+0.04
+0.16
+
+mean(bg )
+0.250
+0.250
+0.253
+0.252
+0.250
+0.240
+0.252
+0.214
+0.214
+0.250
+
+se(bg )
+2.20E-03
+1.90E-03
+1.70E-03
+1.50E-03
+1.30E-03
+1.20E-03
+1.20E-03
+1.00E-03
+1.00E-03
+1.80E-03
+
+mean(c 2 )
+47.28
+48.20
+49.00
+48.90
+47.86
+56.8
+56.97
+54.34
+54.37
+89.28
+
+se(c 2 )
+0.92
+0.85
+0.80
+0.76
+0.70
+0.81
+0.79
+0.76
+0.76
+1.56
+
+Table 3. Simulations with infinitesimal genetic model and population structure. Mean and
+standard errors for effect estimates and test statistics of association tests at 1000 Null SNPs with
+2
+true b = g0: bc
+g0 and cNull ; and at 1000 causal SNPs with an alternative hypothesis of true
+bg = 0.25: bbg and c 2
+
+Model
+LR
+LR + 4 PCs
+LR + cvBLUP
+LMM
+BOLT-INF
+BOLT-LMM
+LR + true genetic effect
+
+mean(bg0 )
+-1.30E-03
+-5.00E-04
+4.00E-04
+5.00E-04
+5.00E-04
+5.00E-04
+5.00E-04
+
+se(bg0 )
+1.60E-03
+1.50E-03
+1.00E-03
+1.40E-03
+9.00E-04
+9.00E-04
+1.00E-03
+
+2 )
+mean(cNull
+1.52
+1.49
+0.81
+1.10
+0.77
+0.84
+1.21
+
+2 )
+se(cNull
+0.07
+0.06
+0.03
+0.05
+0.03
+0.04
+0.05
+
+mean(bg )
+0.252
+0.253
+0.183
+0.251
+0.166
+0.166
+0.252
+
+se(bg )
+1.60E-03
+1.60E-03
+9.00E-04
+1.30E-03
+9.00E-04
+9.00E-04
+1.00E-03
+
+mean(c 2 )
+48.81
+48.93
+36.20
+48.57
+33.65
+36.24
+98.24
+
+se(c 2 )
+0.77
+0.75
+0.52
+0.68
+0.46
+0.51
+1.31
+
+Table 4. Simulations with infinitessimal model and family structure. Mean and standard errors
+for effect estimates and test statistics of association tests at 1000 Null SNPs with true bg0 = 0: bb0
+2 ; and at 1000 causal SNPs with an alternative hypothesis of true b = 0.25: bb and c 2
+and cNull
+g
+g
+11
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Finally, we applied these methods to the METSIM data described above. All p-values were
+GC adjusted for comparison purposes. All mixed model-based methods, including LR+cvBLUP
+were more powerful than standard linear regression. As expected BOLT-LMM had the highest
+power due to modelling of non-infinitessimal structure. In this data analysis there is no observed
+evidence of bias in effect size estimates by BOLT, such as a systematic deflation of effect
+estimates relative to estimates made by standard linear regression or standard LMM fixed effect
+estimates, suggesting that it may not be a problem in practice.
+lambdaGC
+p-values below 1e-06
+Ratio of effect size estimates1e-06
+Standard error in ratio of effect sizes1e-06
+p-values below 5e-08
+Ratio of effect size estimates5e-08
+Standard error in ratio of effect sizes5e-08
+
+LR
+1.02
+31
+0.991
+0.00243
+15
+0.996
+0.00232
+
+LMM
+1.02
+32
+1
+0
+15
+1
+0
+
+BOLT-INF
+1.02
+32
+0.999
+0.000561
+15
+0.998
+0.000977
+
+BOLT-LMM
+1.02
+35
+0.999
+0.000561
+16
+0.998
+0.000977
+
+cvBLUP
+1.02
+33
+0.998
+0.00088
+16
+0.999
+0.00122
+
+Table 5. GWAS results for baseline low-density lipoprotein cholesterol (LDLC) using an
+unrelated subset of subjects from the METSIM cohort. LR: linear regression, LMM: linear
+mixed model with GLS analysis of SNP effects implented in GCTA, cvBLUP: cross-validated
+prediction-adjusted linear regression, BOLT-INF; BOLT assuming infinitesimal genetic model,
+BOLT-LMM: BOLT using mixture of Normal distributions as prior for SNP effect sizes, i.e.
+sparse genetic architecture. cvBLUP-adjusted analyses, LMM, and BOLT were used in a
+leave-one-chromosome-out scheme with variance components, cvBLUPs, covariance models
+(LMM, GCTA), and genetic predictions and residuals (BOLT) generated using SNPs on
+chromosomes other than that of the test-SNPs.
+
+lambdaGC
+p-values below 1e-06
+Ratio of effect size estimates1e-06
+Standard error in ratio of effect sizes1e-06
+p-values below 5e-08
+Ratio of effect size estimates5e-08
+Standard error in ratio of effect sizes5e-08
+
+LR
+1.04
+15
+1.02
+0.00294
+13
+1.01
+0.00288
+
+LMM
+1.04
+15
+1
+0
+11
+1
+0
+
+BOLT-INF
+1.04
+14
+0.992
+0.00134
+11
+0.997
+0.000681
+
+BOLT-LMM
+1.04
+14
+0.992
+0.00134
+13
+0.997
+0.000681
+
+cvBLUP
+1.04
+16
+0.999
+0.000866
+12
+1
+0.000897
+
+Table 6. GWAS results for baseline high-density lipoprotein cholesterol (HDLC) using an
+unrelated subset of subjects from the METSIM cohort. LR: linear regression, LMM: linear
+mixed model with GLS analysis of SNP effects implemented in GCTA, cvBLUP:
+cross-validated prediction-adjusted linear regression, BOLT-INF; BOLT assuming infinitesimal
+genetic model, BOLT-LMM: BOLT using sparse genetic architecture.cvBLUP-adjusted
+analyses, LMM, and BOLT were used in a leave-one-chromosome-out scheme with variance
+components, cvBLUPs, covariance models (LMM, GCTA), and genetic predictions and
+residuals (BOLT) generated using SNPs on chromosomes other than that of the test-SNPs.
+Leveraging cvBLUPs to compute linear mixed model shrink parameters
+Finally, we examine the use of cvBLUPs in estimating LMM shrink parameters. The BLUP
+effect size estimates from a linear mixed model are ”shrunk” to be smaller in magnitude to
+exploit a bias-variance trade-off that reduces their mean squared error. With the estimated
+⇣ b2 ⌘
+s
+bg2 , the estimated distribution of effect estimates b j ⇠ N 0, Mg
+genetic variance component s
+12
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+is an empirical prior on the effect sizes, which yields estimates that are biased toward the prior
+mean of 0. Equivalently, the BLUP effect sizes estimates are ridge regression estimates with a
+1 h2 sbg2
+penalty parameter l related to the LMM variance components: l =
+= 2.
+sbe
+h2
+When SNPs are independent, the LMM shrinkage estimates of the effect sizes b for given
+estimates of the variance components is found to be [Vilhjálmsson et al. (2015)]
+b
+bj ⇠ N
+
+h2 sbg2
+h2
+b,
+M
+h2 + M
+h2 + M
+N
+N
+
+!
+
+(9)
+
+2
+
+and the shrink, h2h+ M , can be calculated directly from the number of individuals and SNPs.
+N
+However, when SNPs are in LD, it is more complicated to estimate the effective number of SNPs
+[Patterson et al. (2006)] and hence the shrink. Here we show how cvBLUPs can be used to
+estimate the shrink directly.
+First, in the case of independent SNPs, the LMM estimates of the SNP effects b
+b would be
+reduced in magnitude and variance relative to the true values b, as in Equation 9, and there would
+be a corresponding decrease in the variance of polygenic risk scores for a new individual with
+normalized genotypes Znew , calculated using b
+b as weights rather than the true effect sizes b:
+⇣
+⌘
+var Znewb
+b
+=
+=
+
+h2
+h2 + M
+N
+h2
+h2 + M
+N
+
+!
+!
+
+var (Znew b)
+(10)
+sg2
+
+Equation 10 suggests the direct estimation of the shrink by taking the ratio of sbg2 to
+⇣
+⌘
+var Znewb
+b . We confirm this approach is approximately unbiased via simulation. For multiple
+
+settings of N (number of subjects), M (number of SNPs) and h2 (heritability), heritability and
+variance components were estimated and the value of the standard independent-SNP model for
+the shrink is compared to the empirical BLUP shrink var(BLUP)
+and the empirical cvBLUP shrink
+sb 2
+var(cvBLUP)
+.
+sbg2
+
+g
+
+In each simulation setting, the BLUP shrink is much larger than the independent
+model value or the cvBLUP shrink due to over-fitting by the standard BLUPs. However, the
+cvBLUP formula and the independent-SNP model are consistent for all parameter settings.
+Because this approach does not require identification of an effective number of SNPs, it
+extends directly to the case where there is linkage disequilibrium. We applied this approach to
+simulated data from the METSIM cohort used above. We estimated the shrink parameter for
+simulated phenotypes based on the real genotypes at 609131 SNPs with minor allele frequencies
+greater than 0.01 on the 6263 unrelated (at the 0.05 level) subjects. Twenty simulations were
+run using fractions of causal SNPs between 0.0001 and 1.0. Causal SNPs were chosen by
+simple random sampling with equal probability from the genotyped SNPs. SNP effect sizes were
+normally distributed and trait heritability was 50 percent. The shrink formula for independent
+SNPs suggested a shrink of about 0.0045-0.0055, while the cvBLUP shrink – the ratio of the
+variance of the cvBLUPs to the estimated genetic variance component ranged from 0.06-0.08.
+In this setting, with LD between the SNPs, the independent SNP formula for the shrink is
+invalid. In particular the effective number of SNPs M̃ is much smaller than the total number of
+SNPs leading to a shrink estimate over ten times smaller than the the cvBLUP based estimate.
+13
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+N
+400
+400
+400
+800
+800
+800
+1200
+1200
+1200
+400
+400
+400
+800
+800
+800
+1200
+1200
+1200
+
+M
+400
+800
+1200
+400
+800
+1200
+400
+800
+1200
+400
+800
+1200
+400
+800
+1200
+400
+800
+1200
+
+h2
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+
+b
+h2
+0.512 (0.102)
+0.502 (0.119)
+0.494 (0.128)
+0.492 (0.062)
+0.501 (0.066)
+0.500 (0.075)
+0.505 (0.052)
+0.501 (0.051)
+0.501 (0.051)
+0.105 (0.080)
+0.114 (0.096)
+0.114 (0.104)
+0.102 (0.044)
+0.101 (0.056)
+0.105 (0.066)
+0.098 (0.032)
+0.101 (0.035)
+0.098 (0.041)
+
+Independent Shrink
+0.335 (0.003)
+0.200 (0.003)
+0.139 (0.003)
+0.496 (0.002)
+0.334 (0.002)
+0.248 (0.002)
+0.600 (0.002)
+0.426 (0.002)
+0.332 (0.002)
+0.089 (0.006)
+0.052 (0.004)
+0.035 (0.003)
+0.165 (0.006)
+0.090 (0.005)
+0.063 (0.004)
+0.222 (0.006)
+0.130 (0.004)
+0.088 (0.003)
+
+BLUP Shrink
+0.627 (0.007)
+0.560 (0.010)
+0.530 (0.011)
+0.695 (0.004)
+0.619 (0.005)
+0.581 (0.006)
+0.770 (0.003)
+0.661 (0.003)
+0.614 (0.004)
+0.199 (0.010)
+0.174 (0.011)
+0.170 (0.011)
+0.238 (0.008)
+0.178 (0.008)
+0.160 (0.008)
+0.283 (0.007)
+0.208 (0.006)
+0.170 (0.006)
+
+cvBLUP Shrink
+0.389 (0.006)
+0.217 (0.005)
+0.150 (0.004)
+0.573 (0.004)
+0.383 (0.004)
+0.280 (0.004)
+0.700 (0.003)
+0.494 (0.003)
+0.378 (0.003)
+0.106 (0.006)
+0.060 (0.004)
+0.044 (0.003)
+0.169 (0.006)
+0.094 (0.004)
+0.067 (0.004)
+0.225 (0.006)
+0.132 (0.004)
+0.090 (0.004)
+
+Table 7. Estimation of the shrink parameters for BLUPs and cvBLUPs in simulations with
+independent SNPs. The independent shrink is that derived in Formula 9 for independent SNPs.
+
+Fraction Causal SNPs
+1.0
+0.1
+0.01
+0.001
+0.0001
+
+Independent Shrink
+0.0050 (1.60E-04)
+0.0053 (1.71E-04)
+0.0055 (1.73E-04)
+0.0047 (5.45E-05)
+0.0040 (1.20E-04)
+
+BLUP Shrink
+0.514 (0.015)
+0.539 (0.016)
+0.556 (0.016)
+0.477 (0.005)
+0.409 (0.011)
+
+cvBLUP Shrink
+0.076 (0.002)
+0.079 (0.002)
+0.080 (0.002)
+0.067 (0.001)
+0.058 (0.001)
+
+Table 8. Estimates of the shrink parameter for simulated phenotypes based on the real
+genotypes METSIM cohort and various genetic architectures or fractions of causal SNPs. The
+independent shrink is that derived in Formula 9 for independent SNPs.
+
+DISCUSSION
+Here we describe a new and computationally efficient approach for generating polygenic risk
+scores directly from a linear mixed model. We show that the LMM framework allows direct
+calculation of out-of-sample genetic predictions. Our approach will have immediate utility for
+the growing list of applications that rely on PS, and we provide examples of several additional
+application areas, including detection of pleiotropy, powerful association testing, and estimation
+of polygenic shrink.
+The elimination of over-fitting by cvBLUPs relative to BLUPs suggests a solution to the bias
+problem in residual based methods. Rather than post-hoc correction of residual test statistics as
+in GRAMMAR-g and BOLT, the LMM residuals may be replaced by out-of-sample prediction
+errors with cross-validated predictors: use (y cvBLUP) instead of standard residuals (y
+BLUP)
+14
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+There are several limitations of this approach. First, cvBLUPs are calculated from the
+standard LMM framework, which corresponds to the infinitessimal genetic model. As we
+see in in supplementary Tables 9-11, in simulations with sparse genetic architectures, sparse
+models have considerably higher power. In future work, we intend to use sparse analogues of
+cvBLUPs generated as cross-validated predictions. Unfortunately, sparse models including the
+BOLT-LMM model and LASSO are not amenable to the fast leave-one-out cross-validation as in
+Equation (7).
+Another limitation is that when used as adjustment covariates cvBLUPs do not control confounding by family structure or cryptic relatedness as well as standard mixed model association
+tests. Rather than using all subjects for computation of cvBLUPs, an alternative protocol is to
+calculate cvBLUPs for an unrelated subset, and also to calculate BLUP effect size estimates
+b
+b (Equation 4) using these unrelated subjects. This procedure will tend to block confounding
+by genetic structure remaining in the nominally unrelated subset and will improve power by
+accounting for the polygenicity of the trait, but it could under-adjust for confounding by family
+structure because by construction the training set for learning the polygenic model does not
+contain closely related subjects. Methods involving cross-validated predictions from multiple
+models or cvBLUPs from mixed models with multiple variance components may prove useful,
+by analogy with other multiple variance component methods that include sparse relatedness
+matrices to indicate family membership [Zaitlen et al. (2013), Tucker et al. (2015)]
+In our cross-trait analysis of the METSIM data set we show that the cross-correlations of
+PRS for one trait and actual (normalized) phenotypic measures for other traits. We are working
+to extend these cross-trait analyses – in particular by using correlations of cvBLUPs for pairs
+of traits as estimates of the genetic correlation. However, even naive correlations of cvBLUPs
+give an effective picture of the genetic correlations between traits. Since cvBLUPs are efficiently
+calculated one at a time, and genetic correlations are then estimated in trivial pairwise analyses of
+traits, the pair-wise correlations of hundreds or thousands of traits may be efficiently calculated
+this way. Furthermore, in the pair-wise analyses of the METSIM phenotypes, and in our pair-wise
+analyses of RNA expression that underlie our trans-eQTL analysis [Liu et al. (2018)] we actually
+generate asymmetric cross-correlation matrices because the correlation of cvBLUP for trait A
+with measured trait B is not the same as the correlation of measured trait A with cvBLUP for
+trait B. We are exploring applications of these asymmetric matrices for network analysis and
+causal inference.
+Efficient generation of out-of-sample genetic predictions using leave-one-out cross-validation
+of the predictions from a linear mixed model is an effective way to generate polygenic risk
+scores, and opens the application of analyses based on PRS to scenarios where there is no
+available reference data to generate a typical scoring model. It is now well known that PRS
+and genetic predictions transfer poorly to populations that are distinct from the reference data
+set used to learn the genetic model [Martin et al. (2017); Scutari et al. (2016)]. We look
+forward to using reference-free PRS methods based on cvBLUPs for applications with data from
+under-represented populations.
+The principle of using cross-validated predictions from polygenic models as PRS may be
+extended to predictions from sparse or complex models, but the cross-validated predictions from
+a standard linear mixed model, which we call cvBLUPs, are particularly simple to calculate and
+have novel and interpretable applications. To make the results of this work accessible to the
+community, we have implemented them in the GCTA software package [Yang et al. (2011)].
+
+ACKNOWLEDGEMENTS
+NZ, JM, DP were funded by NIH grants (K25HL121295 , U01HG009080, R01HG006399).
+15
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+We thank the individuals who participated in the METSIM study. This study was funded
+by the National Institutes of Health (NIH) grants HL-095056, HL-28481, and U01 DK105561.
+The funders had no role in study design, data collection, and analysis, decision to publish, or
+preparation of the article.
+MAK works in a Unit that is supported by the University of Bristol and UK Medical
+Research Council (MCU U1 2013/1). The Baker Institute is supported in part by the Victorian
+Government’s Operational Infrastructure Support Program.
+
+CONFLICTS OF INTEREST
+None.
+
+APPENDICES
+Formula for efficient leave-one-out cross-validation of the linear mixed model
+Let
+y = Xb + Zb + e
+
+(11)
+
+represent a linear mixed model with continuous outcome y, fixed effect covariates X, fixed
+effect sizes b , additively coded genotypes Z, random genetic effect sizes b and unmodeled or
+environmental factors e. The genetic effect sizes b and environmental factors e are modeled as
+i.i.d. normally distributed random variables with variances M1 sg2 and se2 respectively:
+⌘
+⇣
+s2
+b ⇠ N 0, Mg IM
+(12)
+e ⇠ N 0, se2 IN
+By convention the genotypes are scaled to have mean 0 and variance 1, and the SNP effect
+sizes are assumed to have effect sizes independent of MAF on this scale. So the total genetic
+contributions to the phenotype Zb are normally distributed with mean 0 and variance sg2 . The
+scaled genotypes Z are used to calculate a SNP-based genetic relatedness matrix K:
+K =
+
+1
+T
+M ZZ .
+
+(13)
+
+The observations y in the linear mixed model are normally distributed with a covariance S that
+depends on K and the variance components sg2 and se2
+y
+S
+b
+S
+
+N (Xb , S)
+
+⇠
+=
+
+sg2 K + se2 IN
+
+=
+
+bg2 K + s
+be2 IN
+s
+
+b 1
+bg2 K S
+s
+⇣
+⌘ 1⇣
+⌘
+b 1X
+b 1y
+=
+XT S
+XT S
+
+H =
+b̂
+b̂
+
+=
+=
+
+ŷ
+
+=
+=
+=
+=
+
+bBLUP(?whatisbBLUP?
+sbg2
+M
+
+b 1 (y
+ZT S
+
+(14)
+
+X b̂ )
+
+BLUP
+Hy
+
+sbg2
+Tb 1
+M ZZ S (y
+
+X b̂ )
+
+Z b̂
+
+16
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+To simplify notation, let fixed effect sizes b and fixed effects Xb = 0:
+sbg2 T b 1
+MZ S y
+
+b̂ =
+
+(15)
+
+sbg2
+Tb 1
+M ZZ S y
+
+ŷ =
+=
+
+Z b̂
+
+Exclude observation i from the genetic predictive model fit and then make an out-of-sample
+(oos) prediction for observation i:
+b̂
+
+=
+
+i
+
+ŷi,oos =
+
+sbg2 T b 1
+M Z iS i y i
+
+Zi b̂
+
+(16)
+
+i
+
+Now generate the augmented vector y+i as the vector of outcomes y with observation yi
+replaced with it’s out-of-sample prediction from a model trained on the remaining observations,
+ŷi,oos .
+Consider the ridge regression interpretation of the mixed model with the ridge penalty
+b2
+s
+1 h2
+l = e2 =
+. Assume the variance components or heritability have been estimated in a
+bg
+s
+h2
+prior step or are known.
+For the reduced data set with the outcome for observation i removed we have:
+b̂
+
+i
+
+= argmin
+b
+
+1
+Â (y
+2 k6=i
+
+Z i b)2 +
+
+i
+
+l
+||b||22
+2
+
+(17)
+
+For the augmented data set with the outcome for observation i replaced by an out-of-sample
+prediction we have:
+b̂+i = argmin
+b
+
+1
+Â (yk
+2 k6=i
+
+Zk b)2 + (ŷi,oos
+
+Zi b)2 +
+
+l
+||b||22
+2
+
+(18)
+
+For the augmented model, (ŷi,oos Zi b̂) = 0, and the remaining terms in the expression for
+b̂+i are the same as for the reduced model b̂ i , so b̂+i = b̂ i .
+Now consider the differences in the predictions for the ith value from the augmented model
+and the model with all observations:
+ŷ+i
+
+Zi b̂+i
+
+ŷi =
+sbg2
+
+b 1 y+i
+= Zi M Z T S
+=
+
+sb 2
+
+ŷ+i
+
+ŷi =
+
+1
+
+sb 2
+
+b 1y
+Zi Mg Z T S
+
+1 (y
++i
+
+Hi,. (y+i
+
+=
+b
+Here, Zi mg Z T S
+the ith element, so:
+
+sb 2
+
+b
+Zi Mg Z T S
+
+Zi b̂
+
+y)
+
+(19)
+
+y)
+
+is the ith row of the matrix H, or Hi,. . The vectors y+i and y only differ at
+
+Hi,. (y+i
+
+= Hi,i Zi b̂
+
+y)
+i
+
+yi
+
+(20)
+17
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Finally,
+Zi b̂
+
+i
+
+Zi b̂
+
+=
+
+Hi,i Zi b̂
+
+=
+
+Hi,i Zi b̂
+
+=
+
+Zi b̂
+
+(1
+
+Hi,i )Zi b̂
+
+Zi b̂
+
+i
+
+=
+
+Zi b̂
+
+i
+
+=
+
+ŷi,oos
+
+i
+
+=
+=
+
+yi
+Hi,i yi
+
+Hi,i yi
+
+Zi b̂ Hi,i yi
+1 Hi,i
+Zi b̂ Hi,i yi
+1 Hi,i
+Zi b̂ i
+
+=
+
+=
+
+i
+
+i
+
+Zi
+
+(21)
+
+sbg2 T 1
+b y Hi,i y
+Z S
+M
+1 Hi,i
+ŷi Hi,i y
+1 Hi,i
+Hi,. Hi,i
+y
+1 Hi,i
+
+Relationship between principal components and cross-validated BLUPs
+Genetic principal components are routinely used as quantitative measures of study participants’
+ancestry [Patterson et al. (2006); McVean (2009)] and as such are used as adjustment covariates in
+association studies to block confounding by population structure [Patterson et al. (2006)]. Linear
+mixed models provide another framework for controlling potential confounding by population
+structure [Yang et al. (2014)]. Both PCs and LMMs are methods that account for ancestry and
+other forms of genetic structure in a data set by analyses of the genetic relatedness matrix (GRM)
+K = m1 ZZ T . Specifically, PCA involves calculating some number of eigenvetors of the GRM – or
+equivalently left singular vectors of the scaled genotype matrix Z – and using them as adjustment
+covariates in regression analyses, while LMMs model observed outcomes as non-independent,
+with the random effects that contribute to the outcome y correlated to a degree related to the
+amount of shared genetic variation between each pair of subjects: cov(y) = S = sg2 K + se2 In .
+In principal component adjusted analyses, some number of PCs are used as adjustment
+covariates in linear regression. With linear mixed models, generalized least squares with an
+b is used.
+estimate of the sample covariance S
+Principal component adjusted analysis has several disadvantages. First, it is not clear how
+many principal components should be used. In GWAS it has become conventional to use a
+standard number of PCs, say 10, but it is generally not clear whether that will be enough to
+account for the components of genetic structure that are confounded with non-genetic factors in
+a study. Second, it is not clear which PCs should be included. Conventionally, PCs are sorted in
+descending order by the magnitude of the corresponding eigenvalues, and PCs with the largest
+eigenvalues are used. However, selected PCs may not be associated with any non-genetic factors
+and may not relieve any confounding. Finally, in association testing applications, tests needlessly
+lose power due to over-adjustment when PCs that do not adjust for confounding are included as
+covariates. By construction PCs represent axes of variation in the genotype data, so some may
+be highly correlated with a test SNP, and inclusion of correlated covariates increases the standard
+errors around test SNP effect estimates.
+18
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+The spectral decomposition of the GRM K is:
+K = ULU T
+
+(22)
+
+where U is a unitary matrix whose columns are the genetic PCs or eigenvectors of K, and L is a
+diagonal matrix of the corresponding eigenvalues.
+Principal component adjusted regression includes Uk (first k columns of U) as regression
+covariates to improve the estimation or testing of bg :
+y = Xb + gbg +Uk g + e
+
+(23)
+
+This leaves open the question of how many or which PCs should be included. As an
+alternative to standard practice, we can try using all of the PCs, and use regularization to keep
+the model estimable. We can also minimize problems due to over-adjustment by calculating the
+PCs U using a GRM K ⇤ or scaled genotype matrix Z ⇤ that does not include SNPs in linkage
+disequilibrium with or on the same chromosome as the test-SNP g.
+Towards a connection to cvBLUPs, rescale the columns of U by the corresponding singular
+values :
+p
+Us = U L
+(24)
+Rescaling U to Us puts a higher prior on PCs with larger eigenvalues. Now compress the
+contribution of the principal components to the outcome by calculating a vector of phenotypic
+predictions using ridge regression with a penalty l on the principal components:
+ŷ pc = UsUsT (UsUsT + l In ) 1 (y
+If we define l =
+we have:
+
+X b̂ )
+
+(25)
+
+p
+se2
+1 h2
+=
+and recall that Us = U (L), so that UsUsT = ULU T = K ⇤ ,
+2
+2
+sg
+h
+
+ŷ pc = sg2 K(sg2 K ⇤ + se2 In ) 1 (y
+
+X b̂ )
+
+(26)
+
+But this is just a BLUP. So, BLUPs arise from a limiting case of trying to do PC-adjusted
+regression with all PCs. Therefore cross-validated predictions from ridge regression on all PCs
+are cvBLUPs.
+cvBLUPs as adjustment covariates are similar to a compression of all PCs into a single
+covariate, with the PCs given prior weights that emphasize the PCs with larger eigenvalues, but
+do not exclude any. The PCs are also weighted by their relevance to the outcome because they
+represent predictions from a ridge regression model that implicitly has ridge regression effect
+sizes for the association of the PC with the outcome. Over-fitting in the ridge regression step
+is avoided by the leave-one-out cross-validation. Finally, loss of power by over adjustment is
+avoided by excluding the chromosome or SNPs in linkage disequilibrium with test SNP from the
+GRM used for calculation of the cvBLUPs. In fact, unlike PC adjustment but similar to standard
+LMM analyses, cvBLUP adjustment boosts the power of association studies by modeling genetic
+contributions to the phenotype other than the SNP of interest, thereby increasing the signal to
+noise ratio.
+
+19
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Additional results with cvBLUP-adjusted association testing
+Model
+LR
+LR + 4 PCs
+LR + cvBLUP
+LMM
+BOLT-inf
+BOLT-LMM
+LR + true genetic effect
+
+mean(b0 )
+-1.10E-03
+-9.00E-04
+-1.10E-03
+-1.10E-03
+-9.00E-04
+-9.00E-04
+-6.00E-04
+
+se(b0 )
+1.40E-03
+1.40E-03
+1.30E-03
+1.30E-03
+1.10E-03
+1.10E-03
+1.00E-03
+
+2 )
+mean(cNull
+1.14
+1.13
+1.14
+1.14
+1.14
+1.09
+1.13
+
+2 )
+se(cNull
+0.05
+0.05
+0.05
+0.05
+0.05
+0.05
+0.05
+
+mean(b )
+0.249
+0.249
+0.248
+0.248
+0.219
+0.219
+0.249
+
+se(b )
+1.30E-03
+1.30E-03
+1.20E-03
+1.20E-03
+1.00E-03
+1.00E-03
+9.00E-04
+
+mean(c 2 )
+47.48
+47.38
+58.15
+56.22
+55.81
+80.99
+94.32
+
+se(c 2 )
+0.70
+0.68
+0.83
+0.78
+0.77
+1.05
+1.26
+
+Table 9. Simulations with sparse genetic model and independent subjects. Mean and standard
+errors for effect estimates and test statistics of association tests at 1000 Null SNPs with true
+2 ; and at 1000 causal SNPs with an alternative hypothesis of true b = 0.25: b
+b
+b = 0: bb0 and cNull
+2
+and c
+Model
+LR
+LR + 4 PCs
+LR + cvBLUP
+LMM
+BOLT-inf
+BOLT-LMM
+LR + true genetic effect
+
+mean(b0 )
+-1.50E-03
+-6.00E-04
+-6.00E-04
+-7.00E-04
+-8.00E-04
+-8.00E-04
+-2.30E-03
+
+se(b0 )
+2.30E-03
+1.30E-03
+1.10E-03
+1.20E-03
+1.00E-03
+1.00E-03
+1.90E-03
+
+2 )
+mean(cNull
+2.88
+1.01
+0.97
+1.00
+0.97
+1.02
+3.65
+
+2 )
+se(cNull
+0.14
+0.05
+0.05
+0.05
+0.05
+0.05
+0.17
+
+mean(b )
+0.245
+0.248
+0.238
+0.247
+0.211
+0.211
+0.247
+
+se(b )
+2.20E-03
+1.20E-03
+1.10E-03
+1.20E-03
+1.00E-03
+1.00E-03
+1.90E-03
+
+mean(c 2 )
+46.30
+46.57
+54.76
+55.22
+52.78
+77.75
+87.22
+
+se(c 2 )
+0.90
+0.66
+0.78
+0.76
+0.73
+1.05
+1.56
+
+Table 10. Simulations with sparse genetic architecture and population structure. Mean and
+standard errors for effect estimates and test statistics of association tests at 1000 Null SNPs with
+2 ; and at 1000 causal SNPs with an alternative hypothesis of true
+true b = 0: bb0 and cNull
+b = 0.25: bb and c 2
+Model
+LR
+LR + 4 PCs
+LR + cvBLUP
+LMM
+BOLT-inf
+BOLT-LMM
+LR + true genetic effect
+
+mean(b0 )
+1.30E-03
+1.20E-03
+1.50E-03
+2.00E-03
+1.30E-03
+1.30E-03
+1.70E-03
+
+se(b0 )
+1.60E-03
+1.60E-03
+9.00E-04
+1.30E-03
+9.00E-04
+9.00E-04
+1.00E-03
+
+2 )
+mean(cNull
+1.57
+1.53
+0.72
+0.98
+0.69
+0.86
+1.14
+
+2 )
+se(cNull
+0.07
+0.07
+0.03
+0.05
+0.03
+0.04
+0.05
+
+mean(b )
+0.248
+0.248
+0.184
+0.249
+0.168
+0.168
+0.250
+
+se(b )
+1.60E-03
+1.60E-03
+9.00E-04
+1.30E-03
+8.00E-04
+8.00E-04
+1.00E-03
+
+mean(c 2 )
+47.46
+47.33
+35.81
+47.34
+33.39
+64.13
+93.55
+
+se(c 2 )
+0.73
+0.73
+0.49
+0.64
+0.44
+0.79
+1.21
+
+Table 11. Simulations with sparse genetic architecture and family structure. Mean and standard
+errors for effect estimates and test statistics of association tests at 1000 Null SNPs with true
+2 ; and at 1000 causal SNPs with an alternative hypothesis of true b = 0.25: b
+b
+b = 0: bb0 and cNull
+and c 2
+
+REFERENCES
+Aulchenko, Y. S., De Koning, D.-J., and Haley, C. (2007). Grammar: a fast and simple method
+for genome-wide pedigree-based quantitative trait loci association analysis. Genetics.
+Balding, D. J. and Nichols, R. A. (1995). A method for quantifying differentiation between
+populations at multi-allelic loci and its implications for investigating identity and paternity.
+Genetica, 96(1-2):3–12.
+Benjamini, Y. and Yekutieli, D. (2001). The control of the false discovery rate in multiple testing
+under dependency. Annals of statistics, pages 1165–1188.
+20
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Burgess, S. and Thompson, S. G. (2013). Use of allele scores as instrumental variables for
+mendelian randomization. International journal of epidemiology, 42(4):1134–1144.
+Chen, G.-B. (2014). Estimating heritability of complex traits from genome-wide association
+studies using ibs-based haseman–elston regression. Frontiers in genetics, 5:107.
+Cortes, A., Dendrou, C. A., Motyer, A., Jostins, L., Vukcevic, D., Dilthey, A., Donnelly, P.,
+Leslie, S., Fugger, L., and McVean, G. (2017). Bayesian analysis of genetic association across
+tree-structured routine healthcare data in the uk biobank. Nature genetics, 49(9):1311.
+Dudbridge, F. (2016). Polygenic epidemiology. Genetic epidemiology, 40(4):268–272.
+Gamazon, E. R., Wheeler, H. E., Shah, K., Mozaffari, S. V., Aquino-Michaels, K., Carroll, R. J.,
+Eyler, A. E., Denny, J. C., Nicolae, D. L., Cox, N. J., et al. (2015). Predixcan: Trait mapping
+using human transcriptome regulation. bioRxiv, page 020164.
+Gusev, A., Ko, A., Shi, H., Bhatia, G., Chung, W., Penninx, B. W., Jansen, R., De Geus,
+E. J., Boomsma, D. I., Wright, F. A., et al. (2016). Integrative approaches for large-scale
+transcriptome-wide association studies. Nature genetics, 48(3):245.
+Hastie, T., Tibshirani, R., and Friedman, J. (2009). The elements of statistical learning: data
+mining, inference and prediction, page 244. Springer, 2 edition.
+Kang, H. M., Sul, J. H., Service, S. K., Zaitlen, N. A., Kong, S.-y., Freimer, N. B., Sabatti,
+C., Eskin, E., et al. (2010). Variance component model to account for sample structure in
+genome-wide association studies. Nature genetics, 42(4):348.
+Kang, H. M., Zaitlen, N. A., Wade, C. M., Kirby, A., Heckerman, D., Daly, M. J., and Eskin,
+E. (2008). Efficient control of population structure in model organism association mapping.
+Genetics, 178(3):1709–1723.
+Khera, A. V., Chaffin, M., Aragam, K. G., Haas, M. E., Roselli, C., Choi, S. H., Natarajan, P.,
+Lander, E. S., Lubitz, S. A., Ellinor, P. T., et al. (2018). Genome-wide polygenic scores for
+common diseases identify individuals with risk equivalent to monogenic mutations. Nature
+genetics, page 1.
+Kolde, R. and Kolde, M. R. (2018). Package ‘pheatmap’.
+Krapohl, E., Euesden, J., Zabaneh, D., Pingault, J., Rimfeld, K., Von Stumm, S., Dale, P., Breen,
+G., O’reilly, P., and Plomin, R. (2016). Phenome-wide analysis of genome-wide polygenic
+scores. Molecular psychiatry, 21(9):1188.
+Laakso, M., Kuusisto, J., Stancakova, A., Kuulasmaa, T., Pajukanta, P., Lusis, A. J., Collins,
+F. S., Mohlke, K., and Boehnke, M. (2017). Metabolic syndrome in men (metsim) study: a
+resource for studies of metabolic and cardiovascular diseases. Journal of lipid research, pages
+jlr–O072629.
+Lee, S. H., Yang, J., Goddard, M. E., Visscher, P. M., and Wray, N. R. (2012). Estimation of
+pleiotropy between complex diseases using single-nucleotide polymorphism-derived genomic
+relationships and restricted maximum likelihood. Bioinformatics, 28(19):2540–2542.
+Lippert, C., Listgarten, J., Liu, Y., Kadie, C. M., Davidson, R. I., and Heckerman, D. (2011).
+Fast linear mixed models for genome-wide association studies. Nature methods, 8(10):833.
+Listgarten, J., Kadie, C., Schadt, E. E., and Heckerman, D. (2010). Correction for hidden
+confounders in the genetic analysis of gene expression. Proceedings of the National Academy
+of Sciences, 107(38):16465–16470.
+Liu, X., Mefford, J. A., Dahl, A., Subramaniam, M., Battle, A., Price, A. L., and Zaitlen, N.
+(2018). Gbat: a gene-based association method for robust trans-gene regulation detection.
+bioRxiv, page 395970.
+Loh, P.-R., Tucker, G., Bulik-Sullivan, B. K., Vilhjalmsson, B. J., Finucane, H. K., Salem,
+R. M., Chasman, D. I., Ridker, P. M., Neale, B. M., Berger, B., et al. (2015). Efficient
+bayesian mixed-model analysis increases association power in large cohorts. Nature genetics,
+47(3):284.
+21
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+Maas, P., Barrdahl, M., Joshi, A. D., Auer, P. L., Gaudet, M. M., Milne, R. L., Schumacher,
+F. R., Anderson, W. F., Check, D., Chattopadhyay, S., et al. (2016). Breast cancer risk from
+modifiable and nonmodifiable risk factors among white women in the united states. JAMA
+oncology, 2(10):1295–1302.
+Martin, A. R., Gignoux, C. R., Walters, R. K., Wojcik, G. L., Neale, B. M., Gravel, S., Daly,
+M. J., Bustamante, C. D., and Kenny, E. E. (2017). Human demographic history impacts
+genetic risk prediction across diverse populations. The American Journal of Human Genetics,
+100(4):635–649.
+McVean, G. (2009). A genealogical interpretation of principal components analysis. PLoS
+genetics, 5(10):e1000686.
+Natarajan, P., Young, R., Stitziel, N. O., Padmanabhan, S., Baber, U., Mehran, R., Sartori, S.,
+Fuster, V., Reilly, D. F., Butterworth, A., et al. (2017). Polygenic risk score identifies subgroup
+with higher burden of atherosclerosis and greater relative benefit from statin therapy in the
+primary prevention setting. Circulation, 135(22):2091–2101.
+Nolte, I. M., van der Most, P. J., Alizadeh, B. Z., de Bakker, P. I., Boezen, H. M., Bruinenberg,
+M., Franke, L., van der Harst, P., Navis, G., Postma, D. S., et al. (2017). Missing heritability:
+is the gap closing? an analysis of 32 complex traits in the lifelines cohort study. European
+Journal of Human Genetics, 25(7):877.
+Patterson, H. D. and Thompson, R. (1971). Recovery of inter-block information when block
+sizes are unequal. Biometrika, 58(3):545–554.
+Patterson, N., Price, A. L., and Reich, D. (2006). Population structure and eigenanalysis. PLoS
+genetics, 2(12):e190.
+Rakitsch, B., Lippert, C., Stegle, O., and Borgwardt, K. (2012). A lasso multi-marker mixed
+model for association mapping with population structure correction. Bioinformatics, 29(2):206–
+214.
+Robinson, G. K. et al. (1991). That blup is a good thing: the estimation of random effects.
+Statistical science, 6(1):15–32.
+Scutari, M., Mackay, I., and Balding, D. (2016). Using genetic distance to infer the accuracy of
+genomic prediction. PLoS genetics, 12(9):e1006288.
+Seibert, T. M., Fan, C. C., Wang, Y., Zuber, V., Karunamuni, R., Parsons, J. K., Eeles, R. A.,
+Easton, D. F., Kote-Jarai, Z., Al Olama, A. A., et al. (2018). Polygenic hazard score to guide
+screening for aggressive prostate cancer: development and validation in large scale cohorts.
+bmj, 360:j5757.
+Svishcheva, G. R., Axenovich, T. I., Belonogova, N. M., van Duijn, C. M., and Aulchenko, Y. S.
+(2012). Rapid variance components–based method for whole-genome association analysis.
+Nature genetics, 44(10):1166.
+Terry, R. B., Wood, P. D., Haskell, W. L., Stefanick, M. L., and Krauss, R. M. (1989). Regional
+adiposity patterns in relation to lipids, lipoprotein cholesterol, and lipoprotein subfraction
+mass in men. The Journal of Clinical Endocrinology & Metabolism, 68(1):191–199.
+Torkamani, A., Wineinger, N. E., and Topol, E. J. (2018). The personal and clinical utility of
+polygenic risk scores. Nature Reviews Genetics, page 1.
+Tucker, G., Loh, P.-R., MacLeod, I. M., Hayes, B. J., Goddard, M. E., Berger, B., and Price,
+A. L. (2015). Two-variance-component model improves genetic prediction in family datasets.
+The American Journal of Human Genetics, 97(5):677–690.
+Vilhjálmsson, B. J., Yang, J., Finucane, H. K., Gusev, A., Lindström, S., Ripke, S., Genovese,
+G., Loh, P.-R., Bhatia, G., Do, R., et al. (2015). Modeling linkage disequilibrium increases
+accuracy of polygenic risk scores. The American Journal of Human Genetics, 97(4):576–592.
+Warren, H., Casas, J.-P., Hingorani, A., Dudbridge, F., and Whittaker, J. (2014). Genetic
+prediction of quantitative lipid traits: comparing shrinkage models to gene scores. Genetic
+22
+
+bioRxiv preprint doi: https://doi.org/10.1101/517821; this version posted January 11, 2019. The copyright holder for this preprint (which was not
+certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made available under
+aCC-BY 4.0 International license.
+
+epidemiology, 38(1):72–83.
+Wray, N. R., Goddard, M. E., and Visscher, P. M. (2007). Prediction of individual genetic risk to
+disease from genome-wide association studies. Genome research, 17(10):000–000.
+Yang, J., Benyamin, B., McEvoy, B. P., Gordon, S., Henders, A. K., Nyholt, D. R., Madden,
+P. A., Heath, A. C., Martin, N. G., Montgomery, G. W., et al. (2010). Common snps explain a
+large proportion of the heritability for human height. Nature genetics, 42(7):565.
+Yang, J., Lee, S. H., Goddard, M. E., and Visscher, P. M. (2011). Gcta: a tool for genome-wide
+complex trait analysis. The American Journal of Human Genetics, 88(1):76–82.
+Yang, J., Zaitlen, N. A., Goddard, M. E., Visscher, P. M., and Price, A. L. (2014). Advantages and
+pitfalls in the application of mixed-model association methods. Nature genetics, 46(2):100.
+Zaitlen, N., Kraft, P., Patterson, N., Pasaniuc, B., Bhatia, G., Pollack, S., and Price, A. L. (2013).
+Using extended genealogy to estimate components of heritability for 23 quantitative and
+dichotomous traits. PLoS genetics, 9(5):e1003520.
+Zaitlen, N., Lindström, S., Pasaniuc, B., Cornelis, M., Genovese, G., Pollack, S., Barton, A.,
+Bickeböller, H., Bowden, D. W., Eyre, S., et al. (2012a). Informed conditioning on clinical
+covariates increases power in case-control association studies. PLoS genetics, 8(11):e1003032.
+Zaitlen, N., Paşaniuc, B., Patterson, N., Pollack, S., Voight, B., Groop, L., Altshuler, D.,
+Henderson, B. E., Kolonel, L. N., Marchand, L. L., et al. (2012b). Analysis of case–control
+association studies with known risk variants. Bioinformatics, 28(13):1729–1737.
+Zhou, X., Carbonetto, P., and Stephens, M. (2013). Polygenic modeling with bayesian sparse
+linear mixed models. PLoS genetics, 9(2):e1003264.
+Zhou, X. and Stephens, M. (2012). Genome-wide efficient mixed-model analysis for association
+studies. Nature genetics, 44(7):821.
+
+23
+
+
