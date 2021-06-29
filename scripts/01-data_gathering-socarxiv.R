@@ -127,7 +127,7 @@ write_csv(all_socarxiv_metadata, "outputs/all_socarxiv_metadata.csv")
 #### Download PDFs ####
 covid_socarxiv_metadata <- 
   all_socarxiv_metadata %>% 
-  filter(covid_flag == TRUE)
+  filter(covid_flag == TRUE, date_created <= as.Date("2021-05-01")) # Take up to May 1, 2021
 
 write_csv(covid_socarxiv_metadata, "outputs/data/socarxiv_results.csv")
 

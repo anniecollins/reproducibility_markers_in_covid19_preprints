@@ -67,8 +67,8 @@ write_csv(med_sample, "outputs/data/med_sample.csv")
   
 #### Download relevant papers ####
 # Set up folders for download and txt conversion
-med_pdf_folder = paste(getwd(), "/outputs/data/pdf-medRxiv", sep = "")
-med_txt_folder = paste(getwd(), "/outputs/data/text-medRxiv", sep = "")
+med_pdf_folder = paste0(getwd(), "/outputs/data/pdf-medRxiv")
+med_txt_folder = paste0(getwd(), "/outputs/data/text-medRxiv")
 
 # Download first 500 papers and latest 500 and save to computer
 # head(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
@@ -79,6 +79,33 @@ med_txt_folder = paste(getwd(), "/outputs/data/text-medRxiv", sep = "")
 med_sample %>% slice(1068:1500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
 
 # Convert PDFs to text and saves in new folder
+pdf_convert(med_pdf_folder, med_txt_folder)
+
+# PROBLEM: some PDFs won't convert to text
+downloaded_pdf <- list.files("outputs/data/pdf-medRxiv")
+downloaded_txt <- list.files("outputs/data/text-medRxiv")
+not_working <- med_sample %>% filter(!paste0(ID, "_10.1101_", str_sub(doi, start=9), ".txt") %in% downloaded_txt)
+# Remove file that isn't working
+pdf_file <- paste0(getwd(), "/outputs/data/pdf-medRxiv/", not_working$ID, "_10.1101_", str_sub(not_working$doi, start=9), ".pdf")
+file.remove(pdf_file)
+med_sample <- med_sample %>% filter(!doi %in% not_working$doi)
+
+# Sample new papers (may need to change seed if this step is repeated)
+set.seed(50)
+medrxiv_sample_new <- med_results[sample(nrow(med_results), nrow(not_working)),]
+# Check that new papers are not currently in the sample
+# If line 99 returns any true values, repeat sample with different seed and check again
+downloaded_pdf <- list.files("outputs/data/pdf-medRxiv")
+paste0(medrxiv_sample_new$ID, "_10.1101_", str_sub(medrxiv_sample_new$doi, start=9), ".pdf") %in% downloaded_pdf
+# If above is FALSE, bind to end of sample data and re-save sample frame
+med_sample <- rbind(med_sample, medrxiv_sample_new)
+write_csv(med_sample, "outputs/data/med_sample.csv")
+# Re-download PDFs
+med_pdf_folder = paste0(getwd(), "/outputs/data/pdf-medRxiv")
+med_txt_folder = paste0(getwd(), "/outputs/data/text-medRxiv")
+med_sample[1500,] %>% mx_download(directory = med_pdf_folder, create = FALSE)
+
+# Convert PDFs (will not duplicte)
 pdf_convert(med_pdf_folder, med_txt_folder)
 
 

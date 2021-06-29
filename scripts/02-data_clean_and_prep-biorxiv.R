@@ -82,8 +82,8 @@ bio_sample_2019$join_id <- str_sub(bio_sample_2019$doi, start = 9)
 bio_2019_open_data_results <- merge(bio_sample_2019, bio_2019_open_data_results, by = "join_id")
 
 # Reassign published values to 0 or 1 based on presence of publication
-bio_2019_open_data_results$published[!is.na(bio_2019_open_data_results$published)] <- 1
-bio_2019_open_data_results$published[is.na(bio_2019_open_data_results$published)] <- 0
+bio_2019_open_data_results$published[!bio_2019_open_data_results$published == "NA"] <- 1
+bio_2019_open_data_results$published[bio_2019_open_data_results$published == "NA"] <- 0
 
 # Convert TRUE/FALSE in ODDPub output to 1/0
 bio_2019_open_data_results$is_open_code <- as.integer(bio_2019_open_data_results$is_open_code)

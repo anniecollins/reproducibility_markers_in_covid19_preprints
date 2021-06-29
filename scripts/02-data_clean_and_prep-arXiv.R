@@ -19,8 +19,8 @@ library(tidyverse)
 # Returns list of lists, with one list for each document (paper)
 arxiv_text_sentences <- 
   oddpub::pdf_load(here::here("outputs/data/text-arXiv/")) # Requires closing backslash
-all_arxiv_results <- 
-  read_csv("outputs/data/arxiv_results.csv")
+arxiv_sample <- 
+  read_csv("outputs/data/arxiv_sample.csv")
 
 
 #### Identify open data markers ####
@@ -32,9 +32,7 @@ arxiv_open_data_results <-
   arxiv_open_data_results %>% 
   mutate(id = str_remove(article, "\\.txt"))
 
-arxiv_open_data_results <- 
-  arxiv_open_data_results %>% 
-  left_join(all_arxiv_results, by = "id")
+arxiv_open_data_results <- left_join(arxiv_sample, arxiv_open_data_results, by = "id")
 
 # Convert TRUE/FALSE in ODDPub output to 1/0
 arxiv_open_data_results$is_open_code <- as.integer(arxiv_open_data_results$is_open_code)

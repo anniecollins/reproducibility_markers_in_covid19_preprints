@@ -40,8 +40,6 @@ socarxiv_open_data_results$is_open_data <- as.integer(socarxiv_open_data_results
 
 # TODO: Add variable for type of paper - "machine learning", "model"/"modeling", "simulation", "simulate"?
 
-# Add variable 
-
 # Save it 
 class(socarxiv_open_data_results)
 write_csv(socarxiv_open_data_results, 'outputs/data/socarxiv_open_data_results.csv')

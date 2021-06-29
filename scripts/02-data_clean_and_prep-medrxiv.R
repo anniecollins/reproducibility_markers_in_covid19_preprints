@@ -75,6 +75,8 @@ med_2019_text_sentences <-
 med_2019_open_data_results <- 
   oddpub::open_data_search(med_2019_text_sentences)
 
+med_2019_open_data_results <- med_2019_open_data_results %>% select(article, is_open_data, open_data_category, is_open_code, open_data_statements, open_code_statements)
+
 # Join med_data_2019 to med_2019_open_data_results and save as med_2019_open_data_results
 # TODO: Double check join_id
 med_2019_open_data_results$join_id <- med_2019_open_data_results$article %>% str_remove(".txt") %>% str_replace_all("_", "/") %>% substr(start=2, stop=50)
@@ -82,8 +84,8 @@ med_2019_open_data_results$join_id <- med_2019_open_data_results$article %>% str
 med_2019_open_data_results <- left_join(med_data_2019, med_2019_open_data_results, by = c("doi" = "join_id"))
 
 # Reassign published values to 0 or 1 based on presence of publication
-med_2019_open_data_results$published[!is.na(med_2019_open_data_results$published)] <- 1
-med_2019_open_data_results$published[is.na(med_2019_open_data_results$published)] <- 0
+med_2019_open_data_results$published[!med_2019_open_data_results$published == "NA"] <- 1
+med_2019_open_data_results$published[med_2019_open_data_results$published == "NA"] <- 0
 
 # Convert TRUE/FALSE in ODDPub output to 1/0
 med_2019_open_data_results$is_open_code <- as.integer(med_2019_open_data_results$is_open_code)
