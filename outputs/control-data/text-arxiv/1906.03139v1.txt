@@ -1,0 +1,1030 @@
+Non-Differentiable Supervised Learning with
+Evolution Strategies and Hybrid Methods
+
+arXiv:1906.03139v1 [cs.NE] 7 Jun 2019
+
+Karel Lenc
+DeepMind
+lenck@google.com
+
+Erich Elsen
+DeepMind
+eriche@google.com
+
+Tom Schaul
+DeepMind
+schaul@google.com
+
+Karen Simonyan
+DeepMind
+simonyan@google.com
+
+Abstract
+In this work we show that Evolution Strategies (ES) are a viable method for learning
+non-differentiable parameters of large supervised models. ES are black-box optimization algorithms that estimate distributions of model parameters; however they
+have only been used for relatively small problems so far. We show that it is possible
+to scale ES to more complex tasks and models with millions of parameters. While
+using ES for differentiable parameters is computationally impractical (although possible), we show that a hybrid approach is practically feasible in the case where the
+model has both differentiable and non-differentiable parameters. In this approach
+we use standard gradient-based methods for learning differentiable weights, while
+using ES for learning non-differentiable parameters – in our case sparsity masks of
+the weights. This proposed method is surprisingly competitive, and when parallelized over multiple devices has only negligible training time overhead compared
+to training with gradient descent. Additionally, this method allows to train sparse
+models from the first training step, so they can be much larger than when using
+methods that require training dense models first. We present results and analysis of
+supervised feed-forward models (such as MNIST and CIFAR-10 classification), as
+well as recurrent models, such as SparseWaveRNN for text-to-speech.
+
+1
+
+Introduction
+
+Gradient-based optimization methods, such as SGD with momentum or Adam [16], have become
+standard tools in the deep learning toolbox. While they are very effective for optimizing differentiable
+parameters, there is an interest in developing other efficient learning techniques that are complementary to gradient-based optimization. Evolution Strategies [ES, 41] is one such technique that
+has been used as an SGD alternative and has shown promising results on small-scale problems in
+reinforcement learning [11, 32] and supervised learning [24, 20, 44, 38]. ES is a black-box method
+and does not require the parameters to be differentiable. As such, it can potentially be applied to
+a much larger family of models than standard SGD. Additionally, as ES only requires inference, it
+allows for training neural nets on inference-only hardware (although we do not make use of this
+property here). The goal of this paper is to explore how ES can be scaled up to larger and more
+complex models, from both an algorithmic and implementation perspective, and how it can be used
+in combination with SGD for training sparse neural networks.
+We begin with investigating whether it is possible to train CIFAR-10 classification ConvNets with
+ES (Section 3). This is a harder task than training MNIST classification MLPs [as in 44], and to
+address it with ES we develop a more efficient execution model which we call semi-updates. As a
+
+result, ES reaches competitive accuracy compared to SGD on CIFAR-10, although this comes at the
+cost of significantly worse computational efficiency. In Section 4 we then turn our attention to more
+practical applications (text-to-speech raw audio generation) and the use of ES alongside SGD for
+training large sparse models. Instead of relying on hand-crafted methods for training such models by
+pruning weights [27, 45], we employ ES to learn the weight sparsity masks (i.e. which weight should
+be used in the final sparse model), while SGD is responsible for learning the values of the weights,
+and is performed in parallel with ES. It turns out that unlike the ES for weights, the ES for sparsity
+patterns needs significantly fewer parameter samples which makes this approach computationally
+feasible. Beyond the scientific interest in the feasibility of such hybrid learning techniques, one
+practical advantage of this approach is that it enables joint training of weights together with their
+sparsity mask, thus avoiding the need to first train a dense model (which might be too large to fit
+into memory), and then prune it. The experiments on the state-of-the-art sparse text-to-speech model
+show that ES achieves comparable performance to SGD with pruning.
+In summary, our contributions are three-fold: (i) we propose a new execution model of ES which
+allows us to scale it up to more complex ConvNets on CIFAR-10; (ii) we perform empirical analysis
+of the hyper-parameter selection for the ES training; (iii) we show how ES can be used in combination
+with SGD for hybrid training of sparse models, where the non-differentiable sparsity masks are
+learned by ES, and the differentiable weights by SGD.
+Related work
+Prior works on hybrid SGD-ES methods mostly use ES for network structure and SGD to train the
+differentiable parameters of each sampled architecture [43, 12, 28]. This severely limits the size of the
+models where this method is practical as for each architecture sample the network has to be retrained.
+Instead of meta-learning of the model, our goal is to optimize the model’s non-differentiable and
+differentiable parameters jointly. Recent works compare the relation between the SGD gradients
+and ES updates, either on synthetic landscapes [20] or MNIST models [44], while [23] uses SGD
+gradients to guide the sampler’s search direction. Instead of combining them, we use SGD and ES for
+two different training tasks - SGD for the continuous, differentiable parameters and ES for modelling
+the sparsity mask distribution.
+Sparse models, where a subset of the model parameters are set to exactly zero, offer a faster execution
+and compact storage in sparse-matrix formats. This typically reduces the model performance but
+allows deployment to resource-constrained environments [15, 37]. Training unstructured sparse
+supervised models can be traced back at least to [19], which used second order information to prune
+weights. More tractable efforts can be traced at least to [36], which pruned weights based on the
+magnitude and then retrained. That was more recently extended in Han et al. [8] where the pruning
+and retraining process was carried out in multiple rounds. The pruning process was further refined in
+[27] where the pruning gradually occurred during the first pass of training so that it took no longer to
+find a pruned model than to train the original dense model. Finally, the number of hyper-parameters
+involved in the procedure was reduced in [45] and Bellec et al. [2] uses random walk for obtaining
+the sparsity mask. Additionally a number of Bayesian approaches have been proposed, such as
+Variational Dropout (VD) [26] or L0 regularization [21]. VD uses reparametrization trick, while
+we learn directly the multinomial distribution with ES. As indicated in Gale et al. [6], VD and L0
+regularization tends to perform not better than [27] we compare against.
+
+2
+2.1
+
+Preliminaries
+Natural Evolution Strategies
+
+Black-box optimization methods are characterized by treating the objective function f (θ) as a black
+box, and thus do not require it to be differentiable with respect to its parameters θ. Broadly speaking,
+they fall into three categories: population-based methods like genetic algorithms that maintain and
+adapt a set of parameters, distribution-based methods that maintain and adapt a distribution over the
+parameters θ ∼ π, and Bayesian optimization methods that model the function f , using a Gaussian
+Process for example.
+Natural evolution strategies [NES, 40, 41] are an instance of the second type. NES proceeds by
+sampling a batch of n parameter vectors {θi ∼ π; 1 ≤ i ≤ n}, evaluating the objective for each
+2
+
+(fi = f (θi )) and then updating the parameters of the distribution π to maximize the objective
+J = Eθ∼π [f (θ)], that is, the expectation of f under π. The attribute ‘natural’ refers to the fact that
+NES follows the natural gradient w.r.t. J instead of the steepest (vanilla) gradient.
+In its most common instantiation, NES is used to optimize unconstrained continuous parameters
+θ ∈ Rd , and employs a Gaussian distribution π = N (µ, Σ) with mean µ ∈ Rd and covariance
+matrix Σ ∈ Rd×d . For large d, estimating, updating and sampling from the full covariance matrix is
+too expensive, so here we use its diagonal approximation Σ = diag(σ 2 ) with element-wise variance
+terms σ 2 ∈ Rd ; this variant is called Separable NES [SNES, 33], and similar to [31]. The sampled
+parameters are constructed as θi = µ + σ zi . where is element-wise (Hadamard) product, from
+standard normal samples z ∼ N (0, I). The natural gradient with respect to (µ, σ) is given by:
+X
+X
+2
+∇µ J =
+ui zi , ∇σ J = σ
+ui (zi − 1)
+1≤i≤n
+
+1≤i≤n
+
+and the updates are
+1
+exp( ησ ∇σ J)
+(1)
+2
+where ηµ and ησ are learning rates of the distribution’s mean and variance parameters respectively,
+and ui is a transformation of the fitness fi (fitness-shaping, Section 2.2). Note that the multiplicative
+update on σ is guaranteed to preserve positive variances.
+µ ← µ + ηµ σ
+
+∇µ J
+
+σ←σ
+
+The more restricted case of constant variance (ησ = 0), where the natural gradient coincides with
+the vanilla gradient, was advocated by Salimans et al. [32], and it is sometimes referred to as simply
+‘Evolution Strategies’ (ES), even though it is subtly different from classic Evolution Strategies [29]:
+it matches the classic non-elitist (1, n)-ES only if the fitness shaping function is a top-1 threshold
+function.
+2.2
+
+Fitness shaping functions
+
+It is often desirable to make evolution strategies more robust and scale-invariant by transforming
+the raw evaluation fi into a normalized utility ui ; this mapping is called fitness shaping [9, 41]. A
+common one is based on the rank of fi within the current batch, where ν is a hyper-parameter:
+
+
+max 0, log nν + 1 − log(rank(fi ))
+1
+
+ −
+ui = Pn
+(2)
+n
+n
++
+1
+−
+log(j)
+max
+0,
+log
+j=1
+ν
+For ν = 2, this method sets a constant utility to the lowest 50% of the fitnesses, which we use in our
+experiments.
+
+3
+
+Scaling up SNES for supervised models
+
+In this section we propose a novel method of distributing the evaluation of SNES updates. In
+Section 3.1 we present the semi-updates method, which allows for better distribution of random
+number generation, fitness evaluation, and update computation among multiple workers. This allows
+us to train large supervised models with millions of parameters without creating a bottleneck on
+the master that holds the distribution parameters. Further on, in Section 3.2 we investigate various
+hyper-parameter selections for obtaining competitive results.
+3.1
+
+Speeding up SNES with semi-updates
+
+In practice, SNES training of a model with d parameters requires a large amount of weight samples
+per generation (generation size n) that grows with the dimension of its parameters θ ∈ Rd . A
+standard execution model for SNES is to draw the parameter samples {θ1...n } at the master process,
+which looks after distribution parameters (µ, σ), and to distribute them among b worker processes.
+Even with smaller models, the main bottleneck is generating d · n random values which are needed
+for computing the weighted sums (Section 2.1).
+One possible improvement is to send only the initial distribution parameters (µ, σ) and a random
+seed to the b workers to let each worker generate n/b parameter samples and exchange set of n/b
+3
+
+fitness scalars, similar to [32]; we refer to this method as batched execution. This significantly
+reduces the amount of data communicated between the workers, however to perform an update, a
+worker which performs the ES update still needs to generate all n random parameter samples, which
+is slow for large generations and models.
+We propose to use semi-updates execution model. It is similar to the batched method as each worker
+obtains only the distribution parameters (µ, σ), however instead of sending back the fitness scalars for
+each sample, it computes the update on the batch of n/b parameter samples according to Equations 1
+and 1, and sends it back to the master. Even though the standard ES execution model performs
+fitness shaping based on the rank of all the parameter samples of a generation, doing it on only n/b
+parameter samples within each worker has a surprisingly little effect on the final performance. The
+main advantage of this method is that each worker now has to generate only n/b parameter samples
+while the master performs only a simple average over b semi-updates. However, contrary to the
+batched method, the new distribution parameters has to be communicated to each worker.
+3.2
+
+Experiments
+
+In this section we perform experiments with different variants of the SNES algorithm. In Section 3.3.1,
+we investigate the processing speed of different execution models defined in Section 3.1. Later on,
+in Section 3.4 we investigate what is needed for being able to learn ConvNet models for CIFAR-10
+classification with SNES. Finally, in Section 3.5, we investigate the dependence of accuracy on the
+generation size.
+We use SNES for supervised classification models and the objective function f is the mini-batch
+log-likelihood1 . For all experiments we optimize all model parameters θ ∈ Rd with a single
+normal distribution.√ The distribution parameters are updated with learning rates ηµ = 1 and
+ησ = (3 + ln d)/(5 d) [41, p. 33]. The mean µ is initialized using the truncated normal initializer
+[7], and the variances σ 2 are initialized to 1.
+We perform experiments on MNIST [18] and CIFAR-10 [17] datasets using ConvNet models, which
+are described in Section 3.3. Selected models differ mainly in the number of parameters, which is
+controlled by the number of hidden representations. For CIFAR-10 models, we train on random
+24 × 24 crops and flips from the 32 × 32 training images. At test time, we process the full 32 × 32
+test images and average-pool the activations before the classification layer. To reduce the parameter
+count, we use the Separable Convolution [5].
+3.3
+
+Selected MNIST and CIFAR models
+
+In table Table 1 we provide details of the investigated MNIST and CIFAR models. For the MNIST
+b
+models, CM
+×n stands for M convolution filters of size n × n, P for max pooling, and Fa for a fully
+connected layer with b input features and a output features. The MNIST-30k model is identical to the
+model by Zhang et al. [44].
+Each CIFAR-10 model consists of a set of 3 × 3 separable or standard convolutions where the number
+of filters per layer is specified in the column ‘Layers’. Layers with stride 2 are denoted as s2. The
+convolutional layers are followed by global average pooling and a fully connected layer with 10
+outputs. The column ‘Sep’ specifies whether separable or dense convolutions are used.
+3.3.1
+
+Semi-updates
+
+In Fig. 1-left we compare the speed of different execution modes introduced in Section 3.1. The
+median time per generation is computed on a MNIST-500k model on 110 workers where each worker
+has up to 10 CPU cores available, thus for each generation size n, the amount of computational
+resources is constant. As it can be seen, the semi-updates provide a significant speedup.
+3.4
+
+Training on CIFAR-10 with SNES
+
+We have found that using SNES for training models on CIFAR-10 dataset requires a careful selection
+of hyper-parameters. To achieve 99% test set accuracy on MNIST with SNES, it is typically sufficient
+1
+
+It is possible to use accuracy, however it under-performs due to quantization of the mini-batch accuracy.
+
+4
+
+Table 1: MNIST models (left) and CIFAR-10 models (right) used in the experiments. ACC @10k
+and @80k denotes the SGD performance on the test set after 10k or 80k steps of training respectively.
+Name
+
+# Params Layout
+32
+C16
+×5 , P×2 , C×2 ,
+P×2 , F1568
+10
+
+99.12%
+
+64
+C32
+×5 , P×2 , C×2 ,
+454 922
+128
+P×2 , F3136
+,
+F
+128
+10
+
+99.28%
+
+28 938
+
+MNIST-30k
+MNIST-500k
+
+Name
+
+ACC @10k
+
+CIF-300k YES
+
+64
+C32
+×5 , P×2 , C×2 ,
+MNIST-3M 3 274 634
+1024 99.33%
+P×2 , F3136
+,
+F
+1024
+10
+
+Layers
+
+CIF-900k YES
+
+CIF-300k
++ 512, 512
+
+CIF-8M
+
+CIF-300k
++ 512, 512
+
+SGD
+VarB
+
+NO
+
+FixB
+WFixB
+
+5k 10k 20k 50k 100k
+
+Generation size n
+
+87.7 91.7
+
+895 973
+
+88.1 92.01
+
+7 790 794 84.4 94.6
+
+ES
+ES-BN
+
+0.8
+
+0.6
+0.4
+0.2
+
+ACC ACC
+@10k @80k
+
+SGD
+SGD-BN
+
+0.8
+
+500 1k 2k
+
+Params
+
+64, 64,
+128s2 , 128, 128,
+358 629
+256s2 , 256, 256,
+512s2
+
+Test ACC
+
+40
+30
+20
+10
+0
+
+Semi-Updates
+
+Test ACC
+
+Time/Gen. [s]
+
+Standard
+Batched
+
+Sep.
+
+0
+
+5000
+
+10000
+
+Step
+
+15000
+
+20000
+
+0.6
+0.4
+0.2
+
+0
+
+5000
+
+10000
+
+Step
+
+15000
+
+20000
+
+Figure 1: Left - Seconds per generation of the MNIST-500k model (lower is better) for different
+execution modes, trained on 110 workers with varying generation sizes n (x-axis in log scale). Batches
+and semi-updates are computed over b = n/100. The proposed semi-updates scheme achieves the
+highest training speed and allows for larger generation sizes. Center - Performance of SNES on
+CIF-300k for different training data batch regimes. VarB computes the fitness on a variable batch per
+each SNES sample; FixB computes the fitness on a single batch fixed for the entire SNES generation;
+WFixB fixes the training batch only within each worker, and different workers use different batches.
+Right - Performance of SNES on CIF-300k with and without Batch Normalisation.
+
+to use a large number of parameter samples n. But for CIFAR-10, it turned out to be challenging to
+achieve performance comparable to SGD.
+Due to the computational complexity, we perform most of the hyper-parameter selection experiments
+on a relatively small model with approx. 300k parameters – CIF-300k, and train it for 10k steps. It
+uses a parameter-efficient architecture based on separable convolutions [5]. This model is bigger than
+MNIST-30k, but smaller than MNIST-3M. Each experiment is run on 50 Tesla P4 GPU workers and
+the average processing time is 20s per generation. For all the experiments, the results are computed
+over a generation size 20 000. Each generation is by default evaluated on a batch of 256 training
+images.
+Batch normalization Somewhat surprisingly, batch normalization (BN) [13], is crucial for obtaining competitive results with SNES. BN is often seen as an architectural block to simplify training
+with SGD, but it turns out that it is even more important for SNES training, as shown in Fig. 1-right.
+Similar effect has also been observed for RL ES models [32, 25].
+Fixed versus variable batch For MNIST experiments, using a different batch of training examples
+in each sample of a generation provides better results than using the same fixed batch, as first noted
+in [44]. However, this does not hold for the CIFAR-10 experiments where we have consistently
+observed that it is important to evaluate each SNES sample within a generation on the same training
+batch, as shown in Fig. 1-middle. We hypothesize that this could be due to the higher complexity of
+CIFAR-10 classification task compared to MNIST, which leads to increased variance of the fitness
+values when using different batches.
+With semi-updates, fitness is computed individually by each worker, so it is important to fix the
+training data only within each worker for each semi-update. In fact, fixed batch per semi-update,
+WFixB, obtains slightly better performance than FixB (Fig. 1-middle) due to more training data
+5
+
+per generation. It also allows for a simpler implementation as the training data does not have to be
+synchronized among the workers.
+3.5
+
+Convergence and generation size
+
+Finally, we test the SNES performance versus the number of parameter samples n per generation.
+In all experiments which we have performed with SNES, this has proven to be the most important
+parameter for improving performance, as observed in [44]. For the MNIST models, we have run the
+training for 10k steps. Results are shown in Table 2-left. For the MNIST-30k model, it is possible to
+achieve a slightly better accuracy of 99% at 10k steps vs 98.7% in [44]. For the MNIST-3M we are
+able to achieve higher performance (98.81% test set acc.) than [44] mainly due to larger number of
+training steps, which was facilitated by the more efficient semi-updates execution model.
+Table 2: Test set accuracy after 10k and 20k training steps for MNIST (left) and CIFAR-10 (right)
+dataset respectively with SGD and SNES with various generation sizes n.
+Model
+
+SGD
+Acc
+
+1k
+
+Generation size n
+5k 10k 20k
+
+50k
+
+Model
+
+MNIST-30k 99.04 98.57 98.76 99.13 99.18 99.16
+MNIST-500k 99.28 97.36 98.87 98.84 99.19 99.08
+MNIST-3M 99.33 96.54 98.46 98.74 98.60 98.81
+
+SGD
+Generation size n
+Acc 10k 50k 100k 200k
+
+CIF-300k 88.7 80.03 86.32 88.17 89.48
+CIF-900k 88.79 81.48 87.08 88.47 89.08
+
+In Table 2-right, we show the accuracy obtained with SNES for the CIFAR-10 models. The models
+use batch normalization, fixed mini-batch of 256 training images per worker (WFixB). Similarly to
+the MNIST models, it is possible to reach performance comparable to SGD with a sufficient number
+of parameter samples.
+Number of training samples per evaluation Similarly to SGD [34], SNES performance can be
+improved by evaluating fitness function on more training examples (batch size), as can be seen in
+Table 3. We hypothesize that this is due to reduced variance of the fitness values. However, in our
+experiments generation size n tended to have a larger effect on the final performance.
+Table 3: Performance of SNES on CIF-300k versus the size of the training mini-batch.
+
+3.6
+
+Batch Size
+
+128
+
+256
+
+512
+
+Val Acc
+Gen [s]
+
+78.61%
+13.31
+
+81.12%
+20.05
+
+83.03%
+33.3
+
+Discussion
+
+The empirical results show that with the right algorithmic and engineering changes, it is possible to
+scale up SNES and tackle tasks of higher complexity. We believe that with sufficient effort SNES
+can be scaled to even larger models than we have shown. Compared to standard SGD, SNES only
+needs to infer the model, which has a potential to enable training neural nets on inference-only or
+inference-optimized hardware.
+
+4
+
+Hybrid ES for sparse supervised models
+
+We have shown that it is possible to use ES for learning differentiable parameters of large supervised
+models. However, a key advantage of black-box optimization algorithms is that they are able to
+train models with non-differentiable parameters. In this section we show that it is indeed possible
+to combine conventional SGD optimization with ES for learning weight sparsity masks of sparse
+neural networks. We use SGD to train the differentiable weights, and ES for learning the masks at the
+same time. This leads to C-ES, a hybrid ES-SGD scheme which works as follows. At each training
+step, a generation of mask samples is drawn from the sparsity mask distribution. Each mask sample
+zeroes out a subset of model weights, and the resulting sparse weights are then evaluated to obtain
+the mask fitness, used to compute the mask update with ES. Simultaneously, each worker performs
+6
+
+Algorithm 1: C-ES, a hybrid of ES and SGD
+Input: fitness f , diff. params. θinit , sparsity control k, temperature τ , learning rates ηl , ηθ , steps number S
+l←0;
+for Step = 1 . . . S do
+for i = 1 . . . n do
+sample mask mi ∼ C(p) (sampled k times);
+θi ← mi θ;
+evaluate the fitness f (θi ); compute ∇θi f ;
+end
+compute utilities ui ;
+P
+compute ∇θ f = n1 n
+i=1 ∇θi f ;
+update differentiable weights θ = θ + ηθ ∇θ f ;
+P
+mi ;
+compute ∇l J = τ1 n
+i=1 ui · (1 − p)
+update mask distribution l ← l + ηl ∇l J;
+end
+
+gradient descent w.r.t. its current non-zero weights, and the weight gradients are then averaged across
+all workers to perform a step of SGD with momentum. The algorithm is specified in Algorithm 1.
+This method, similarly to Drop-Connect [39], randomly zeroes model parameters. However, we
+replace the constant uniform distribution with a distribution optimized by ES.
+4.1
+
+Sparsity mask distributions
+
+Mask samples mi ∈ {0, 1}d , i = 1 . . . n, are modelled with a multinomial distribution. To sample a
+mask, we draw repeatedly k indices from a categorical distribution C(p), where k controls the number
+of non-masked weights. We model the distribution probabilities p with a softmax function pj =
+exp(lj /τ )/Σc exp(lc /τ ) where τ is temperature and l ∈ Rd is a vector of distribution parameters,
+learned with ES. For each sample j ∼ C(p), we set mj ← 1, i.e. we sample which model parameters
+are retained (not zeroed out), and the model is evaluated with f (m θ).
+We approximate the derivatives of the multinomial distribution with derivatives of the C’s PMF
+g(x = j|p) = pj :
+
+∂ ln g(x|p)
+1 − pj if x = j
+=
+(3)
+0
+if x 6= j
+∂lj
+and an ES update from n mask samples is approximated as:
+∇l J ←
+
+n
+X
+
+ui ·
+
+i=1
+
+1−p
+τ
+
+mi
+
+(4)
+
+where ui is the utility of sample i. We do not use natural gradients. The sparsity mask distribution
+parameters are updated with l ← l + ηl · ∇l J with learning rate ηl .
+An alternative way of modelling weight sparsity is using separate Bernoulli distribution for each
+differentiable parameter [42]. However, it does not allow for controlling the overall sparsity of
+the network, as the sparsity of each weight is learned independently from the others. Although it
+might be possible to control the sparsity of Bernoulli-parameterized masks using a special form of
+regularization as in [21], in this work we opted for modelling the sparsity masks with a multinomial
+distribution as described above, as it allows for a direct control over the sparsity. Details about
+sampling without replacement are in the following section.
+4.2
+
+Sampling from multinomial distributions
+
+A mask m, sampled from a multinomial distribution, is an outcome of k draws from a categorical
+distribution C. We have observed that the implementation of the mask sampler is crucial. Not only
+it does affect the ability to scale to large models, but it also has a significant influence on the final
+performance.
+7
+
+The standard multinomial sampler, referred to as MS-wR, implements sampling from categorical
+distribution with replacement. For this method, as the number of sampler invocations k increases,
+fewer unique indices are sampled due to the increased number of collisions, i.e. kmk1 < k.
+Fixed sparsity can achieved with various methods. As a baseline which achieves kmk1 = k, we
+sample k − kmk1 additional unique non-zero indices, uniformly from the non-masked ones. This
+method is referred to as MS-wR+u. This method does not sample exactly from the original distribution
+but gives uniform mass to the remaining samples.
+However, in our experiments sampling exactly k indices without replacement tends to yield better
+results. Unfortunately, we have not found any computationally efficient GPU implementation of this,
+so instead we consider two different approximations. The first, MS-woRb, splits k into m batches.
+For each batch we sample k/m indices using MS-wR and remove them from the distribution. This
+method has the advantage that for m = k, it converges to exact sampling without replacement, while
+for small m it is more computationally efficient. However, unless m = k, it does not guarantee
+kmk1 = k.
+In the other approximation, MS-tN, we sample M × k indices from the categorical distribution (where
+M > 1 is a sufficiently large number), accumulate the sampled indices in a histogram and use its
+top-k indices to form the mask. To break possible ties, we add small uniform noise U(0, 10−3 ) to the
+histogram2 .
+Fast sampler implementations An efficient implementation of the random sampler for C(p) is
+crucial for the execution speed. The current multinomial sampler in Tensorflow is based on Gumbelsoftmax sampling [22, 14]. The downsides are that it requires generating kd random values and the
+same amount of storage. When d is in the order of millions and k itself is a tenth of that size (for
+2
+90% sparse models), the product d10 is prohibitively large, both in terms of the computation cost
+and memory. A more efficient strategy is to use inverse CDF sampling. It computes the CDF of the
+distribution using a prefix sum [3, 10] in O(d) time, then generates k random numbers and performs a
+sorted binary search into the CDF in O(k log d) with storage requirements only O(k + d). We employ
+CUB3 to implement fast prefix sums, and use existing fast GPU RNG generators to implement a fast
+GPU binary search similar to the one in Thrust [1].
+4.3
+
+Experimental results
+
+In this section we evaluate C-ES for training sparse feed-forward and recurrent models. First, we
+deploy the proposed method on feed-forward CIFAR-10 classification models CIF-300k and CIF-8M
+(see Section 3.3), and sparsify all layers apart from the last, fully connected layer. We then show that
+C-ES is also applicable to a different kind of models, and use it to train SparseWaveRNN [15], which
+is a state-of-the-art recurrent text-to-speech model.
+4.3.1
+
+Feed-forward models
+
+In this section we show results for the feed-forward image classification models. First we investigate
+hyper-parameter selection, and then we compare the results against the pruning baseline [27] which
+progressively masks model parameters with magnitude close to zero. By default, in all the following
+experiments with C-ES training, the models are trained from the start with an initial sparsity 50%.
+The ES learning rate is set to ηl = 0.1 and softmax temperature is set to τ = 3 and n = 9. We use a
+single C-ES distribution for all weights. At test time, the mask is formed by the top-k indices from l.
+Sampling methods In Table 4 we show results for different sampling methods introduced in
+Section 4.2. This experiment is performed on the CIF-300k for k = d/2 (50% sparsity), which is
+trained for 10k training steps. As can be seen, MS-wR, which does not ensure constant sparsity,
+reaches the worst performance. With MS-wR+u, where we sample additional indices from a uniform
+distribution, the final accuracy is considerably improved. The variants of MS-woRb increase the
+accuracy even further, and the best performing method is MS-tN. We believe this is due to the fact
+that this method amplifies higher probabilities, and keeps a constant number of non-zero weights
+while still sampling model parameters with lower mask probabilities from the distribution.
+2
+3
+
+Stable sort, used in many top-N implementations, is by definition biased towards lower indices.
+https://nvlabs.github.io/cub/
+
+8
+
+Table 4: Performance versus sampling method after 10k training steps, n = 200. Dense test accuracy
+87.65%.
+Test Acc
+[%]
+
+wR wR+u
+
+3
+
+CIF-300k 61.8 74.2
+
+woRb, m=
+4
+5
+
+2
+
+tN, M=
+3
+5
+
+83.5 83.4 83.7 85.6 87.6 88.6
+
+In all experiments of the main text, we use MS-tN approximation with M = 5.
+C-ES and generation size Empirically, we have observed that the generation size has a surprisingly
+limited effect on C-ES training, as can be seen in Table 5. As ConvNets are often trained with DropOut
+[35] or its close variant DropConnect [39] as a form of regularization, they are known to be robust
+against randomly dropped weights or activations. We hypothesize that because of this robustness,
+finding a sparsity mask distribution for a current local optima of the differentiable weights, towards
+which the SGD converges, is a considerably simpler task. Conveniently, small n allows us to make
+use of standard pipelines for multi-GPU SGD training.
+Table 5: Test set accuracy after 20k training steps of C-ES for 50% sparsity with different generation
+size n.
+Test Acc
+[%]
+
+2
+
+5
+
+Generation Size n
+10
+50
+100
+
+200
+
+CIF-300k 87.33 88.13 88.48 88.54 88.32 88.72
+
+Comparison to pruning In this section we compare C-ES against a more conventional pruningbased method for training sparse models [27]. For C-ES, the update of the distribution is computed
+over 9 parameter samples per generation. We use a similar sparsity schedule for both algorithms: the
+models are trained for 2000 steps with the initial sparsity (0% for pruning and 50% for C-ES), and
+then the sparsity is decreased monotonically until it reaches the final sparsity at step 50k. Overall,
+training is performed for 80k steps, and we use SGD with momentum, weight decay, and the learning
+rate follows a schedule4 .
+The results of the C-ES and pruning methods and the execution speed are summarized in Table 6-left.
+Generally, C-ES provides competitive results to the pruning baseline. As C-ES allows us to train
+sparse models from the first training step, we test different initial sparsities in Table 6-right, which
+shows that C-ES is remarkably stable across initial sparsities even for models trained with only 10%
+dense weights from scratch. In this experiment we additionally compare against a model trained
+with a fixed mask distribution – “FixMask”– where we set the ES learning rate to zero. It shows that
+training of sparse over-parameterised models, such as CIF-8M is possible even with a fixed sparsity
+mask, however it fails for models with fewer parameters where learning the mask is important.
+Table 6: Accuracy on the test set of the C-ES trained on CIFAR-10 with constant initial sparsity 50%
+(Left) and a constant target sparsity of 90% (right). Results after 80k steps. FPS for the C-ES method
+measured on 3 NVIDIA Tesla P100 GPU.
+Final sparsity
+50% 80% 90% FPS
+
+Initial sparsity
+Method 10% 30% 50% 70% 90%
+
+Model
+
+Method 0%
+
+CIF-300k
+
+Pruning
+90.98 88.02 80.62 30.6
+91.73
+C-ES
+89.13 84.98 79.58 3.4
+
+CIF-300k
+
+C-ES 80.15 79.46 79.86 80.23 79.58
+FixMask 69.84 64.22 71.28 71.24 65.79
+
+CIF-900k
+
+Pruning
+90.67 88.37 81.74 25.8
+92.01
+C-ES
+89.01 86.1 81.94 2.6
+
+CIF-900k
+
+C-ES 80.87 81.73 81.94 82.61 83.76
+FixMask 69.69 72.91 74.78 74.67 74.74
+
+CIF-8M
+
+Pruning
+93.32 92.64 92.24 20.7
+94.6
+C-ES
+93.94 92.87 90.83 1.32
+
+CIF-8M
+
+C-ES 90.21 90.16 90.56 90.96 91.77
+FixMask 90.01 90.01 90.37 90.59 90.46
+
+4
+
+Model
+
+0.1 for 40k steps, then 0.01, and 0.001 for the last 20k steps.
+
+9
+
+4.3.2
+
+Recurrent models
+
+In this section we show the results on a large sparse recurrent network, SparseWaveRNN [15] for
+text-to-speech task. We trained it on a dataset of 44 hours of North American English speech recorded
+by a professional speaker. The generation is conditioned on conventional linguistic features and pitch
+information. All compared models synthesize raw audio at 24 kHz in 16-bit format. The evaluation
+is carried out on a held-out test set. We perform experiments on two models – one with 448 (WR448)
+and another with 1792 hidden state variables (WR1792). As in [15], we do not sparsify the 1D
+convolutions at the network input, which has approximately 8M parameters. In total, the WR448 has
+420k and WR1792 23.7M masked parameters.
+For all experiments with the C-ES training, models are trained with an initial sparsity 50% and
+generation size n = 8 on 8 GPUs. The sparsity decreases after 40k steps and reaches the final sparsity
+after 251k steps. Model parameters are trained with ADAM optimizer and a constant learning rate
+2 · 10−4 . Otherwise, we use the same C-ES hyper-parameters as in Section 4.3.1. We use a separate
+mask distribution per each parameter tensor which offers slightly better execution speeds. As noted
+in [15], in practical applications it might be beneficial to have the sparsity pattern in the form of
+contiguous blocks, so we train the models with different sparsity block widths (width 1 corresponds
+to unconstrained sparsity pattern as in the experiments above). This is implemented by using the
+same sparsity mask value for several contiguous weights.
+Table 7: NLL on the test set at 300k steps (lower is better) of the recurrent Sparse WaveRNN models.
+Left - Comparison of pruning and C-ES on various models and block widths. Processing speed (FPS)
+is measured on 8 NVIDIA Tesla P100 GPU, for block width 1. Right - C-ES versus FixMask trained
+on WR1792 for different initial sparsities, block width, and target sparsity of 97%.
+SGD
+Spar.
+NLL
+
+Block Width
+FPS
+1
+2 16
+
+Initial sparsity
+Method 20% 50% 80% 90%
+
+Model
+
+Method
+
+WR448
+
+Pruning
+5.81 5.78 5.75 1.16
+5.72 50%
+C-ES
+6.02 5.91 5.80 1.06
+
+WR1792
+
+Pruning
+C-ES
+5.49 5.48 5.52 0.49
+5.58 5.56 5.56 5.57
+5.43 97%
+WR1792 BW16
+C-ES
+5.64 5.61 5.56 0.45
+FixMask 5.65 5.65 9.54 9.54
+
+Model
+WR1792 BW1
+
+C-ES
+5.66 5.64 5.63 5.63
+FixMask 5.73 5.72 9.54 9.54
+
+The results are shown in Table 7. The computational overhead of C-ES is approximately equal to the
+generation size, however C-ES is easily parallelizable over multiple computational devices. With
+each mask sample being evaluated on a single GPU, the execution speed is comparable to pruning,
+even though more than 57M random numbers have to be generated per training step on each GPU. In
+all cases, the C-ES method is competitive with the pruning baseline. In general, it performs better for
+larger block widths due to the reduced number of C-ES parameters. However, contrary to pruning,
+C-ES allows us to train the sparse model from scratch – as shown in Table 7-right, which opens up
+possibilities for using accelerated sparse training, even though we have not investigated this further
+here. Contrary to feed-forward models, a fixed mask distribution (“FixMask”) does not work well for
+high initial sparsities. Additionally, C-ES might allow for optimizing such non-differentiable factors
+as execution speed.
+
+5
+
+Conclusion
+
+In this work we have investigated the applicability of Evolution Strategies to training more complex
+supervised models. We have shown that using appropriate “tricks of the trade” it is possible to train
+such models to the accuracy comparable to SGD. Additionally, we have shown that hybrid ES is a
+viable alternative for training sparsity masks, allowing for training sparse models from scratch in the
+same time as the dense models when the ES samples are parallelized across multiple computation
+devices. Considering that ES is often seen as a prohibitively slow method only applicable to small
+problems, the significance of our results is that ES should be seriously considered as a complementary
+tool in the DL practitioner’s toolbox, which could be useful for training non-differentiable parameters
+(sparsity masks and beyond) in combination with SGD. We hope that our results, albeit not the state
+of the art, will further reinvigorate the interest in ES and black-box methods in general.
+10
+
+Acknowledgements We would like to thank David Choi and Jakub Sygnowski for their help
+developing the infrastructure used by this work.
+
+References
+[1] Nathan Bell and Jared Hoberock. Thrust: A productivity-oriented library for cuda. In GPU
+computing gems, Jade edition, pages 359–371. Elsevier, 2012.
+[2] Guillaume Bellec, David Kappel, Wolfgang Maass, and Robert Legenstein. Deep rewiring:
+Training very sparse deep networks. arXiv preprint arXiv:1711.05136, 2017.
+[3] Guy E Blelloch. Prefix sums and their applications. Technical report, 1990.
+[4] Peter Buchlovsky, David Budden, Dominik Grewe, Chris Jones, John Aslanides, Frederic
+Besse, Andy Brock, Aidan Clark, Sergio Gómez Colmenarejo, Aedan Pope, Fabio Viola,
+and Dan Belov. TF-Replicator: Distributed machine learning for researchers. arXiv preprint
+arXiv:1902.00465, 2019.
+[5] François Chollet. Xception: Deep learning with depthwise separable convolutions. CoRR, 2016.
+[6] Trevor Gale, Erich Elsen, and Sara Hooker. The state of sparsity in deep neural networks. CoRR,
+abs/1902.09574, 2019. URL http://arxiv.org/abs/1902.09574.
+[7] Xavier Glorot and Yoshua Bengio. Understanding the difficulty of training deep feedforward neural networks. In Proceedings of the thirteenth international conference on artificial
+intelligence and statistics, pages 249–256, 2010.
+[8] Song Han, Xingyu Liu, Huizi Mao, Jing Pu, Ardavan Pedram, Mark A. Horowitz, and William J.
+Dally. EIE: efficient inference engine on compressed deep neural network. CoRR, 2016.
+[9] Nikolaus Hansen and Andreas Ostermeier. Completely derandomized self-adaptation in evolution strategies. Evolutionary computation, 9(2):159–195, 2001.
+[10] Mark Harris, Shubhabrata Sengupta, and John D Owens. Parallel prefix sum (scan) with cuda.
+GPU gems, 3(39):851–876, 2007.
+[11] Christian Igel. Neuroevolution for reinforcement learning using evolution strategies. In The
+2003 Congress on Evolutionary Computation, 2003. CEC’03., volume 4, pages 2588–2595.
+IEEE, 2003.
+[12] Christian Igel and Bernhard Sendhoff. Genesis of organic computing systems: Coupling
+evolution and learning. In Organic Computing, pages 141–166. Springer, 2009.
+[13] Sergey Ioffe and Christian Szegedy. Batch normalization: Accelerating deep network training
+by reducing internal covariate shift. CoRR, 2015.
+[14] Eric Jang, Shixiang Gu, and Ben Poole. Categorical reparameterization with gumbel-softmax.
+In International Conference on Learning Representations, 2017.
+[15] Nal Kalchbrenner, Erich Elsen, Karen Simonyan, Seb Noury, Norman Casagrande, Edward
+Lockhart, Florian Stimberg, Aaron van den Oord, Sander Dieleman, and Koray Kavukcuoglu.
+Efficient neural audio synthesis. In Proceedings of the 35th International Conference on Machine
+Learning, volume 80 of Proceedings of Machine Learning Research, pages 2410–2419, 2018.
+[16] Diederik P Kingma and Jimmy Ba. Adam: A method for stochastic optimization. CoRR, 2014.
+[17] Alex Krizhevsky and Geoffrey Hinton. Learning multiple layers of features from tiny images.
+Technical report, Citeseer, 2009.
+[18] Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner. Gradient-based learning applied to document
+recognition. Proceedings of the IEEE, 86(11):2278–2324, 1998.
+[19] Yann LeCun, John S. Denker, and Sara A. Solla. Optimal brain damage. In Advances in Neural
+Information Processing Systems, pages 598–605, 1990.
+11
+
+[20] Joel Lehman, Jay Chen, Jeff Clune, and Kenneth O. Stanley. Es is more than just a traditional
+finite-difference approximator. In Proceedings of the Genetic and Evolutionary Computation
+Conference, pages 450–457. ACM, 2018.
+[21] Christos Louizos, Max Welling, and Diederik P. Kingma. Learning sparse neural networks
+through l0 regularization. In International Conference on Learning Representations, 2018.
+[22] Chris J. Maddison, Andriy Mnih, and Yee Whye Teh. The Concrete Distribution: A Continuous Relaxation of Discrete Random Variables. In International Conference on Learning
+Representations, 2017.
+[23] Niru Maheswaranathan, Luke Metz, George Tucker, and Jascha Sohl-Dickstein. Guided
+evolutionary strategies: escaping the curse of dimensionality in random search. CoRR, 2018.
+[24] Martin Mandischer. A comparison of evolution strategies and backpropagation for neural
+network training. Neurocomputing, 42(1-4):87–117, 2002.
+[25] Horia Mania, Aurelia Guy, and Benjamin Recht. Simple random search provides a competitive
+approach to reinforcement learning. CoRR, 2018.
+[26] Dmitry Molchanov, Arsenii Ashukha, and Dmitry Vetrov. Variational dropout sparsifies deep
+neural networks. In Proceedings of the 34th International Conference on Machine Learning,
+volume 70 of Proceedings of Machine Learning Research, pages 2498–2507, 2017.
+[27] Sharan Narang, Erich Elsen Gregory F. Diamos, and Shubho Sengupta. Exploring sparsity in
+recurrent neural networks. CoRR, 2017.
+[28] Esteban Real, Alok Aggarwal, Yanping Huang, and Quoc V Le. Regularized evolution for
+image classifier architecture search. arXiv preprint arXiv:1802.01548, 2018.
+[29] Ingo Rechenberg. Evolutionsstrategie–optimierung technisher systeme nach prinzipien der
+biologischen evolution. 1973.
+[30] Malcolm Reynolds, Gabriel Barth-Maron, Frederic Besse, Diego de Las Casas, Andreas
+Fidjeland, Tim Green, Adrià Puigdomènech, Sébastien Racanière, Jack Rae, and Fabio
+Viola. Open sourcing Sonnet - a new library for constructing neural networks. https:
+//deepmind.com/blog/open-sourcing-sonnet/, 2017.
+[31] Raymond Ros and Nikolaus Hansen. A simple modification in cma-es achieving linear time
+and space complexity. In International Conference on Parallel Problem Solving from Nature,
+pages 296–305. Springer, 2008.
+[32] Tim Salimans, Jonathan Ho, Xi Chen, Szymon Sidor, and Ilya Sutskever. Evolution strategies
+as a scalable alternative to reinforcement learning. CoRR, 2017.
+[33] Tom Schaul, Tobias Glasmachers, and Jürgen Schmidhuber. High dimensions and heavy tails
+for natural evolution strategies. In Proceedings of the 13th annual conference on Genetic and
+evolutionary computation, pages 845–852. ACM, 2011.
+[34] Samuel L Smith, Pieter-Jan Kindermans, Chris Ying, and Quoc V Le. Don’t Decay the Learning
+Rate, Increase the Batch Size. CoRR, 2017.
+[35] Nitish Srivastava, Geoffrey Hinton, Alex Krizhevsky, Ilya Sutskever, and Ruslan Salakhutdinov.
+Dropout: A simple way to prevent neural networks from overfitting. Journal of Machine
+Learning Research, 15:1929–1958, 2014.
+[36] Nikko Ström. Sparse connection and pruning in large dynamic artificial neural networks. In
+Fifth European Conference on Speech Communication and Technology, 1997.
+[37] Lucas Theis, Iryna Korshunova, Alykhan Tejani, and Ferenc Huszár. Faster gaze prediction
+with dense networks and fisher pruning. CoRR, abs/1801.05787, 2018.
+12
+
+[38] Konstantinos Varelas, Anne Auger, Dimo Brockhoff, Nikolaus Hansen, Ouassim Ait ElHara,
+Yann Semet, Rami Kassab, and Frédéric Barbaresco. A comparative study of large-scale variants
+of cma-es. In International Conference on Parallel Problem Solving from Nature, pages 3–15.
+Springer, 2018.
+[39] Li Wan, Matthew Zeiler, Sixin Zhang, Yann Le Cun, and Rob Fergus. Regularization of
+neural networks using dropconnect. In International Conference on Machine Learning, pages
+1058–1066, 2013.
+[40] Daan Wierstra, Tom Schaul, Jan Peters, and Juergen Schmidhuber. Natural evolution strategies.
+In Evolutionary Computation, 2008. CEC 2008., pages 3381–3387. IEEE, 2008.
+[41] Daan Wierstra, Tom Schaul, Tobias Glasmachers, Yi Sun, Jan Peters, and Jürgen Schmidhuber.
+Natural evolution strategies. JMLR, 15(1):949–980, 2014.
+[42] Ronald J. Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning. Machine Learning, 8(3):229–256, 1992.
+[43] Xin Yao. Evolving artificial neural networks. Proceedings of the IEEE, 87(9):1423–1447, 1999.
+[44] Xingwen Zhang, Jeff Clune, and Kenneth O. Stanley. On the relationship between the openai
+evolution strategy and stochastic gradient descent. CoRR, 2017.
+[45] Michael Zhu and Suyog Gupta. To prune, or not to prune: exploring the efficacy of pruning for
+model compression. CoRR, 2017.
+
+13
+
+

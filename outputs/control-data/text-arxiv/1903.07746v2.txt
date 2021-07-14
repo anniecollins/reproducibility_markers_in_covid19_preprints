@@ -1,0 +1,2057 @@
+Pairwise Comparisons with Flexible Time-Dynamics
+Lucas Maystre∗
+
+Victor Kristof
+
+Matthias Grossglauser
+
+Spotify
+lucasm@spotify.com
+
+EPFL
+victor.kristof@epfl.ch
+
+EPFL
+matthias.grossglauser@epfl.ch
+
+arXiv:1903.07746v2 [stat.ML] 17 May 2019
+
+ABSTRACT
+Inspired by applications in sports where the skill of players or teams
+competing against each other varies over time, we propose a probabilistic model of pairwise-comparison outcomes that can capture
+a wide range of time dynamics. We achieve this by replacing the
+static parameters of a class of popular pairwise-comparison models
+by continuous-time Gaussian processes; the covariance function of
+these processes enables expressive dynamics. We develop an efficient inference algorithm that computes an approximate Bayesian
+posterior distribution. Despite the flexbility of our model, our inference algorithm requires only a few linear-time iterations over the
+data and can take advantage of modern multiprocessor computer
+architectures. We apply our model to several historical databases
+of sports outcomes and find that our approach a) outperforms competing approaches in terms of predictive performance, b) scales to
+millions of observations, and c) generates compelling visualizations
+that help in understanding and interpreting the data.
+
+KEYWORDS
+Pairwise comparisons; ranking; time series; Kalman filter; Bayesian
+inference; sports; games.
+ACM Reference Format:
+Lucas Maystre, Victor Kristof, and Matthias Grossglauser. 2019. Pairwise
+Comparisons with Flexible Time-Dynamics. In The 25th ACM SIGKDD
+Conference on Knowledge Discovery and Data Mining (KDD ’19), August
+4–8, 2019, Anchorage, AK, USA. ACM, New York, NY, USA, 11 pages. https:
+//doi.org/10.1145/3292500.3330831
+
+1
+
+INTRODUCTION
+
+In many competitive sports and games (such as tennis, basketball,
+chess and electronic sports), the most useful definition of a competitor’s skill is the propensity of that competitor to win against an
+opponent. It is often difficult to measure this skill explicitly: take
+basketball for example, a team’s skill depends on the abilities of
+its players in terms of shooting accuracy, physical fitness, mental
+preparation, but also on the team’s cohesion and coordination, on
+its strategy, on the enthusiasm of its fans, and a number of other
+intangible factors. However, it is easy to observe this skill implicitly
+through the outcomes of matches.
+∗ This
+
+work was done while the author was at EPFL.
+
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+© 2019 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 978-1-4503-6201-6/19/08. . . $15.00
+https://doi.org/10.1145/3292500.3330831
+
+In this setting, probabilistic models of pairwise-comparison outcomes provide an elegant and practical approach to quantifying
+skill and to predicting future match outcomes given past data. These
+models, pioneered by Zermelo [37] in the context of chess (and by
+Thurstone [35] in the context of psychophysics), have been studied
+for almost a century. They posit that each competitor i (i.e., a team
+or player) is characterized by a latent score si ∈ R and that the
+outcome probabilities of a match between i and j are a function
+of the difference si − s j between their scores. By estimating the
+scores {si } from data, we obtain an interpretable proxy for skill
+that is predictive of future match outcomes. If a competitor’s skill is
+expected to remain stable over time, these models are very effective.
+But what if it varies over time?
+A number of methods have been proposed to adapt comparison
+models to the case where scores change over time. Perhaps the
+best known such method is the Elo rating system [9], used by the
+World Chess Federation for their official rankings. In this case,
+the time dynamics are captured essentially as a by-product of the
+learning rule (c.f. Section 5). Other approaches attempt to model
+these dynamics explicitly [e.g., 6, 7, 10, 13]. These methods greatly
+improve upon the static case when considering historical data,
+but they all assume the simplest model of time dynamics (that
+is, Brownian motion). Hence, they fail to capture more nuanced
+patterns such as variations at different timescales, linear trends,
+regression to the mean, discontinuities, and more.
+In this work, we propose a new model of pairwise-comparison
+outcomes with expressive time-dynamics: it generalizes and extends
+previous approaches. We achieve this by treating the score of an
+opponent i as a time-varying Gaussian process si (t) that can be
+endowed with flexible priors [26]. We also present an algorithm that,
+in spite of this increased flexibility, performs approximate Bayesian
+inference over the score processes in linear time in the number
+of observations so that our approach scales seamlessly to datasets
+with millions of observations. This inference algorithm addresses
+several shortcomings of previous methods: it can be parallelized
+effortlessly and accommodates different variational objectives. The
+highlights of our method are as follows.
+Flexible Dynamics As scores are modeled by continuous-time
+Gaussian processes, complex (yet interpretable) dynamics
+can be expressed by composing covariance functions.
+Generality The score of an opponent for a given match is expressed as a (sparse) linear combination of features. This
+enables, e.g., the representation of a home advantage or any
+other contextual effect. Furthermore, the model encompasses
+a variety of observation likelihoods beyond win / lose, based,
+e.g., on the number of points a competitor scores.
+Bayesian Inference Our inference algorithm returns a posterior
+distribution over score processes. This leads to better predictive performance and enables a principled way to learn
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+L. Maystre et al.
+
+the dynamics (and any other model hyperparameters) by
+optimizing the log-marginal likelihood of the data.
+Ease of Intepretation By plotting the score processes {si (t)} over
+time, it is easy to visualize the probability of any comparison outcome under the model. As the time dynamics are
+described through the composition of simple covariance
+functions, their interpretation is straightforward as well.
+Concretely, our contributions are threefold. First, we develop a
+probabilistic model of pairwise-comparison outcomes with flexible
+time-dynamics (Section 2). The model covers a wide range of use
+cases, as it enables a) opponents to be represented by a sparse linear
+combination of features, and b) observations to follow various likelihood functions. In fact, it unifies and extends a large body of prior
+work. Second, we derive an efficient algorithm for approximate
+Bayesian inference (Section 3). This algorithm adapts to two different variational objectives; in conjunction with the “reverse-KL”
+objective, it provably converges to the optimal posterior approximation. It can be parallelized easily, and the most computationally
+intensive step can be offloaded to optimized off-the-shelf numerical
+software. Third, we apply our method on several sports datasets and
+show that it achieves state-of-the-art predictive performance (Section 4). Our results highlight that different sports are best modeled
+with different time-dynamics. We also demonstrate how domainspecific and contextual information can improve performance even
+further; in particular, we show that our model outperforms competing ones even when there are strong intransitivities in the data.
+In addition to prediction tasks, our model can also be used to
+generate compelling visualizations of the temporal evolution of
+skills. All in all, we believe that our method will be useful to datamining practitioners interested in understanding comparison timeseries and in building predictive systems for games and sports.
+A Note on Extensions. In this paper, we focus on pairwise comparisons for conciseness. However, the model and inference algorithm
+could be extended to multiway comparisons or partial rankings
+over small sets of opponents without any major conceptual change,
+similarly to Herbrich et al. [16]. Furthermore, and even though we
+develop our model in the context of sports, it is relevant to all applications of ranking from comparisons, e.g., to those where comparison outcomes reflect human preferences or opinions [21, 29, 35].
+
+2
+
+MODEL
+
+In this section, we formally introduce our probabilistic model. For
+clarity, we take a clean-slate approach and develop the model from
+scratch. We discuss in more detail how it relates to prior work in
+Section 5.
+The basic building blocks of our model are features1 . Let M be
+the number of features; each feature m ∈ [M] is characterized by a
+latent, continuous-time Gaussian process
+sm (t) ∼ GP[0, km (t, t ′ )].
+
+(1)
+
+We call sm (t) the score process of m, or simply its score. The covariance function of the process, km (t, t ′ )  E [sm (t)sm (t ′ )], is used to
+encode time dynamics. A brief introduction to Gaussian processes
+1 In
+
+the simplest case, there is a one-to-one mapping between competitors (e.g., teams)
+and features, but decoupling them offers increased modeling power.
+
+t1
+
+t2
+
+...
+
+tN
+
+sm1
+
+sm2
+
+...
+
+smN
+
+sm
+M
+
+xn
+
+M
+
+yn
+N
+
+(a) Static model
+
+x1
+
+y1
+
+x2
+
+y2
+
+xN
+...
+
+yN
+
+(b) Our dynamic model
+
+Figure 1: Graphical representation of a static model (left)
+and of the dynamic model presented in this paper (right).
+The observed variables are shaded. For conciseness, we let
+x n  x n,i − x n, j . Right: the latent score variables are mutually dependent across time, as indicated by the thick line.
+as well as a discussion of useful covariance functions is given in Section 2.1. The M scores s 1 (t), . . . , s M (t) are assumed to be (a priori)
+jointly independent, and we collect them into the score vector
+
+⊤
+s(t) = s 1 (t) · · · s M (t) .
+For a given match, each opponent i is described by a sparse linear
+combination of the features, with coefficients x i ∈ RM . That is, the
+score of an opponent i at time t ∗ is given by
+si = x i⊤s(t ∗ ).
+(2)
+In the case of a one-to-one mapping between competitors and
+features, x i is simply the one-hot encoding of opponent i. More
+complex setups are possible: For example, in the case of team sports
+and if the player lineup is available for each match, it could also be
+used to encode the players taking part in the match [20]. Note that
+x i can also depend contextually on the match. For instance, it can
+be used to encode the fact that a team plays at home [1].
+Each observation consists of a tuple (x i , x j , t ∗ , y), where x i , x j
+are the opponents’ feature vectors, t ∗ ∈ R is the time, and y ∈ Y is
+the match outcome. We posit that this outcome is a random variable
+that depends on the opponents through their latent score difference:
+y | x i , x j , t ∗ ∼ p(y | si − s j ),
+where p is a known probability density (or mass) function and
+si , s j are given by (2). The idea of modeling outcome probabilities
+through score differences dates back to Thurstone [35] and Zermelo
+[37]. The likelihood p is chosen such that positive values of si − s j
+lead to successful outcomes for opponent i and vice-versa.
+A graphical representation of the model is provided in Figure 1.
+For perspective, we also include the representation of a static model,
+such as that of Thurstone [35]. Our model can be interpreted as
+“conditionally parametric”: conditioned on a particular time, it falls
+back to a (static) pairwise-comparison model parametrized by realvalued scores.
+Observation Models. Choosing an appropriate likelihood function
+p(y | si − s j ) is an important modeling decision and depends on the
+information contained in the outcome y. The most widely applicable
+likelihoods require only ordinal observations, i.e., whether a match
+resulted in a win or a loss (or a tie, if applicable). In some cases, we
+might additionally observe points (e.g., in association football, the
+
+Pairwise Comparisons with Flexible Time-Dynamics
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+Table 1: Examples of observation likelihoods. The score difference is denoted by d  si −s j and the Gaussian cumulative
+density function is denoted by Φ.
+
+[8, Sec. 2.3] provides a good introduction to building expressive
+covariance functions by composing simple ones.
+
+3
+Name
+
+Y
+
+p(y | d)
+
+References
+
+Probit
+Logit
+Ordinal probit
+Poisson-exp
+Gaussian
+
+{±1}
+{±1}
+{±1, 0}
+N ≥0
+R
+
+Φ(yd)
+[1 + exp(−yd)]−1
+Φ(yd − α), . . .
+exp(yd − e d )/y!
+∝ exp[(y − d)2 /(2σ 2 )]
+
+[16, 35]
+[4, 37]
+[11]
+[19]
+[14]
+
+number of goals scored by each team). To make use of this extra
+information, we can model a) the number of points of opponent i
+with a Poisson distribution whose rate is a function of si − s j , or
+b) the points difference with a Gaussian distribution centered at
+si − s j . A non-exhaustive list of likelihoods is given in Table 1.
+
+2.1
+
+Covariance Functions
+
+A Gaussian process s(t) ∼ GP[0, k(t, t ′ )] can be thought of as
+an infinite collection of random variables indexed by time, such
+that the joint distribution of any finite vector of N samples s =
+[s(t 1 ) · · · s(t N )] is given by s ∼ N (0, K), where K = [k(ti , t j )]. That
+is, s is jointly Gaussian with mean 0 and covariance matrix K. We
+refer the reader to Rasmussen and Williams [26] for an excellent
+introduction to Gaussian processes.
+Hence, by specifying the covariance function appropriately, we
+can express prior expectations about the time dynamics of a feature’s score, such as smooth or non-smooth variations at different
+timescales, regression to the mean, discontinuities, linear trends
+and more. Here, we describe a few functions that we find useful
+in the context of modeling temporal variations. Figure 2 illustrates
+these functions through random realizations of the corresponding
+Gaussian processes.
+Constant This covariance captures processes that remain constant
+over time. It is useful in composite covariances to model a
+constant offset (i.e., a mean score value).
+Piecewise Constant Given a partition of R into disjoint intervals,
+this covariance is constant inside a partition and zero between partitions. It can, for instance, capture discontinuities
+across seasons in professional sports leagues.
+Wiener This covariance reflects Brownian motion dynamics (c.f.
+Section 5). It is non-stationary: the corresponding process
+drifts away from 0 as t grows.
+Matérn This family of stationary covariance functions can represent smooth and non-smooth variations at various timescales.
+It is parametrized by a variance, a characteristic timescale
+and a smoothness parameter ν . When ν = 1/2, it corresponds
+to a mean-reverting version of Brownian motion.
+Linear This covariance captures linear dynamics.
+Finally, note that composite functions can be created by adding or
+multiplying covariance functions together. For example, let ka and
+kb be constant and Matérn covariance functions, respectively. Then,
+the composite covariance k(t, t ′ )  ka (t, t ′ ) + kb (t, t ′ ) captures
+dynamics that fluctuate around a (non-zero) mean value. Duvenaud
+
+INFERENCE ALGORITHM
+
+In this section, we derive an efficient inference algorithm for our
+model. For brevity, we focus on explaining the main ideas behind
+the algorithm. A reference software implementation, available online at https://github.com/lucasmaystre/kickscore, complements
+the description provided here.
+We begin by introducing some notation. Let D = {(x n , tn , yn ) :
+n ∈ [N ]} be a dataset of N independent observations, where for
+conciseness we fold the two opponents x n,i and x n, j into x n 
+x n,i − x n, j , for each observation2 . Let Dm ⊆ [N ] be the subset
+of observations involving feature m, i.e., those observations for
+which x nm , 0, and let Nm = |Dm |. Finally, denote by sm ∈ R Nm
+the samples of the latent score process at times corresponding
+to the observations in Dm . The joint prior distribution of these
+samples is p(sm ) = N (0, Km ), where Km is formed by evaluating
+the covariance function km (t, t ′ ) at the relevant times.
+We take a Bayesian approach and seek to compute the posterior
+distribution
+N
+M
+Ö
+Ö
+p(s 1 , . . . , s M | D) ∝
+p(sm )
+p[yn | x n⊤s(tn )].
+(3)
+m=1
+
+n=1
+
+As the scores are coupled through the observations, the posterior no
+longer factorizes over {sm }. Furthermore, computing the posterior
+is intractable if the likelihood is non-Gaussian.
+To overcome these challenges, we consider a mean-field variational approximation [36]. In particular, we assume that the posterior can be well-approximated by a multivariate Gaussian distribution that factorizes over the features:
+M
+Ö
+p(s 1 , . . . , s M | D) ≈ q(s 1 , . . . , s M ) 
+N (sm | µm , Σm ). (4)
+m=1
+
+Computing this approximate posterior amounts to finding the variational parameters {µm , Σm } that best approximate the true posterior. More formally, the inference problem reduces to the optimization problem
+min
+
+{µm , Σm }
+
+div [p(s 1 , . . . , s M | D) ∥ q(s 1 , . . . , s M )] ,
+
+(5)
+
+for some divergence measure div(p∥q) ≥ 0. We will consider two
+different such measures in Section 3.1.
+A different viewpoint on the approximate posterior is as follows.
+For both of the variational objectives that we consider, it is possible
+to rewrite the optimal distribution q(sm ) as
+Ö
+2
+q(sm ) ∝ p(sm )
+N [smn | µ̃mn , σ̃mn
+].
+n ∈Dm
+
+Letting Xn ⊆ [M] be the subset of features such that x nm , 0,
+we can now reinterpret the variational approximation as transforming every observation (x n , tn , yn ) into several independent
+pseudo-observations with Gaussian likelihood, one for each feature
+m ∈ Xn . Instead of optimizing directly {µm , Σm } in (5), we can
+2 }. For
+alternatively choose to optimize the parameters { µ̃mn , σ̃mn
+2 This enables us to write the score difference more compactly. Given an observation at
+
+time t ∗ and letting x  x i − x j , we have s i − s j = x i⊤ s (t ∗ ) − x j⊤ s (t ∗ ) = x ⊤ s (t ∗ ).
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+Constant
+
+4
+
+L. Maystre et al.
+
+Piecewise constant
+
+Wiener
+
+Matérn 1/2
+
+Matérn 5/2
+
+Constant + linear
+
+2
+0
+−2
+−4
+0
+
+5
+
+10
+
+0
+
+5
+
+10
+
+0
+
+5
+
+10
+
+0
+
+5
+
+10
+
+0
+
+5
+
+10
+
+0
+
+5
+
+10
+
+Figure 2: Random realizations of a zero-mean Gaussian process with six different covariance functions.
+Algorithm 1 Model inference.
+Require: D = {(x n , tn , yn ) : n ∈ [N ]}
+2 ← 0, ∞ ∀m
+1: µ̃m , σ̃m
+2: q(sm ) ← p(sm ) ∀m
+3: repeat
+4:
+for n = 1, . . . , N do
+5:
+δ ← Derivatives(x n , yn )
+6:
+for m ∈ Xn do
+2 ← UpdateParams(x
+7:
+µ̃mn , σ̃mn
+nm , δ)
+8:
+for m = 1, . . . , M do
+2)
+9:
+q(sm ) ← UpdatePosterior(µ̃m , σ̃m
+10: until convergence
+
+is valuable, as it enables practitioners to use the most advantageous method for a given likelihood function. Detailed formulae
+for Derivatives and UpdateParams can be found in Appendix A.
+3.1.1 Expectation Propagation. We begin by defining two distributions. The cavity distribution q −n is the approximate posterior
+without the pseudo-observations associated with the nth datum,
+that is,
+q(s 1 , . . . , s M )
+q −n (s 1 , . . . , s M ) ∝ Î
+.
+2
+m ∈Xn N [smn | µ̃mn , σ̃mn ]
+The hybrid distribution q̂n is given by the cavity distribution multiplied by the nth likelihood factor, i.e.,
+q̂n (s 1 , . . . , s M ) ∝ q −n (s 1 , . . . , s M )p[yn | x n⊤s(tn )].
+
+any feature m, given the pseudo-observations’ parameters µ̃m and
+2 , computing q(s ) becomes tractable (c.f. Section 3.2).
+σ̃m
+m
+An outline of our iterative inference procedure is given in Algorithm 1. Every iteration consists of two steps:
+(1) updating the pseudo-observations’ parameters given the true
+observations and the current approximate posterior (lines
+4–7), and
+(2) recomputing the approximate posterior given the current
+pseudo-observation (lines 8 and 9).
+Convergence is declared when the difference between two suc2 } falls below a threshold. Note
+cessive iterates of { µ̃mn } and {σ̃mn
+that, as a by-product of the computations performed by the algorithm, we can also estimate the log-marginal likelihood of the data,
+log p(D).
+Running Time. In Appendix A, we show that Derivatives and
+UpdateParams run in constant time. In Section 3.2, we show that
+UpdatePosterior runs in time O(Nm ). Therefore, if we assume
+that the vectors {x n } are sparse, the total running time per iteration
+of Algorithm 1 is O(N ). Furthermore, each of the two outer for loops
+(lines 4 and 8) can be parallelized easily, leading in most cases to a
+linear acceleration with the number of available processors.
+
+3.1
+
+Updating the Pseudo-Observations
+
+The exact computations performed during the first step of the inference algorithm—updating the pseudo-observations—depend on
+the specific variational method used. We consider two: expectation
+propagation [22], and reverse-KL variational inference [3]. The ability of Algorithm 1 to seamlessly adapt to either of the two methods
+
+Informally, the hybrid distribution q̂n is “closer” to the true distribution than q.
+Expectation propagation (EP) works as follows. At each iteration
+and for each n, we update the parameters { µ̃mn , σ̃mn : m ∈ Xn }
+such that KL(q̂n ∥q) is minimized. To this end, the function Derivatives (on line 5 of Algorithm 1) computes the first and second
+derivatives of the log-partition function
+
+log Eq−n p[yn | x n⊤s(tn )]
+(6)
+with respect to µ −n  Eq−n [x n⊤s(tn )]. These computations can be
+done in closed form for the widely-used probit likelihood, and they
+involve one-dimensional numerical integration for most other likelihoods. EP has been reported to result in more accurate posterior
+approximations on certain classification tasks [23].
+3.1.2 Reverse KL Divergence. This method (often referred to simply
+as variational inference in the literature) seeks to minimize KL(q∥p),
+i.e., the KL divergence from the approximate posterior q to the true
+posterior p.
+To optimize this objective, we adopt the approach of Khan and
+Lin [18]. In this case, the function Derivatives computes the first
+and second derivatives of the expected log-likelihood
+
+Eq log p[yn | x n⊤s(tn )]
+(7)
+with respect to µ  Eq [x n⊤s(tn )]. These computations involve numerically solving two one-dimensional integrals.
+In comparison to EP, this method has two advantages. The first
+is theoretical: If the likelihood p(y | d) is log-concave in d, then
+the variational objective has a unique global minimum, and we can
+guarantee that Algorithm 1 converges to this minimum [18]. The
+second is numerical: Excepted for the probit likelihood, computing (7) is numerically more stable than computing (6).
+
+Pairwise Comparisons with Flexible Time-Dynamics
+t1
+
+t2
+
+...
+
+tN
+
+k
+s̄m1
+
+k
+s̄m2
+
+...
+
+k
+s̄mN
+
+K
+
+K
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+K
+M
+
+x1
+
+y1
+
+x2
+
+xN
+...
+
+y2
+
+yN
+
+Figure 3: State-space reformulation of our model. With respect to the representation in Figure 1b, the number of latent variables has increased, but they now form a Markov
+chain.
+
+From Covariance Functions to State-Space Models. A method for
+converting a process s(t) ∼ GP[0, k(t, t ′ )] into an equivalent GaussMarkov process s̄(t) by explicit construction of h, {An } and {Q n }
+is given in Solin [31]. All the covariance functions described in
+Section 2.1 lead to exact state-space reformulations of order K ≤ 3.
+The composition of covariance functions through addition or multiplication can also be treated exactly and automatically. Some other
+covariance functions, such as the squared-exponential function or
+periodic functions [26], cannot be transformed exactly but can be
+approximated effectively and to arbitrary accuracy [15, 32].
+Finally, we stress that the state-space viewpoint is useful because
+it leads to a faster inference procedure; but defining the time dynamics of the score processes in terms of covariance functions is
+much more intuitive.
+
+3.3
+3.2
+
+Updating the Approximate Posterior
+
+The second step of Algorithm 1 (lines 8 and 9) solves the following
+problem, for every feature m. Given Gaussian pseudo-observations
+{ µ̃mn , σ̃mn : n ∈ Dm } and a Gaussian prior p(sm ) = N (0, Km ),
+compute the posterior
+Ö
+2
+q(sm ) ∝ p(sm )
+N [smn | µ̃mn , σ̃mn
+].
+n ∈ Dm
+
+This computation can be done independently and in parallel for
+each feature m ∈ [M].
+A naive approach is to use the self-conjugacy properties of the
+Gaussian distribution directly. Collecting the parameters of the
+pseudo-observations into a vector µ̃m and a diagonal matrix Σ̃m ,
+the parameters of the posterior q(sm ) are given by
+−1
+
+−1
+
+−1
+Σm = (Km
++ Σ̃m )−1 ,
+
+µm = Σm Σ̃m µ̃m .
+
+(8)
+
+3 ), a cost that
+Unfortunately, this computation runs in time O(Nm
+becomes prohibitive if some features appear in many observations.
+Instead, we use an alternative approach that exploits a link between temporal Gaussian processes and state-space models [15, 27].
+Without loss of generality, we now assume that the N observations
+are ordered chronologically, and, for conciseness, we drop the feature’s index and consider a single process s(t). The key idea is to
+augment s(t) into a K-dimensional vector-valued Gauss-Markov
+process s̄(t), such that
+
+s̄(tn+1 ) = An s̄(tn ) + εn ,
+
+εn ∼ N (0, Q n )
+
+where K ∈ N >0 and An , Q n ∈ RK ×K depend on the time interval
+|tn+1 − tn | and on the covariance function k(t, t ′ ) of the original
+process s(t). The original (scalar-valued) and the augmented (vectorvalued) processes are related through the equation
+⊤
+
+s(t) = h s̄(t),
+where h ∈ RK is called the measurement vector.
+Figure 3 illustrates our model from a state-space viewpoint. It is
+important to note that the mutual time dependencies of Figure 1b
+have been replaced by Markovian dependencies. In this state-space
+formulation, posterior inference can be done in time O(K 3 N ) by
+using the Rauch–Tung–Striebel smoother [34].
+
+Predicting at a New Time
+
+Given the approximate posterior q(s 1 , . . . , s M ), the probability of
+observing outcome y at a new time t ∗ given the feature vector x is
+given by
+∫
+p(y | x, t ∗ ) =
+p(y | z)p(z)dz,
+R
+
+where z = x ⊤s(t ∗ ) and the distribution of sm (t ∗ ) is derived from
+the posterior q(sm ). By using the state-space formulation of the
+model, the prediction can be done in constant time [28].
+
+4
+
+EXPERIMENTAL EVALUATION
+
+In this section, we evaluate our model and inference algorithm on
+real data. Our experiments cover three aspects. First, in Section 4.1,
+we compare the predictive performance of our model against competing approaches, focusing on the impact of flexible time-dynamics.
+Second, in Section 4.2, we show that by carefully choosing features
+and observation likelihoods, predictive performance can be improved significantly. Finally, in Section 4.3, we study various facets
+of our inference algorithm. We measure the impact of the meanfield assumption and of the choice of variational objective, and we
+demonstrate the scalability of the algorithm.
+Datasets. We consider six datasets of pairwise-comparison outcomes of various sports and games. Four of them contain timestamped outcomes; they relate to tennis, basketball, association
+football and chess. Due to the large size of the chess dataset3 , we
+also consider a subset of the data spanning 30 years. The two remaining datasets contain match outcomes of the StarCraft computer
+game and do not have timestamps. Table 2 provides summary statistics for all the datasets. Except for chess, all data are publicly
+available online4 .
+Performance Metrics. Let (x, t ∗ , y) be an observation. We measure
+performance by using the logarithmic loss: − log p(y | x, t ∗ ) and the
+accuracy: 1{y = arg maxy ′ p(y ′ | x, t ∗ )}. We report their average
+values on the test set.
+3 This
+
+dataset consists of all the match outcomes contained in ChessBase Big Database
+2018, available at https://shop.chessbase.com/en/products/big_database_2018.
+4 Tennis: https://github.com/JeffSackmann/tennis_atp, basketball: https://projects.
+fivethirtyeight.com/nba-model/nba_elo.csv, football: https://int.soccerway.com/, StarCraft: https://github.com/csinpi/blade_chest.
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+L. Maystre et al.
+NBA basketball (1946–2018)
+
+LAL
+CHI
+BOS
+
+1.0
+
+Score
+
+0.5
+0.0
+
+−0.5
+−1.0
+1945
+
+1950
+
+1955
+
+1960
+
+1965
+
+1970
+
+1975
+
+1980
+
+1985
+
+1990
+
+1995
+
+2000
+
+2005
+
+2010
+
+2015
+
+2020
+
+ATP tennis (1991-2017)
+5
+
+Score
+
+4
+3
+Andre Agassi
+Michael Chang
+Pete Sampras
+
+2
+1
+1990
+
+1992
+
+1994
+
+1996
+
+1998
+
+2000
+
+2002
+
+2004
+
+2006
+
+2008
+
+2010
+
+2012
+
+2014
+
+Roger Federer
+Rafael Nadal
+Novak Djokovic
+2016
+
+2018
+
+Figure 4: Temporal evolution of the score processes (µ ± σ ) corresponding to selected basketball teams (top) and tennis players
+(bottom). The basketball teams are the Los Angeles Lakers (LAL), the Chicago Bulls (CHI) and the Boston Celtics (BOS).
+Table 2: Summary statistics of the sports datasets.
+M
+
+N
+
+Time span
+
+No
+No
+Yes
+Yes
+Yes
+
+20 046
+102
+235
+19 788
+343 668
+
+618 934
+67 642
+19 158
+306 764
+7 169 202
+
+1991–2017
+1946–2018
+1908–2018
+1950–1980
+1475–2017
+
+No
+No
+
+4381
+2287
+
+61 657
+28 582
+
+Name
+
+Ties
+
+ATP tennis
+NBA basketball
+World football
+ChessBase small
+ChessBase full
+StarCraft WoL
+StarCraft HotS
+
+—
+—
+
+Methodology. Unless specified otherwise, we partition every
+dataset into a training set containing the first 70% of the observations and a test set containing the remaining 30%, in chronological
+order. The various hyperparameters (such as covariance functions
+and their parameters, learning rates, etc.) are selected based on
+the training data only, by maximizing the log-marginal likelihood
+of Bayesian models and by minimizing the average leave-one-out
+log loss otherwise. The final hyperparameter configuration of all
+models can be found in Appendix B. In order to predict the outcome
+of an observation at time t ∗ , we use all the data (in both training
+and test sets) up to the day preceding t ∗ . This closely mimics the
+setting where a predictor must guess the outcome of an event in the
+near future based on all past data. Unless specified otherwise, we
+use Algorithm 1 with the EP variational objective, and we declare
+convergence when the improvement in log-marginal likelihood
+falls below 10−3 . Typically, the algorithm converges in less than a
+hundred iterations.
+
+4.1
+
+Flexible Time-Dynamics
+
+In this experiment, we compare the predictive performance of our
+model against competing approaches on four timestamped datasets.
+In order to better isolate and understand the impact of accurately
+modeling time dynamics on predictive performance, we keep the remaining modeling choices simple: we treat all outcomes as ordinalvalued (i.e., win, loss and possibly tie) with a probit likelihood and
+use a one-to-one mapping between competitors and features. In
+Table 3, we report results for the following models:
+• Random. This baseline assigns equal probability to every
+outcome.
+• Constant. The model of Section 2 with a constant covariance
+function. This model assumes that the scores do not vary
+over time.
+• Elo. The system used by the World Chess Federation [9].
+Time dynamics are a by-product of the update rule (c.f. Section 5).
+• TrueSkill. The Bayesian model of Herbrich et al. [16]. Time
+dynamics are assumed to follow Brownian motion (akin to
+our Wiener kernel) and inference is done in a single pass
+over the data.
+• Ours. The model of Section 2. We try multiple covariance
+functions and report the one that maximizes the log-marginal
+likelihood.
+Our model matches or outperforms other approaches in almost
+all cases, both in terms of log loss and in terms of accuracy. Interestingly, different datasets are best modeled by using different
+covariance functions, perhaps capturing underlying skill dynamics
+specific to each sport.
+
+Pairwise Comparisons with Flexible Time-Dynamics
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+Table 3: Predictive performance of our model and of competing approaches on four datasets, in terms of average log loss and
+average accuracy. The best result is indicated in bold.
+Random
+
+Constant
+
+Elo
+
+Ours
+
+Loss
+
+Acc.
+
+Loss
+
+Acc.
+
+Loss
+
+Acc.
+
+Loss
+
+Acc.
+
+Loss
+
+Acc.
+
+Covariance
+
+ATP tennis
+NBA basketball
+World football
+ChessBase small
+
+0.693
+0.693
+1.099
+1.099
+
+0.500
+0.500
+0.333
+0.333
+
+0.581
+0.692
+0.929
+1.030
+
+0.689
+0.536
+0.558
+0.478
+
+0.563
+0.634
+0.950
+1.035
+
+0.705
+0.644
+0.551
+0.447
+
+0.563
+0.634
+0.937
+1.030
+
+0.705
+0.644
+0.554
+0.467
+
+0.552
+0.630
+0.926
+1.026
+
+0.714
+0.645
+0.558
+0.474
+
+Affine + Wiener
+Constant + Matérn 1/2
+Constant + Matérn 1/2
+Constant + Wiener
+
+Visualizing and Interpreting Scores. Figure 4 displays the temporal evolution of the score of selected basketball teams and tennis
+players. In the basketball case, we can recognize the dominance of
+the Boston Celtics in the early 1960’s and the Chicago Bulls’ strong
+1995-96 season. In the tennis case, we can see the progression of a
+new generation of tennis champions at the turn of the 21st century.
+Plotting scores over time provides an effective way to compactly
+represent the history of a given sport. Analyzing the optimal hyperparameters (c.f. Table 8 in Appendix B) is also insightful: the
+characteristic timescale of the dynamic covariance component is
+1.75 and 7.47 years for basketball and tennis, respectively. The score
+of basketball teams appears to be much more volatile.
+
+4.2
+
+TrueSkill
+
+Dataset
+
+of features. This enables, e.g., to represent context-specific information that might influence the outcome probabilities. In the case
+of football, for example, it is well-known that a team playing at
+home has an advantage. Similarly, in the case of chess, playing
+White results in a slight advantage. Table 5 displays the predictive
+performance achieved by our model when the score of the home
+team (respectively, that of the opponent playing White) is modeled
+by a linear combination of two features: the identity of the team or
+player and an advantage feature. Including this additional feature
+improves performance significantly, and we conclude that representing opponents in terms of match-dependent combinations of
+features can be very useful in practice.
+
+Generality of the Model
+
+In this section, we demonstrate how we can take advantage of additional modeling options to further improve predictive performance.
+In particular, we show that choosing an appropriate likelihood and
+parametrizing opponents with match-dependent combinations of
+features can bring substantial gains.
+4.2.1 Observation Models. Basketball and football match outcomes
+actually consist of points (respectively, goals) scored by each team
+during the match. We can make use of this additional information
+to improve predictions [19]. For each of the basketball and football
+datasets, we compare the best model obtained in Section 4.1 to
+alternative models. These alternative models keep the same time
+dynamics but use either
+(1) a logit likelihood on the ordinal outcome,
+(2) a Gaussian likelihood on the points difference, or
+(3) a Poisson-exp likelihood on the points scored by each team.
+The results are presented in Table 4. The logit likelihood performs
+similarly to the probit one [33], but likelihoods that take points into
+account can indeed lead to better predictions.
+Table 4: Average predictive log loss of models with different
+observation likelihoods. The best result is indicated in bold.
+Dataset
+
+Probit
+
+Logit
+
+Gaussian
+
+Poisson
+
+NBA basketball
+World football
+
+0.630
+0.926
+
+0.630
+0.926
+
+0.627
+0.927
+
+0.630
+0.922
+
+4.2.2 Match-Dependent Parametrization. For a given match, we
+can represent opponents by using (non-trivial) linear combinations
+
+Table 5: Predictive performance of models with a home or
+first-mover advantage in comparison to models without.
+Basic
+
+Advantage
+
+Dataset
+
+Loss
+
+Acc.
+
+Loss
+
+Acc.
+
+World football
+ChessBase small
+
+0.926
+1.026
+
+0.558
+0.480
+
+0.900
+1.019
+
+0.579
+0.485
+
+4.2.3 Capturing Intransitivity. Score-based models such as ours are
+sometimes believed to be unable to capture meaningful intransitivities, such as those that arise in the “rock-paper-scissors” game [5].
+This is incorrect: if an opponent’s score can be modeled by using
+match-dependent features, we can simply add an interaction feature
+for every pair of opponents. In the next experiment, we model the
+score difference between two opponents i, j as d  si − s j + si j . Informally, the model learns to explain the transitive effects through
+the usual player scores si and s j and the remaining intransitive
+effects are captured by the interaction score si j . We compare this
+model to the Blade-Chest model of Chen and Joachims [5] on the
+two StarCraft datasets, known to contain strong intransitivities.
+The Blade-Chest model is specifically designed to handle intransitivities in comparison data. We also include two baselines, a simple
+Bradley–Terry model without the interaction features (logit) and a
+non-parametric estimator (naive) that estimates probabilities based
+on match outcomes between each pair—without attempting to capture transitive effects. As shown in Figure 5, our model outperforms
+all other approaches, including the Blade-Chest model. More details
+on this experiment can be found in Appendix B.2.
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+StarCraft HotS
+
+0.60
+
+L. Maystre et al.
+
+StarCraft WoL
+
+ChessBase full
+Time [s]
+
+0.55
+Log loss
+
+Time per iteration
+
+40.0
+
+0.50
+0.45
+0.40
+
+it
+
+g
+Lo
+
+ive
+
+Na
+
+.
+
+C
+B.-
+
+Ou
+
+rs
+
+git
+Lo
+
+ive
+
+Na
+
+B.-
+
+C.
+
+20.0
+10.0
+5.0
+
+rs
+
+Ou
+
+1
+
+2
+
+4
+
+8
+
+16
+
+Number of threads
+
+Figure 5: Average log loss of four models (Bradley–Terry,
+naive, blade-chest and ours) on the StarCraft datasets.
+
+4.3
+
+Inference Algorithm
+
+We turn our attention to the inference algorithm and study the
+impact of several implementation choices. We start by quantifying
+the impact of the mean-field assumption (4) and of the choice of
+variational objective on predictive performance. Then, we demonstrate the scalability of the algorithm on the ChessBase dataset and
+measure the acceleration obtained by parallelizing the algorithm.
+4.3.1 Mean-Field Approximation. In order to gain understanding
+on the impact of the factorization assumption in (4), we devise the
+following experiment. We consider a small subset of the basketball
+data containing all matches between 2000 and 2005 (N = 6382,
+M = 32). We evaluate the predictive performance on each week
+of the last season by using all the matches prior to the test week
+as training data. Our model uses a one-to-one mapping between
+teams and features, a constant + Matérn 1/2 covariance function,
+and a Gaussian likelihood on the points difference.
+We compare the predictive performance resulting from two inference variants, a) mean-field approximate inference, i.e., Algorithm 1,
+and b) exact posterior inference5 . Both approaches lead to an average log loss of 0.634 and an average accuracy of 0.664. Strikingly,
+both values are equal up to four decimal places, suggesting that the
+mean-field assumption is benign in practice [2].
+4.3.2 Variational Objective. Next, we study the influence of the
+variational method. We re-run the experiments of Section 4.1, this
+time by using the reverse-KL objective instead of EP. The predictive
+performance in terms of average log loss and average accuracy
+is equal to the EP case (Table 3, last three columns) up to three
+decimal places, for all four datasets. Hence, the variational objective
+seems to have little practical impact on predictive performance. As
+such, we recommend using the reverse-KL objective for likelihoods
+whose log-partition function (6) cannot be computed in closed form,
+as the numerical integration of the expected log-likelihood (7) is
+generally more stable.
+4.3.3 Scalability. Finally, we demonstrate the scalability of our
+inference algorithm by training a model on the full ChessBase
+dataset, containing over 7 million observations. We implement a
+multithreaded version of Algorithm 1 in the Go programming language6 and run the inference computation on a machine containing
+two 12-core Intel Xeon E5-2680 v3 (Haswell generation) processors
+5 This
+
+is possible for this particular choice of likelihood thanks to the self-conjugacy of
+the Gaussian distribution, but at a computational cost O (N 3 ).
+6 The code is available at https://github.com/lucasmaystre/gokick.
+
+Figure 6: Running time per iteration of a multithreaded implementation of Algorithm 1 on the ChessBase full dataset,
+containing over 7 million observations.
+
+clocked at 2.5 GHz. Figure 6 displays the running time per iteration
+as function of the number of worker threads. By using 16 threads,
+we need only slightly over 5 seconds per iteration.
+
+5
+
+RELATED WORK
+
+Probabilistic models for pairwise comparisons have been studied
+for almost a century. Thurstone [35] proposed his seminal law of
+comparative judgment in the context of psychology. Almost concurrently, Zermelo [37] developed a method to rank chess players
+from match outcomes. Both rely on the same idea: objects are characterized by a latent score (e.g., the intrinsic quality of a perceptual
+variable, or a chess player’s skill) and the outcomes of comparisons
+between objects depend on the difference between the corresponding latent scores. Zermelo’s model was later rediscovered by Bradley
+and Terry [4] and is currently usually referred to as the Bradley–
+Terry model. Stern [33] provides a unifying framework and shows
+that, in practice, Thurstone’s and Zermelo’s models result in similar
+fits to the data. In the context of sports, some authors suggest going beyond ordinal outcomes and investigate pairwise-comparison
+models with Gaussian [14], Poisson [14, 19], or Skellam [17] likelihoods.
+In many applications of practical interest, comparison outcomes
+tend to vary over time. In chess, for example, this is due to the skill
+of players changing over time. The World Chess Federation, which
+uses a variant of the Bradley–Terry model to rank players, updates
+player scores after each match by using a stochastic gradient update:
+∂
+log p(y | si − s j ),
+∂si
+where λ ∈ R is a learning rate. It is interesting that this simple online
+update scheme (known as the Elo rating system [9]) enables a basic
+form of “tracking”: the sequence of scores gives an indication of a
+player’s evolution over time. Whereas, in this case, score dynamics
+occur as a by-product of the learning rule, several attempts have
+been made to model time dynamics explicitly. Usually, these models
+assume a variant of Brownian motion:
+si ← si + λ
+
+s(tn+1 ) = s(tn ) + εn ,
+
+εn ∼ N (0, σ 2 |tn+1 − tn |).
+
+(9)
+
+Glickman [12] and Fahrmeir and Tutz [10] are, to the best of our
+knowledge, the first to consider such a model. Glickman [13] derives
+a computationally-efficient Bayesian inference method by using
+closed-form approximations of intractable integrals. Herbrich et al.
+
+Pairwise Comparisons with Flexible Time-Dynamics
+[16] and Dangauthier et al. [7] propose a similar method based
+on Gaussian filtering and expectation propagation, respectively.
+Coulom [6] proposes a method based on the Laplace approximation.
+Our model strictly subsumes these approaches; Brownian motion
+is simply a special case of our model obtained by using the Wiener
+kernel. One of the key contributions of our work is to show that
+it is not necessary to restrict the dynamics to Brownian motion in
+order to get linear-time inference.
+Finally, we briefly review literature on the link between Gaussian
+processes (GPs) with scalar inputs and state-space models (SSMs),
+as this forms a crucial component of our fast inference procedure.
+Excellent introductions to this link can be found in the theses of
+Saatçi [28] and Solin [31]. The connection is known since the seminal paper of O’Hagan [25], which introduced Gaussian processes
+as a method to tackle general regression problems. It was recently
+revisited by Hartikainen and Särkkä [15], who provide formulae
+for going back-and-forth between GP covariance and state-space
+forms. Extensions of this link to non-Gaussian likelihood models
+are discussed in Saatçi [28] and Nickisch et al. [24]. To the best of
+our knowledge, we are the first to describe how the link between
+GPs and SSMs can be used in the context of observation models
+that combine multiple processes, by using a mean-field variational
+approximation.
+
+6
+
+CONCLUSIONS
+
+We have presented a probabilistic model of pairwise comparison
+outcomes that can capture a wide range of temporal dynamics. This
+model reaches state-of-the-art predictive performance on several
+sports datasets, and it enables generating visualizations that help in
+understanding comparison time-series. To fit our model, we have
+derived a computationally efficient approximate Bayesian inference
+algorithm. To the best of our knowledge, our algorithm is the first
+linear-time Bayesian inference algorithm for dynamic pairwise
+comparison models that minimizes the reverse-KL divergence.
+One of the strengths of our approach is that it enables to discover
+the structure of the time dynamics by comparing the log-marginal
+likelihood of the data under various choices of covariance functions.
+In the future, we would like to fully automatize this discovery process, in the spirit of the automatic statistician [8]. Ideally, given only
+the comparison data, we should be able to systematically discover
+the time dynamics that best explain the data, and generate an interpretable description of the corresponding covariance functions.
+
+ACKNOWLEDGMENTS
+We thank Holly Cogliati-Bauereis, Ksenia Konyushkova, and the
+anonymous reviewers for careful proofreading and constructive
+feedback.
+
+REFERENCES
+[1] A. Agresti. 2012. Categorical Data Analysis (third ed.). Wiley.
+[2] A. Birlutiu and T. Heskes. 2007. Expectation Propagation for Rating Players in
+Sports Competitions. In Proceedings of PKDD 2007. Warsaw, Poland.
+[3] D. M. Blei, A. Kucukelbir, and J. D. McAuliffe. 2017. Variational Inference: A
+Review for Statisticians. J. Amer. Statist. Assoc. 112, 518 (2017), 859–877.
+[4] R. A. Bradley and M. E. Terry. 1952. Rank Analysis of Incomplete Block Designs:
+I. The Method of Paired Comparisons. Biometrika 39, 3/4 (1952), 324–345.
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+[5] S. Chen and T. Joachims. 2016. Modeling Intransitivity in Matchup and Comparison Data. San Francisco, CA, USA.
+[6] R. Coulom. 2008. Whole-History Rating: A Bayesian Rating System for Players
+of Time-Varying Strength. In Proceedings of CG 2008. Beijing, China.
+[7] P. Dangauthier, R. Herbrich, T. Minka, and T. Graepel. 2007. TrueSkill Through
+Time: Revisiting the History of Chess. In Advances in Neural Information Processing Systems 20. Vancouver, BC, Canada.
+[8] D. Duvenaud. 2014. Automatic Model Construction with Gaussian Processes. Ph.D.
+Dissertation. University of Cambridge.
+[9] A. Elo. 1978. The Rating Of Chess Players, Past & Present. Arco Publishing.
+[10] L. Fahrmeir and G. Tutz. 1994. Dynamic Stochastic Models for Time-Dependent
+Ordered Paired Comparison Systems. J. Amer. Statist. Assoc. 89, 428 (1994),
+1438–1449.
+[11] W. A. Glenn and H. A. David. 1960. Ties in Paired-Comparison Experiments
+Using a Modified Thurstone–Mosteller Model. Biometrics 16, 1 (1960), 86–109.
+[12] M. E. Glickman. 1993. Paired Comparison Models with Time-Varying Parameters.
+Ph.D. Dissertation. Harvard University.
+[13] M. E. Glickman. 1999. Parameter estimation in large dynamic paired comparison
+experiments. Journal of the Royal Statistical Society, Series C (Applied Statistics)
+48, 3 (1999), 377–394.
+[14] S. Guo, S. Sanner, T. Graepel, and W. Buntine. 2012. Score-Based Bayesian Skill
+Learning. In Proceedings of ECML PKDD 2012. Bristol, United Kingdom.
+[15] J. Hartikainen and S. Särkkä. 2010. Kalman filtering and smoothing solutions
+to temporal Gaussian process regression models. In Proceedings of MLSP 2010.
+Kittilä, Finland.
+[16] R. Herbrich, T. Minka, and T. Graepel. 2006. TrueSkill™: A Bayesian Skill Rating
+System. In Advances in Neural Information Processing Systems 19. Vancouver, BC,
+Canada.
+[17] D. Karlis and I. Ntzoufras. 2009. Bayesian modelling of football outcomes: using
+the Skellam’s distribution for the goal difference. IMA Journal of Management
+Mathematics 20, 2 (2009), 133–145.
+[18] M. E. Khan and W. Lin. 2017. Conjugate-Computation Variational Inference:
+Converting Variational Inference in Non-Conjugate Models to Inferences in
+Conjugate Models. In Proceedings of AISTATS 2017. Fort Lauderdale, FL, USA.
+[19] M. J. Maher. 1982. Modelling association football scores. Statistica Neerlandica
+36, 3 (1982), 109–118.
+[20] L. Maystre, V. Kristof, A. J. González Ferrer, and M. Grossglauser. 2016. The
+Player Kernel: Learning Team Strengths Based on Implicit Player Contributions.
+(Sept. 2016). Preprint, arXiv:1609.01176 [cs.LG].
+[21] D. McFadden. 1973. Conditional logit analysis of qualitative choice behavior. In
+Frontiers in Econometrics, P. Zarembka (Ed.). Academic Press, 105–142.
+[22] T. P. Minka. 2001. A family of algorithms for approximate Bayesian inference.
+Ph.D. Dissertation. Massachusetts Institute of Technology.
+[23] H. Nickisch and C. E. Rasmussen. 2008. Approximations for Binary Gaussian
+Process Classification. Journal of Machine Learning Research 9, Oct (2008), 2035–
+2078.
+[24] H. Nickisch, A. Solin, and A. Grigorievksiy. 2018. State Space Gaussian Processes
+with Non-Gaussian Likelihood. In Proceedings of ICML 2018. Long Beach, CA,
+USA.
+[25] A. O’Hagan. 1978. Curve Fitting and Optimal Design for Prediction. Journal of
+the Royal Statistical Society, Series B 40, 1 (1978), 1–42.
+[26] C. E. Rasmussen and C. K. I. Williams. 2006. Gaussian Processes for Machine
+Learning. MIT Press.
+[27] S. Reece and S. Roberts. 2010. An introduction to Gaussian processes for the
+Kalman filter expert. In Proceedings of ICIF 2010. Edinburgh, UK.
+[28] Y. Saatçi. 2012. Scalable Inference for Structured Gaussian Process Models. Ph.D.
+Dissertation. University of Cambridge.
+[29] M. J. Salganik and K. E. C. Levy. 2015. Wiki Surveys: Open and Quantifiable
+Social Data Collection. PLoS ONE 10, 5 (2015), 1–17.
+[30] M. Seeger, S. Gerwinn, and M. Bethge. 2007. Bayesian Inference for Sparse
+Generalized Linear Models. In Proceedings of ECML 2007. Warsaw, Poland.
+[31] A. Solin. 2016. Stochastic Differential Equation Methods for Spatio-Temporal Gaussian Process Regression. Ph.D. Dissertation. Aalto University.
+[32] A. Solin and S. Särkkä. 2014. Explicit Link Between Periodic Covariance Functions
+and State Space Models. In Proceedings of AISTATS 2014. Reykjavik, Iceland.
+[33] H. Stern. 1992. Are all linear paired comparison models empirically equivalent?
+Mathematical Social Sciences 23, 1 (1992), 103–117.
+[34] S. Särkkä. 2013. Bayesian Filtering and Smoothing. Cambridge University Press.
+[35] L. L. Thurstone. 1927. A Law of Comparative Judgment. Psychological Review 34,
+4 (1927), 273–286.
+[36] M. J. Wainwright and M. I. Jordan. 2012. Graphical Models, Exponential Families,
+and Variational Inference. Foundations and Trends in Machine Learning 1, 1–2
+(2012), 1–305.
+[37] E. Zermelo. 1928. Die Berechnung der Turnier-Ergebnisse als ein Maximumproblem der Wahrscheinlichkeitsrechnung. Mathematische Zeitschrift 29, 1 (1928),
+436–460.
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+A
+
+INFERENCE ALGORITHM
+
+B
+
+For conciseness, we drop the index n and consider a single observation (x, t ∗ , y) ∈ D. Let s  s(t ∗ ) be the vector containing
+the score of all features at the time of the observation. Instead of
+2 , we will optimize
+optimizing the “standard” parameters µ̃m , σ̃m
+˜
+the corresponding natural parameters α̃m , βm . They are related
+through the following equations.
+α̃m = µ̃m /σ̃ 2 ,
+β˜m = 1/σ̃ 2
+m
+
+m
+
+Expectation Propagation. Let q − (s) = N (µ, Σ) be the cavity distribution. The log-partition function can be rewritten as a onedimensional integral:
+∫
+
+
+log Z  log Eq− p(y | x ⊤s) = log p(y | x ⊤s)N (s | µ, Σ)ds
+s
+∫
+2
+= log p(y | u)N (u | µ, σ )du,
+u
+
+where µ = x ⊤ µ and σ 2 = x ⊤ Σx. The function Derivatives computes the first and second derivatives with respect to this mean,
+i.e.,
+∂2
+log Z .
+∂µ 2
+Given these quantities, the function UpdateParams updates the
+pseudo-observations’ parameters for each m ∈ X:
+
+2δ 
+xm δ 1 − µm xm
+2
+α̃m ← (1 − λ)α̃m + λ
+,
+2δ
+1 + Σmm xm
+2
+
+
+2δ
+−xm
+2
+,
+β˜m ← (1 − λ)β˜m + λ
+2δ
+1 + Σmm xm
+2
+where λ ∈ (0, 1] is a learning rate. A formal derivation of these update equations can be found in Minka [22], Rasmussen and Williams
+[26], Seeger et al. [30].
+δ1 =
+
+∂
+log Z ,
+∂µ
+
+L. Maystre et al.
+
+δ2 =
+
+EXPERIMENTAL EVALUATION
+
+The code used to produce the experiments presented in this paper
+is publicly available online. It consists of two software libraries.
+• A library written in the Python programming language,
+available at https://github.com/lucasmaystre/kickscore. This
+libary provides a reference implementation of Algorithm 1
+with a user-friendly API.
+• A library written in the Go programming language, available at https://github.com/lucasmaystre/gokick. This library
+provides a multithreaded implementation of Algorithm 1,
+focused on computational performance.
+Additionally, the scripts and computational notebooks used to produce the experiments and figures presented in this paper are available at https://github.com/lucasmaystre/kickscore-kdd19.
+
+B.1
+
+Hyperparameters
+
+Generally speaking, we choose hyperparameters based on a search
+over 1000 configurations sampled randomly in a range of sensible
+values (we always make sure that the best hyperparameters are
+not too close to the ranges’ boundaries). In the case of our models, we choose the configuration that maximizes the log-marginal
+likelihood of the training data. In the case of TrueSkill and Elo, we
+choose the configuration that minimizes the leave-one-out log loss
+on the training data.
+A list of all the hyperparameters is provided in Table 6. A formal
+definition of the covariance functions we use is given in Table 7.
+Finally, Table 8 lists the hyperparameter values used in most of the
+experiments described in Section 4.
+Table 6: Hyperparameters and their description.
+Symbol
+
+Reverse KL Divergence. Let q(s) = N (µ, Σ) be the current posterior. Similarly to the log-partition function, the expected loglikelihood can be rewritten as a one-dimensional integral:
+∫
+
+
+L  Eq log p(y | x ⊤s) = log p(y | x ⊤s)N (s | µ, Σ)ds
+s
+∫
+=
+log p(y | u)N (u | µ, σ 2 )du,
+u
+
+where µ = x ⊤ µ and σ 2 = x ⊤ Σx. The function Derivatives computes the first and second derivatives with respect to this mean,
+i.e.,
+∂
+δ1 =
+L,
+∂µ
+
+∂2
+δ2 =
+L.
+∂µ 2
+Given these quantities, the function UpdateParams updates the
+pseudo-observations’ parameters for each m ∈ X:
+
+
+2
+α̃m ← (1 − λ)α̃m + λ xm δ 1 − µm xm
+δ2 ,
+ 2 
+β˜m ← (1 − λ)β˜m + λ −xm
+δ2 ,
+where λ ∈ (0, 1] is the learning rate. A formal derivation of these
+update equations can be found in Khan and Lin [18].
+
+Description
+
+λ
+α
+σn2
+2
+σcst
+2
+σlin
+2
+σW
+ν
+2
+σdyn
+
+Learning rate
+Draw margin
+Observation noise (Gaussian likelihood)
+Variance (constant covariance)
+Variance (linear covariance)
+Variance (Wiener covariance)
+Smoothness (Matérn covariance)
+Variance (Matérn covariance)
+
+ℓ
+
+Timescale, in years (Matérn covariance)
+
+Table 7: Covariance functions.
+Name
+Constant
+Linear
+Wiener
+Matérn, ν = 1/2
+Matérn, ν = 3/2
+
+k(t, t ′ )
+2
+σcst
+2 tt ′
+σlin
+2
+σW min{t, t ′ }
+2 exp(−|t − t ′ |/ℓ)
+σdyn
+√
+√
+2 (1 + 3|t − t ′ |/ℓ) exp(− 3|t − t ′ |/ℓ)
+σdyn
+
+Pairwise Comparisons with Flexible Time-Dynamics
+
+KDD ’19, August 4–8, 2019, Anchorage, AK, USA
+
+Table 8: Hyperparameter values used for the models of Section 4.
+λ
+
+α
+
+σn2
+
+2
+σcst
+
+2
+σlin
+
+2
+σW
+
+ν
+
+Probit
+Logit
+Probit
+Probit
+Probit
+
+1.000
+0.262
+—
+1.000
+1.000
+
+—
+—
+—
+—
+—
+
+—
+—
+—
+—
+—
+
+0.817
+—
+0.137
+0.366
+0.034
+
+—
+—
+—
+0.001
+—
+
+—
+—
+0.007
+0.147
+—
+
+—
+—
+—
+—
+3/2
+
+—
+—
+—
+—
+0.912
+
+—
+—
+—
+—
+7.469
+
+Constant
+Elo
+TrueSkill
+Ours
+Figure 4
+Table 4
+Table 4
+Table 4
+
+Probit
+Logit
+Probit
+Probit
+Probit
+Logit
+Gaussian
+Poisson-exp
+
+1.000
+0.095
+—
+1.000
+1.000
+1.000
+1.000
+0.800
+
+—
+—
+—
+—
+—
+—
+—
+—
+
+—
+—
+—
+—
+—
+—
+143.451
+—
+
+0.060
+—
+0.128
+0.003
+0.003
+0.001
+0.059
+5.470
+
+—
+—
+—
+—
+—
+—
+—
+—
+
+—
+—
+0.001
+—
+—
+—
+—
+—
+
+—
+—
+—
+1/2
+3/2
+1/2
+1/2
+1/2
+
+—
+—
+—
+0.152
+0.138
+0.417
+17.667
+0.003
+
+—
+—
+—
+3.324
+1.753
+3.429
+3.310
+2.378
+
+World Football
+
+Constant
+Elo
+TrueSkill
+Ours
+Table 4
+Table 4
+Table 4
+Table 5
+
+Probit
+Logit
+Probit
+Probit
+Logit
+Gaussian
+Poisson-exp
+Probit
+
+1.000
+0.196
+—
+1.000
+1.000
+1.000
+0.800
+1.000
+
+0.372
+0.578
+0.381
+0.386
+0.646
+—
+—
+0.407
+
+—
+—
+—
+—
+—
+3.003
+—
+—
+
+0.933
+—
+1.420
+0.750
+2.001
+4.062
+0.300
+0.895
+
+—
+—
+—
+—
+—
+—
+—
+—
+
+—
+—
+0.001
+—
+—
+—
+—
+—
+
+—
+—
+—
+1/2
+1/2
+1/2
+1/2
+1/2
+
+—
+—
+—
+0.248
+0.761
+2.922
+0.210
+0.220
+
+—
+—
+—
+69.985
+71.693
+175.025
+83.610
+44.472
+
+ChessBase small
+
+Constant
+Elo
+TrueSkill
+Ours
+Table 5
+
+Probit
+Logit
+Probit
+Probit
+Probit
+
+1.000
+0.157
+—
+1.000
+1.000
+
+0.554
+0.856
+0.555
+0.558
+0.568
+
+—
+—
+—
+—
+—
+
+0.364
+—
+0.240
+0.307
+0.188
+
+—
+—
+—
+—
+—
+
+—
+—
+0.001
+0.010
+—
+
+—
+—
+—
+—
+1/2
+
+—
+—
+—
+—
+0.188
+
+—
+—
+—
+—
+35.132
+
+Dataset
+
+Model
+
+Likelihood
+
+ATP tennis
+
+Constant
+Elo
+TrueSkill
+Ours
+Figure 4
+
+NBA Basketball
+
+Table 9: Hyperparameter values for the experiment of Section 4.2.3.
+Bradley–Terry
+Dataset
+StarCraft WoL
+StarCraft HotS
+
+B.2
+
+Ours
+
+α
+
+2
+σcst
+
+σ×2
+
+0.077
+0.129
+
+4.821
+4.996
+
+3.734
+4.342
+
+Capturing Intransitivity
+
+We closely follow the experimental procedure of Chen and Joachims
+[5] for the experiment of Section 4.2.3. In particular, we randomly
+partition each dataset into three splits: a training set (50% of the
+data), a validation set (20%), and a test set (30%). We train the model
+on the training set, choose hyperparameters based on the log loss
+
+2
+σdyn
+
+ℓ
+
+measured on the validation set, and finally report the average log
+loss on the test set.
+For the Blade-Chest model, we were not able to reproduce the
+exact results presented in Chen and Joachims [5] using the opensource implementation available at https://github.com/csinpi/blade_
+chest. Instead, we just report the best values in Figures 3 and 4 of
+the paper (blade-chest inner model, with d = 50).
+For the Bradley–Terry model, we use the Python library choix
+and its function opt_pairwise. The only hyperparameter to set is
+the regularization strength α.
+For our model, since there are no timestamps in the StarCraft
+datasets, we simply use constant covariance functions. The two
+2 and σ 2 , the variance of the player features
+hyperparameters are σcst
+×
+and of the interaction features, respectively. The hyperparameter
+values that we used are given in Table 9.
+
+

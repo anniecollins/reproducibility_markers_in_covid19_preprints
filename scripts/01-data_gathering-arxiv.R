@@ -249,49 +249,585 @@ oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
 arxiv_count('submittedDate:[20190101* TO 20191231*]')
 # Result on 22 May is: 155,455
 
-arxiv_results_2019 <- arxiv_search(query = 'submittedDate:[20190101* TO 20190331*]',
-                              limit = 1000,
+arxiv_results <- arxiv_search(query = 'submittedDate:[20190101* TO 20210501*]',
+                              limit = 5000,
                               batchsize = 500)
 
-nums <- seq(from = 500, to = 42000, by = 500)
 
-# Q1
-for (num in nums) {
-  arxiv_count('submittedDate:[20190101* TO 20190331*]')
-  arxiv_results_2019_new <- arxiv_search(query = 'submittedDate:[20190101* TO 20190331*]',
-                                         limit = 1000,
-                                         batchsize = 500,
-                                         start = num)
-  arxiv_results_2019 <- rbind(arxiv_results_2019, arxiv_results_2019_new)
-}
+# January
+arxiv_count('submittedDate:[20190101* TO 20190131*]') # 11,039
+arxiv_result_to_jan_i <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190131*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_jan_ii <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190131*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 2300)
+arxiv_result_to_jan_iii <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190131*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 4100)
+arxiv_result_to_jan_iv <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 5900)
+arxiv_result_to_jan_v <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7400)
+arxiv_result_to_jan_vi <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 9000)
+arxiv_result_to_jan_vii <- 
+  arxiv_search(query = 'submittedDate:[20190101* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10500)
+arxiv_results_to_jan <- rbind(arxiv_result_to_jan_i, arxiv_result_to_jan_ii, arxiv_result_to_jan_iii, arxiv_result_to_jan_iv, arxiv_result_to_jan_v, arxiv_result_to_jan_vi, arxiv_result_to_jan_vii)
 
-# Q2
-for (num in nums) {
-  arxiv_count('submittedDate:[20190401* TO 20190630*]')
-  arxiv_results_2019_new <- arxiv_search(query = 'submittedDate:[20190101* TO 20190331*]',
-                                         limit = 1000,
-                                         batchsize = 500,
-                                         start = num)
-  arxiv_results_2019 <- rbind(arxiv_results_2019, arxiv_results_2019_new)
-}
 
-# Q3
-for (num in nums) {
-  arxiv_count('submittedDate:[201900701* TO 20190931*]')
-  arxiv_results_2019_new <- arxiv_search(query = 'submittedDate:[20190101* TO 20190331*]',
-                                         limit = 1000,
-                                         batchsize = 500,
-                                         start = num)
-  arxiv_results_2019 <- rbind(arxiv_results_2019, arxiv_results_2019_new)
-}
+# February
+arxiv_count('submittedDate:[20190201* TO 20190228*]') # 10,763
+arxiv_result_to_feb_i <- 
+  arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_feb_ii <- 
+  arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+               sort_by="submitted",
+               limit = 2700,
+               start = 3500)
+arxiv_result_to_feb_iii <- 
+  arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 6300)
+arxiv_result_to_feb_iv <- 
+  arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 9800)
+# arxiv_result_to_feb_v <- 
+#   arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+#                sort_by="submitted",
+#                limit = 3500,
+#                start = 7900)
+# arxiv_result_to_feb_vi <- 
+#   arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+#                sort_by="submitted",
+#                limit = 3500,
+#                start = 8800)
+# arxiv_result_to_feb_vii <- 
+#   arxiv_search(query = 'submittedDate:[20190201* TO 20190228*]',
+#                sort_by="submitted",
+#                limit = 3500,
+#                start = 10300)
+arxiv_results_to_feb <- rbind(arxiv_result_to_feb_i,
+                              arxiv_result_to_feb_ii,
+                              arxiv_result_to_feb_iii,
+                              arxiv_result_to_feb_iv)
+                              # arxiv_result_to_feb_v,
+                              # arxiv_result_to_feb_vi,
+                              # arxiv_result_to_feb_vii)
 
-# Q4
-for (num in nums) {
-  arxiv_count('submittedDate:[20191001* TO 20191231*]')
-  arxiv_results_2019_new <- arxiv_search(query = 'submittedDate:[20190101* TO 20190331*]',
-                                         limit = 1000,
-                                         batchsize = 500,
-                                         start = num)
-  arxiv_results_2019 <- rbind(arxiv_results_2019, arxiv_results_2019_new)
-}
+# March
+arxiv_count('submittedDate:[20190301* TO 20190331*]') # 12,865
+arxiv_result_to_mar_i <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_mar_ii <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 200,
+               start = 3500)
+arxiv_result_to_mar_iii <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 3000,
+               start = 3800)
+arxiv_result_to_mar_iv <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 400,
+               start = 5600)
+arxiv_result_to_mar_v <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 6100)
+arxiv_result_to_mar_vi <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7900)
+arxiv_result_to_mar_vii <- 
+  arxiv_search(query = 'submittedDate:[20190301* TO 20190331*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 11400)
+
+arxiv_results_to_march <- rbind(arxiv_result_to_mar_i, arxiv_result_to_mar_ii, arxiv_result_to_mar_iii, arxiv_result_to_mar_iv, arxiv_result_to_mar_v, arxiv_result_to_mar_vi, arxiv_result_to_mar_vii)
+
+# April
+arxiv_count('submittedDate:[20190401* TO 20190430*]') # 12,411
+arxiv_result_to_apr_i <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 500,
+               start = 0)
+arxiv_result_to_apr_ii <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 600)
+arxiv_result_to_apr_iii <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 2800,
+               start = 3400)
+arxiv_result_to_apr_iv <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 1700,
+               start = 5200)
+arxiv_result_to_apr_v <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 1000,
+               start = 7000)
+arxiv_result_to_apr_vi <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 8100)
+arxiv_result_to_apr_vii <- 
+  arxiv_search(query = 'submittedDate:[20190401* TO 20190430*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 9800)
+
+arxiv_results_to_april <- rbind(arxiv_result_to_apr_i, arxiv_result_to_apr_ii, arxiv_result_to_apr_iii, arxiv_result_to_apr_iv, arxiv_result_to_apr_v, arxiv_result_to_apr_vi, arxiv_result_to_apr_vii)
+
+
+# May
+arxiv_count('submittedDate:[20190501* TO 20190531*]') # 13,289
+arxiv_result_to_may_i <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 600,
+               start = 0)
+arxiv_result_to_may_ii <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 700)
+arxiv_result_to_may_iii <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 800,
+               start = 3600)
+arxiv_result_to_may_iv <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 4500)
+arxiv_result_to_may_v <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 5600)
+arxiv_result_to_may_vi <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7200)
+arxiv_result_to_may_vii <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 8700)
+arxiv_result_to_may_viii <- 
+  arxiv_search(query = 'submittedDate:[20190501* TO 20190531*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 12200)
+arxiv_results_to_may <- rbind(arxiv_result_to_may_i, arxiv_result_to_may_ii, arxiv_result_to_may_iii, arxiv_result_to_may_iv, arxiv_result_to_may_v, arxiv_result_to_may_vi, arxiv_result_to_may_vii, arxiv_result_to_may_viii)
+
+
+# June
+arxiv_count('submittedDate:[20190601* TO 20190630*]') # 12,513
+arxiv_result_to_jun_i <- 
+  arxiv_search(query = 'submittedDate:[20190601* TO 20190630*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_jun_ii <- 
+  arxiv_search(query = 'submittedDate:[20190601* TO 20190630*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 3500)
+arxiv_result_to_jun_iii <- 
+  arxiv_search(query = 'submittedDate:[20190601* TO 20190630*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7000)
+arxiv_result_to_jun_iv <- 
+  arxiv_search(query = 'submittedDate:[20190601* TO 20190630*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10500)
+arxiv_result_to_jun_v <- 
+  arxiv_search(query = 'submittedDate:[20190601* TO 20190630*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 12000)
+arxiv_results_to_june <- rbind(arxiv_result_to_jun_i, arxiv_result_to_jun_ii, arxiv_result_to_jun_iii, arxiv_result_to_jun_iv, arxiv_result_to_jun_v)
+
+
+# July
+arxiv_count('submittedDate:[20190701* TO 20190731*]') # 12,719
+arxiv_result_to_jul_i <- 
+  arxiv_search(query = 'submittedDate:[20190701* TO 20190731*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_jul_ii <- 
+  arxiv_search(query = 'submittedDate:[20190701* TO 20190731*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 3300)
+arxiv_result_to_jul_iii <- 
+  arxiv_search(query = 'submittedDate:[20190701* TO 20190731*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 6800)
+arxiv_result_to_jul_iv <- 
+  arxiv_search(query = 'submittedDate:[20190701* TO 20190731*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10300)
+arxiv_result_to_jul_v <- 
+  arxiv_search(query = 'submittedDate:[20190701* TO 20190731*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 11100)
+
+arxiv_results_to_july <- rbind(arxiv_result_to_jul_i, arxiv_result_to_jul_ii, arxiv_result_to_jul_iii, arxiv_result_to_jul_iv, arxiv_result_to_jul_v)
+
+# August
+arxiv_count('submittedDate:[20190801* TO 20190831*]') # 11,772
+arxiv_result_to_aug_i <- 
+  arxiv_search(query = 'submittedDate:[20190801* TO 20190831*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_aug_ii <- 
+  arxiv_search(query = 'submittedDate:[20190801* TO 20190831*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 3500)
+arxiv_result_to_aug_iii <- 
+  arxiv_search(query = 'submittedDate:[20190801* TO 20190831*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 6600)
+arxiv_result_to_aug_iv <- 
+  arxiv_search(query = 'submittedDate:[20190801* TO 20190831*]',
+               sort_by="submitted",
+               limit = 1800,
+               start = 8300)
+arxiv_result_to_aug_v <- 
+  arxiv_search(query = 'submittedDate:[20190801* TO 20190831*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10200)
+arxiv_results_to_august <- rbind(arxiv_result_to_aug_i, arxiv_result_to_aug_ii, arxiv_result_to_aug_iii, arxiv_result_to_aug_iv, arxiv_result_to_aug_v)
+
+# September
+arxiv_count('submittedDate:[20190901* TO 20190930*]') # 13,184
+arxiv_result_to_sep_i <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_sep_ii <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 3500)
+arxiv_result_to_sep_iii <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 5800)
+arxiv_result_to_sep_iv <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7500)
+arxiv_result_to_sep_v <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 9600)
+arxiv_result_to_sep_vi <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10600)
+arxiv_result_to_sep_vii <- 
+  arxiv_search(query = 'submittedDate:[20190901* TO 20190930*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 12200)
+arxiv_results_to_september <- rbind(arxiv_result_to_sep_i, arxiv_result_to_sep_ii, arxiv_result_to_sep_iii, arxiv_result_to_sep_iv, arxiv_result_to_sep_v, arxiv_result_to_sep_vi, arxiv_result_to_sep_vii)
+
+# October
+arxiv_count('submittedDate:[20191001* TO 20191031*]') # 13,994
+arxiv_result_to_oct_i <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_oct_ii <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 2600)
+arxiv_result_to_oct_iii <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 6100)
+arxiv_result_to_oct_iv <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 300,
+               start = 8500)
+arxiv_result_to_oct_v <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 8900)
+arxiv_result_to_oct_vi <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 11100)
+arxiv_result_to_oct_vii <- 
+  arxiv_search(query = 'submittedDate:[20191001* TO 20191031*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 13600)
+
+arxiv_results_to_october <- rbind(arxiv_result_to_oct_i, arxiv_result_to_oct_ii, arxiv_result_to_oct_iii, arxiv_result_to_oct_iv, arxiv_result_to_oct_v, arxiv_result_to_oct_vi, arxiv_result_to_oct_vii)
+
+rbind(arxiv_results_to_feb, 
+      arxiv_results_to_march, 
+      arxiv_results_to_april, 
+      arxiv_results_to_may, 
+      arxiv_results_to_june, 
+      arxiv_results_to_july, 
+      arxiv_results_to_august,
+      arxiv_results_to_september,
+      arxiv_results_to_october) %>% write_csv("outputs/control-data/arxiv_feb_to_oct_TO_FINISH.csv")
+
+# November
+arxiv_count('submittedDate:[20191101* TO 20191130*]') # 13,317
+arxiv_result_to_nov_i <- 
+  arxiv_search(query = 'submittedDate:[20191101* TO 20191130*]',
+               sort_by="submitted",
+               limit = 2100,
+               start = 0)
+arxiv_result_to_nov_ii <- 
+  arxiv_search(query = 'submittedDate:[20191101* TO 20191130*]',
+               sort_by="submitted",
+               limit = 3200,
+               start = 2200)
+arxiv_result_to_nov_iii <- 
+  arxiv_search(query = 'submittedDate:[20191101* TO 20191130*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 5500)
+arxiv_result_to_nov_iv <- 
+  arxiv_search(query = 'submittedDate:[20191101* TO 20191130*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 9000)
+arxiv_result_to_nov_v <- 
+  arxiv_search(query = 'submittedDate:[20191101* TO 20191130*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10700)
+arxiv_results_to_november <- rbind(arxiv_result_to_nov_i, arxiv_result_to_nov_ii, arxiv_result_to_nov_iii, arxiv_result_to_nov_iv, arxiv_result_to_nov_v)
+
+# December
+arxiv_count('submittedDate:[20191201* TO 20191231*]') # 12,850
+arxiv_result_to_dec_i <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 0)
+arxiv_result_to_dec_ii <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 2300)
+arxiv_result_to_dec_iii <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 5100)
+arxiv_result_to_dec_iv <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 7100)
+arxiv_result_to_dec_v <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 8500)
+arxiv_result_to_dec_vi <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 10400)
+arxiv_result_to_dec_vii <- 
+  arxiv_search(query = 'submittedDate:[20191201* TO 20191231*]',
+               sort_by="submitted",
+               limit = 3500,
+               start = 12200)
+arxiv_results_to_december <- rbind(arxiv_result_to_dec_i, arxiv_result_to_dec_ii, arxiv_result_to_dec_iii, arxiv_result_to_dec_iv, arxiv_result_to_dec_v, arxiv_result_to_dec_vi, arxiv_result_to_dec_vii)
+
+all_arxiv_results <- rbind(arxiv_results_to_jan,
+                           arxiv_results_to_feb,
+                           arxiv_results_to_march,
+                           arxiv_results_to_april,
+                           arxiv_results_to_may,
+                           arxiv_results_to_june,
+                           arxiv_results_to_july,
+                           arxiv_results_to_august,
+                           arxiv_results_to_september,
+                           arxiv_results_to_october,
+                           arxiv_results_to_november,
+                           arxiv_results_to_december)
+
+# Filter for unique papers
+all_arxiv_results <- all_arxiv_results %>% distinct(id, .keep_all = TRUE)
+# Check to see if all dates have been downloaded
+substr(all_arxiv_results$submitted, 1, 10) %>% unique()
+
+write_csv(all_arxiv_results, "outputs/control-data/arxiv_data_2019.csv")
+
+
+# Create sample
+set.seed(50)
+arxiv_2019_sample <- all_arxiv_results[sample(nrow(all_arxiv_results), 1200),]
+write_csv(arxiv_2019_sample, "outputs/control-data/arxiv_2019_sample.csv")
+
+# Download PDFs
+arxiv_2019_sample <- 
+  read_csv("outputs/control-data/arxiv_2019_sample.csv")
+
+# Set up folders for download and text conversion
+arxiv_pdf_folder <- paste0(getwd(), "/outputs/control-data/pdf-arxiv/")
+arxiv_txt_folder <- paste0(getwd(), "/outputs/control-data/text-arxiv/")
+
+# Use the function
+get_sample_arxiv_2019_results <- 
+  arxiv_2019_sample %>% 
+  # slice(1:2) %>% # Uncomment when testing 
+  select(id, link_pdf) %>% 
+  mutate(id = paste0(id, ".pdf"),
+         link_pdf = paste0(link_pdf, ".pdf")
+  ) %>% 
+  mutate(id = paste0(arxiv_pdf_folder, id)) %>% 
+  mutate(order = sample(x = c(1:nrow(arxiv_2019_sample)),
+                        size = nrow(arxiv_2019_sample),
+                        replace = FALSE)) %>% 
+  arrange(order)
+
+# Use download_pdfs from above
+safely_download_pdfs <- purrr::safely(download_pdfs)
+
+# Check what's already been downloaded
+already_got <- list.files(path = arxiv_pdf_folder, full.names = TRUE) %>% str_replace("//", "/")
+
+# Remove those rows
+get_sample_arxiv_2019_results <- 
+  get_sample_arxiv_2019_results %>% 
+  filter(!id %in% already_got)
+
+purrr::walk2(get_sample_arxiv_2019_results$link_pdf,
+             get_sample_arxiv_2019_results$id,
+             safely_download_pdfs)
+
+# Convert to text
+oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
+
+# Problem: some papers in sample don't actually have valid pdf links. They will show as having been downloaded but will not convert to text. 
+# Use code below to identify non-downloaded pdfs if necessary.
+downloaded_pdf <- list.files("outputs/control-data/pdf-arxiv")
+downloaded_txt <- list.files("outputs/control-data/text-arxiv")
+
+# for each pdf, cycle through all txt files, and if there is no doi from sample that corresponds to the pdf, remove it
+not_working <- arxiv_2019_sample %>% filter(!id %in% str_sub(downloaded_txt, end = -5))
+
+# Remove not working files from the PDF output folder and sample data frame
+paste0(getwd(), "/outputs/control-data/pdf-arxiv/", not_working$id, ".pdf") %>% file.remove()
+arxiv_2019_sample <- arxiv_2019_sample %>% filter(!id %in% not_working$id)
+
+# Sample new papers (may need to change seed if this step is repeated)
+set.seed(1050)
+arxiv_2019_sample_new <- all_arxiv_results[sample(nrow(all_arxiv_results), nrow(not_working)),]
+# Check that new papers are not currently in the sample
+# If line 202 returns any true values, repeat sample with different seed and check again
+paste0(arxiv_2019_sample_new$id, ".pdf") %in% downloaded_pdf
+# If above is FALSE, bind to end of sample data and re-save sample frame
+arxiv_2019_sample <- rbind(arxiv_2019_sample, arxiv_2019_sample_new)
+write_csv(arxiv_2019_sample, "outputs/control-data/arxiv_2019_sample.csv")
+
+# Re-convert PDFs to text and saves in same folder (won't duplicate)
+arxiv_2019_sample <- read_csv("outputs/control-data/arxiv_2019_sample.csv")
+
+get_sample_2019_arxiv_results <- 
+  arxiv_2019_sample %>% 
+  # slice(1:2) %>% # Uncomment when testing 
+  select(id, link_pdf) %>% 
+  mutate(id = paste0(id, ".pdf"),
+         link_pdf = paste0(link_pdf, ".pdf")
+  ) %>% 
+  mutate(id = paste0(arxiv_pdf_folder, id)) %>% 
+  mutate(order = sample(x = c(1:nrow(arxiv_2019_sample)),
+                        size = nrow(arxiv_2019_sample),
+                        replace = FALSE)) %>% 
+  arrange(order)
+
+safely_download_pdfs <- purrr::safely(download_pdfs)
+
+# Check what's already been downloaded
+already_got <- paste0("http://arxiv.org/pdf/", list.files(path = arxiv_pdf_folder))
+# Remove those rows
+get_sample_2019_arxiv_results <- 
+  get_sample_2019_arxiv_results %>% 
+  filter(!link_pdf %in% already_got)
+
+purrr::walk2(get_sample_2019_arxiv_results$link_pdf,
+             get_sample_2019_arxiv_results$id,
+             safely_download_pdfs)
+
+# Convert to text (won't duplicate)
+oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
 

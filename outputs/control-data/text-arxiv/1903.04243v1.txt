@@ -1,0 +1,1200 @@
+AUTO -V ECTORIZING T ENSOR F LOW G RAPHS : JACOBIANS ,
+AUTO -BATCHING AND B EYOND
+
+arXiv:1903.04243v1 [cs.DC] 8 Mar 2019
+
+Ashish Agarwal 1 Igor Ganichev 1
+
+A BSTRACT
+We propose a static loop vectorization optimization on top of high level dataflow IR used by frameworks like
+TensorFlow. A new statically vectorized parallel-for abstraction is provided on top of TensorFlow, and used for
+applications ranging from auto-batching and per-example gradients, to jacobian computation, optimized map
+functions and input pipeline optimization. We report huge speedups compared to both loop based implementations,
+as well as run-time batching adopted by the DyNet framework.
+1
+
+I NTRODUCTION
+
+Today’s machine learning applications operate on huge
+multi-dimensional arrays, or tensors, and typically run algorithms involving large chunks of parallelizable computations. The inherent vectorization opportunities are typically leveraged by writing highly optimized libraries of
+common operations, or kernels, for each platform. Common frameworks like TensorFlow (Abadi et al., 2016) and
+PyTorch (Paszke et al., 2017) contain hundreds of such kernels, which can be viewed as the instruction set for writing
+ML programs. Using this instruction set of kernels, and
+optionally other control flow constructs, most frameworks
+define a high level IR (intermediate representation) which
+is either constructed explicitly, or implicitly via tracing JIT
+(e.g. (Frostig et al., 2018)). This IR either gets interpreted,
+or JIT or AOT compiled after going through different layers
+of optimizations. (The XLA team, 2017; Wei et al., 2017;
+Chen et al., 2018).
+We propose a static loop vectorization optimization that operates on this high level IR. In contrast to CPU instruction
+sets, these kernels often allow fusing arbitrary number of
+scalar instructions, where the count may not even be known
+statically. Thus instead of statically unrolling a fixed number of loop iterations, one can conceptually unroll the full
+loop and fuse the contained instructions, often completely
+getting rid of the loop, especially for embarrassingly parallel
+computation. This process can then be repeated in cases
+with nested control flow constructs.
+We have implemented a library that performs vectorization
+1
+Google Inc, Mountain View, California, USA. Correspondence
+to: Ashish Agarwal <agarwal@google.com>, Igor Ganichev
+<iga@google.com>.
+
+on TensorFlow Graph IR. The optimization triggers during
+the graph construction phase and can currently vectorize
+more than a hundred different types of kernels. The user
+provides the body of a parallel-for loop and gets back symbolic tensors representing the result of a vectorized version
+of that loop.
+This construct of vectorization-optimized parallel-for loop
+lends itself to many interesting applications. A commonly
+desired use case is auto-batching (Looks et al., 2017; Neubig
+et al., 2017) wherein the user writes model code on a single
+example and then applies that function to each input in a
+batch. Such code is more intuitive and simpler, especially
+for models involving dynamic computation graphs. Autobatching can be implemented by putting the forward pass
+of the model inside a parallel-for loop with batch size number of iterations. A variant of this is getting per-example
+gradients, which can be computed by putting both the inference and the gradient computation inside a parallel-for loop.
+Increasingly, models involve more deeply nested sequential and parallel loops, like iteration over sequence inputs
+(Gers et al., 2000), Markov Decision Processes, sampling
+or particle filters for stochastic models, adaptive computation (Graves, 2016), and many more, providing a huge
+opportunity for applying these techniques.
+Another commonly desired application is computing jacobians. When the output of a network is a vector or tensor,
+jacobian involves computing gradients of each scalar value
+in the output. This is a powerful mathematical object but
+unfortunately not supported natively by TensorFlow which
+implements jacobian-vector products instead. Iterative approaches often end up being slow. Putting gradient computation of each output element in a parallel-for loop and
+vectorizing it enables more efficient computation. Additionally it enables many cases that don’t currently work in
+TensorFlow, like jacobians of dynamic RNNs or hessians
+
+Auto-Vectorizing TensorFlow Graphs
+
+of non-scalar outputs. Our jacobian implementation has
+enabled new research work like (Pfau et al., 2018) and (Matt
+Golub, 2018).
+
+vectorization on strongly typed high level IR, we are able to
+achieve large speedups across a range of applications.
+
+3
+2
+
+R ELATED W ORK
+
+Auto vectorization is a well known technique applied by
+compilers like GCC and LLVM and has been well researched in literature. (Nuzman et al., 2006) proposed compiler transformations that support vectorization in the presence of interleaved data. A polyhedral model (Trifunovic
+et al., 2009) can be used to estimate the performance impact of the different loop transformations and vectorization
+strategies. (Barik et al., 2010) use dynamic programming
+for selecting vector instructions. Techniques for performing
+whole function vectorization is discussed in (Karrenberg
+& Hack, 2011). ispc (Pharr & Mark, 2012) proposed an
+SPMD programming model for graphics workload. Halide
+(Ragan-Kelley et al., 2013) provides a model for separation
+of algorithm from schedule, allowing stochastic search over
+space of schedules.
+Most of these approaches operate at much lower level of
+abstraction and hence miss out on domain specific optimizations, like leveraging linear algebra identities. Frameworks
+like TensorFlow XLA (The XLA team, 2017), TVM (Chen
+et al., 2018) and DLVM (Wei et al., 2017) follow a staged
+compilation approach, and can fuse operations at high level.
+Our work operates at a similar or higher abstraction level
+and proposes applying loop vectorization along with adding
+a new parallel-for user abstraction.
+Auto-batching is a special case of vectorization and has been
+used by TensorFlow Fold (Looks et al., 2017) and DyNet
+(Neubig et al., 2017). Both these approaches use run-time
+or dynamic batching, which is very flexible and can work
+even when the kernels are dispatched dynamically from a
+host language like Python. However dynamic batching can
+potentially incur large overheads, both in trying to identify
+and fuse operations, as well as in collating the inputs and
+slicing the outputs when necessary. Additionally control
+flow dependent on computation can cause the dispatch to
+stall and hence fusion cannot work across it.
+A static auto vectorization approach can reduce the dispatch
+overheads, vectorize across nested control flow and allow
+additional post-vectorization optimizations. In dynamic environments, the technique could be applied to JIT compiled
+traces (Frostig et al., 2018). We recently became aware of
+static auto-batching effort (Salesforce, 2018) for PyTorch
+which works by rewriting the Python AST. We believe that
+static analysis on Python could potentially miss out on optimization opportunities given that types may not be known
+statically, or it would have to delay it to run-time which
+may incur additional overheads. By performing static auto
+
+3.1
+
+C OMPILATION D ETAILS
+Programming Model
+
+We assume a dataflow programming model, extended to
+handle state and control flow, similar to the one used for
+TensorFlow (Yu et al., 2018). A directed cyclic graph represents a program or computation. Its nodes represent operations, or primitive functions. Its edges represent data
+flowing between operations. Edges incident into a node
+represent its inputs, and edges incident out of the node represent its outputs. Both inputs and outputs are ordered. The
+data on edges can be either immutable tensors or mutable
+variables. Both tensors and variables are multi-dimensional
+arrays of primitive types.
+Nodes get ready to run when all their inputs are ready. When
+multiple nodes are ready, they can be executed in any order
+or in parallel. Besides the edges representing data dependencies, the model includes edges representing control dependencies. A control edge from node η1 to node η2 enforces
+that node η2 is executed after node η1 .
+The graph can have cycles due to loops and may have special
+operation nodes to implement different control flow semantics. In addition, we assume that all operation types as well
+as the types of all input and output tensors are known at
+compile time. Full or partial shapes may be known statically
+as well.
+Even though we focus on a dataflow based programming
+model, for the purpose of exposition, we will write imperative pseudocode and examples. These snippets should
+be seen as building the dataflow graph. For example
+Z = matmul(X, Y ) represents a subgraph with a single
+node representing the operation matmul with two inputs
+edges, X and Y , and a single output edge Z. Similarly,
+imperative constructs like for, while, if-then-else
+should be seen as constructing the corresponding control
+flow constructs in the graph. In addition, we will use
+parfor to represent a parallel-for loop. Its semantics
+will be discussed in more detail in §3.3.
+3.2
+
+Notation
+
+We use the following notation. γ represents program segments, corresponding to subgraphs in the overall dataflow
+graph. Optionally, we use notation γ(args) to identify the
+set args as some of the inputs of interest to γ. γ̂ represents
+the compiled version of γ, where the goal and semantics
+of compilation will be described in subsequent sections. η
+will represent a node in γ and η̂ is its compiled version in
+γ̂. It may be a single node or a sub-graph. opη is the op-
+
+Auto-Vectorizing TensorFlow Graphs
+
+eration for the node η. For any X which is a tensor (or a
+sequence of tensors), X̂ represents the vectorized version
+of X. A vectorized version means that X̂ stores n different
+versions of X in some layout. Xj , where j is an integer, or
+a vector of integers, refers to a row (or rows) j along the
+first dimension and either gathers them into a new tensor, or
+references them as a mutable variable. If X is a sequence,
+the definition applies recursively for each element. However
+if X̂ represents a vectorized version of X, then X̂j represents the j th version of X, if j is scalar. If j is a vector, X̂j
+represents a vectorized entity that subsets the underlying
+versions to be j, i.e. only includes versions j.
+3.3
+
+Problem Statement
+
+Given a dataflow graph Γ represented by the parallel-for
+loop of the form
+parfor i = 0 to n − 1 do
+γ(i)
+end for
+where n is a scalar integer tensor whose value may only
+be known at run-time, and γ(i) is a set of instructions that
+may depend on the loop variable i, as well as any global
+state, the goal of the compilation process is to generate a
+new dataflow graph, γ̂(n), that is functionally equivalent
+to Γ, and that tries to get rid of or reduce the scope of the
+parfor loop.
+A parfor loop is defined similar to a for loop with the
+difference that the iterations don’t need to run in sequential
+order. Instead the output and side-effects of the execution
+should be the same as under a SIMD execution model.
+A SIMD execution of Γ involves dispatching the nodes of
+γ(i) in lock step for all active iterations, which are the
+iterations of the loop that are executing that operation. This
+set starts off as being {0, ..., n − 1}. Whenever a control
+flow block construct is encountered, the set is updated to be
+the set of iterations that continue execution of that block and
+other inactive iterations stall, waiting for the block to finish.
+For parfor, note that we don’t require that the instructions
+actually be run in lock-step across all active iterations, but
+that the global state when the execution is done be the same
+as after a SIMD execution.
+3.4
+
+Compiling Stateless Operations
+
+We start with the case where the result of parfor is the
+same under any ordering or interleaving of the execution of
+the different iterations. (i.e. no data dependencies between
+any of the iterations, and no side-effects). §3.8 will describe
+adding support for stateful operations.
+Here we provide examples on how to compile simple stateless graphs, building towards our conversion algorithm in
+
+§3.5. We will directly list γ(i) in our examples below and
+assume that it is wrapped in a parfor as illustrated in §3.3.
+γ̂ will be the vectorized version and the last expression will
+be assumed to be the returned value. Shapes of the inputs
+are listed on the first line.
+An important aspect demonstrated here is how we leverage
+loop invariance of tensors beyond what traditional
+approaches to loop invariant code motion achieve. This will
+involve generating different code based on what combinations of input values are loop invariant.
+For the purpose of examples here and later, we adopt the
+following layout for vectorized tensors. We assume here
+that shapes are fixed across iterations. Let X have shape
+[s0 , ...sr ]. Then we can layout X̂j by stacking all the
+versions of X sequentially. Given that, shape of X̂ is
+[n, s0 , ...sr ] and X̂j = X̂[j], 0 ≤ j < n, corresponds to the
+value of X in iteration j. However if X is loop invariant,
+X̂ has same shape as X and represents the value of X in
+all iterations, i.e. we avoid unnecessary stacking. For cases
+where shape of X is different across iterations, more complicated book-keeping is needed, and we ignore such cases for
+the examples here. Also note that when shape information
+is statically available it can be used for more efficient code
+generation. Else the compiler generates code conditioned
+on run time shapes.
+The common operation of gathering the ith row of a
+tensor with first dimension n can be vectorized as follows.
+input X : [n, x]
+γ(i) : X[i]
+γ̂(n) : X
+In the more general case, gathering rows can be vectorized
+as a slicing operation on X.
+input X : [m, x]
+γ(i) : X[i]
+γ̂(n) : X[0 : n, ...]
+Component-wise operations can invoke the original operation.
+input X : [n, x, y], Y : [n, x, y]
+γ(i) : X[i] + Y [i]
+γ̂(n) : X + Y
+Typically such operations support broadcasting (The SciPy
+community, 2008) that semantically tiles the inputs along
+corresponding dimensions to get the shapes to match before
+component-wise operations are performed. Shapes are left
+extended with 1 to get ranks to match, and corresponding
+dimensions should have equal values or at least one of them
+should be 1.
+Compilation may need extra reshapes to makes sure broad-
+
+Auto-Vectorizing TensorFlow Graphs
+
+casting works for generated code. Also note below how it
+handles loop invariant input X and gets away without having to tile it n times. Here reshape is assumed to reshape
+the input without copying the underlying data.
+input X : [y, z], Y : [n, z]
+γ(i) : X + Y [i]
+γ̂(n) :
+X1 = reshape(X, [1, y, z])
+Y 1 = reshape(Y, [n, 1, z])
+X1 + Y1
+Now assume matmul performs matrix multiplication and
+batch matmul takes two lists of matrices (as 3-D tensors)
+and performs matrix multiplication on the corresponding
+values in the lists.
+input X : [n, x, y], Y : [n, y, z]
+γ(i) : matmul(X[i], Y [i])
+γ̂(n) : batch matmul(X, Y )
+The above is effectively the same as the uncompiled version.
+However if one of the inputs is loop invariant, this can be
+optimized based on the mathematical properties of matrix
+multiplication.
+input X : [n, x, y], Y : [y, z]
+γ(i) : matmul(X[i], Y )
+γ̂(n) :
+X1 = reshape(X, [n ∗ x, y])
+R = matmul(X1, Y )
+reshape(R, [n, x, z])
+Next assume conv2D performs convolution on the input using the passed in filter. We will assume that the
+operation performs padding of the input to ensure that
+the output shape for each channel is the same as input.
+input X : [n, b, h, w, c1], F : [k1, k2, c1, c2]
+γ(i) : conv2D(X[i], F )
+γ̂(n) :
+X1 = reshape(X, [n ∗ b, h, w, c1])
+R = conv2D(X1, F )
+reshape(R, [n, b, h, w, c2])
+Next we look at reductions. Here reduce sum reduces the
+input by performing sum reduction along the passed in axes.
+The generated code renumbers the axes and calls the same
+reduction.
+input X : [n, x, y, z]
+γ(i) : reduce sum(X[i], [1, −1])
+γ̂(n) : reduce sum(X, [2, −1]
+Renumbering of axes works for a lot of other operations.
+Here is an example of concat which
+concatenates a list of tensors along a particular
+axis.
+input X : [n, x, z], Y : [n, y, z]
+
+γ(i) : concat((X[i], Y [i]), 1)
+γ̂(n) : concat((X, Y ), 2)
+In our implementation described in §4, we added support
+for converting more than 100 different operations. As illustrated by above examples, lot of these conversions involve
+calling the original operation opη with additional reshape
+and occasional transposes. In other cases, opη is flexible
+in the length of one dimension, often a batch and sometimes a channel dimension, and operates independently on
+each slice along that dimension. In such cases, one could
+fold the first dimension of X̂ into the that dimension, run
+opη , and transpose and reshape the outputs back as needed.
+Renumbering axes was another common approach.
+Note that whether a particular input is loop invariant or not
+is independent of the operation being converted and is a
+property of how the dataflow graph was structured. Hence
+when implementing a converter, one may need to consider
+all possible combinations of loop invariance of its inputs.
+However based on typical graphs compiled, and based on
+which of those combinations can be expressed efficiently
+using the set of operations available to the framework, one
+can leave most of these combinations unoptimized by falling
+back to the loop based implementation as written above.
+This fallback provides a path for incrementally baking in
+more optimizations over time.
+3.5
+
+Greedy Algorithm
+
+We provide a greedy algorithm for the problem stated in
+§3.3. Given the dataflow graph corresponding to γ(i), we
+first convert it to a directed acyclic graph by converting each
+control flow block into a single node. Next we traverse this
+new dataflow graph in topological order, and for each node
+η, generate a new set of nodes, η̂, that efficiently implement
+the functionality of running η in a parfor. Any control
+dependencies of η are mirrored for each node in η̂. Each
+output tensor X of η is mapped to a new tensor (or sequence
+of tensors) X̂ in η̂ that stores all the versions of X across
+all iterations using some chosen layout.
+Code generation is done by using a registry of converters
+keyed by the signature of the operation, opη corresponding
+to the node η. See §3.4 and §3.8 for discussion on these
+converters. If the node represents a control flow block in the
+original graph, special logic is employed which traverses
+the nodes corresponding to this block, strips out control
+flow operations and extracts sub graphs that correspond
+to semantics blocks of that control flow, like the body
+and condition of loops, or the condition, then and
+else blocks for conditionals, etc. These blocks are recursively converted and new control flow code is generated as
+detailed in §3.6 and §3.7.
+
+Auto-Vectorizing TensorFlow Graphs
+
+3.6
+
+Compiling Conditionals
+
+Next we look at compiling code with conditionals. Consider
+the code segment below where T and R are tensors or sets of
+tensors, and γ pre , γ cond , γ then and γ else are code segments
+representing dataflow subgraphs.
+parfor i ← 0 to n − 1 do
+T, C ← γ pre (i)
+if C then
+R ← γ then (i, T )
+else
+R ← γ else (i, T )
+end if
+end for
+
+quential while and for loops, corresponding converters
+need to be invoked. If these loops are deeply nested, each
+converter will in turn invoke compilation recursively which
+will lead to converting these loops inside out.
+Here is a while loop nested inside a parfor. As before
+T and R are tensors or sets of tensors, and γ pre , γ cond and
+γ body are code segments representing dataflow subgraphs.
+parfor i ← 0 to n − 1 do
+R, T ← γ pre (i)
+while γ cond (i, Ri , T ) do
+R ← γ body (i, R, T )
+end while
+end for
+
+Below is a functionally equivalent code segment that gets
+rid of the parfor. The idea is to evaluate the if condition for all the iterations, then compute the indices of the
+iterations, I then and I else , that would go into the then
+and else blocks respectively. Given these indices, we
+compile γ then and γ else to work for only those particular iterations. The compilation process needs to care about some
+details. Firstly, it needs to subset any vectorized tensors to
+only those active indices. Secondly any references to i in
+γ then should vectorize to I then (similarly I else for γ else ).
+Also, the number of iterations should be set to be nthen and
+nelse respectively. Given these things are taken care of, the
+converter for conditionals can call the compilation module
+recursively to convert γ then and γ else .
+T̂ , Ĉ ← γ̂ pre (n)
+I then ← {j : Ĉj is True}
+nthen = length(I then )
+I else ← {j : Ĉj is False}
+nelse = length(I else )
+if nthen > 0 then
+T̂ then ← T̂I then
+Rthen ← γ̂ then (nthen , T̂ then )
+end if
+if nelse > 0 then
+T̂ else ← T̂I else
+Relse ← γ̂ else (nelse , T̂ else )
+end if
+R̂ ← Scatter((I then , I else ), (Rthen , Relse ))
+
+Below is the functionally equivalent code that gets rid of the
+parfor. The overall idea is to generate another while
+loop where, in each iteration, we keep track of the indices,
+I, of all parfor loops that are still active, and run the
+condition and body, γ̂ cond and γ̂ body , on only those indices.
+Similar to the conditional case, this involves subsetting all
+the vectorized inputs of those blocks to the set I, and having
+the recursive compilation be aware of the list and count of
+active iterations. Also, a more optimized implementation
+can be done for the case where the output of γ cond is loop
+invariant.
+R̂, T̂ ← γ̂ pre (n)
+done ← f alse
+I ← [0, ..., n − 1]
+l←n
+while not done do
+C ← γ̂ cond (l, RI , T̂I )
+I 0 ← {j : Cj is true}
+I ← II 0
+l ← length(I)
+if l is 0 then
+done ← true
+else
+RI ← γ̂ body (l, RI , T̂I )
+end if
+end while
+
+where Scatter stitches back the partial results from the two
+branches based on the indices that each branch processed.
+An interesting case is when loop condition C is loop invariant. In such cases, the subsetting operations can be skipped
+for performance reasons.
+
+Most of discussion till now has ignored stateful operations.
+Turns out even handling stateless operations is sufficient
+for optimizing many practical applications. Nonetheless we
+extend our approach for stateful operations.
+
+3.7
+
+Compiling Nested Loops
+
+Now let us consider the case of loops nested inside the
+parfor. If that loop is itself a parfor loop, then the
+compiler can be invoked to convert it first. In case of se-
+
+3.8
+
+Compiling Stateful Operations
+
+For cases where η̂ touches (reads or writes) any mutable
+state, we adopt the following safety mechanism. Firstly, any
+accesses to state start only after all the inputs are ready. Secondly, all state accessed anywhere by η̂ is protected (using
+mutex) for the entire duration of any state accesses. Lastly,
+the first output should be produced only after all accesses
+
+Auto-Vectorizing TensorFlow Graphs
+
+to state are done. This allows us to simulate a similar ordering imposed when executing η. See §3.9 for how this
+assumption helps prove equivalence of the converted code.
+Operations that mutate state may often not be SIMD compatible. Even assigning a value to a mutable variable is
+not compatible, unless the value assigned is loop invariant.
+Given that a user is putting this call in a parfor loop, there
+are multiple options to handle it. Firstly, it could be raised
+as an error. Secondly, assuming these calls are intended
+and useful, they could be overloaded with special semantics. Thirdly, if instead of SIMD semantics, user intended
+sequential semantics, the conversion could be implemented
+for sequential output. Choice of these options could be
+driven by context (e.g. we were optimizing a sequential
+loop vs parallel loop) as well as special flags (raise error vs
+overload semantics for SIMD case).
+An example of such a case is random number generation.
+The call is not SIMD compatible since each call involves
+reading and updating some internal mutable state. However
+in SIMD setting it could be desirable to change the shape
+passed to the generator, increasing the rank by 1. Note that
+the output may or may not be the same as under sequential
+semantics based on the implementation of the generator.
+We now discuss some common cases of stateful converters.
+First we consider operations that are idempotent. Typical
+examples include get-or-create a named mutable tensor or
+reading the value of a mutable tensor. Given the idempotent nature these can be run once and the outputs can be
+marked as loop-invariant. Next we consider operations that
+are commutative and associative. Examples include adding
+or subtracting a value into a mutable tensor. Efficient implementation for such operations is done by first reducing
+all the updates and then applying the reduced value to the
+mutable state.
+3.9
+
+Discussion
+
+Greedy conversion can miss out on many optimization opportunities. For example, data layout used when converting
+a node could be better chosen based on the nodes consuming
+the output. Operations generated for one node could be potentially fused or swapped with subsequently generated ones.
+Some of these optimizations can be done independently in
+subsequent rewrite passes.
+Vectorization can have trade-offs. Memory utilization is typically larger and memory constraints may inhibit conversion.
+Vectorization may not even speed up the compute. Additional cost models, heuristics and search may be needed to
+figure out when and how much to vectorize. However given
+that we expect a staged compilation, we contend that downstream optimizations can use domain specific optimizations,
+or tiling and loop reordering to relieve the memory pressure.
+
+In fact, in our experience the generated code is close to what
+users can, or already are, writing by hand, and vectorized
+parallel-for loop becomes just another abstraction for expressing high level computation. This further supports the
+need for subsequent optimizations.
+Next we argue that γ̂(n) is functionally equivalent to SIMD
+execution of Γ. To establish equivalence, we need to show
+that given any valid execution ordering of nodes in γ̂(n),
+there is an execution ordering of nodes in γ(i) whose SIMD
+execution produces the same output, and vice versa. We
+provide a sketch below. A formal proof, and dealing with
+stateful nested control flow will be left as out of scope of
+this paper.
+First consider an execution ordering of γ(i). A valid execution order in γ̂(n) can be constructed by mapping each
+node η to some valid execution ordering of nodes in η̂. To
+see why this is a valid execution order of γ̂(n), first note
+that given our greedy conversion, there is an isomorphism
+between γ(i) and γ̂(n) which maps each node η in the former to the sub-graph η̂ in the latter. Secondly, functional
+equivalence of η and η̂ follows from the correctness requirement of the converter for opη . Thus, the given ordering in
+γ̂(n) simulates the SIMD execution of γ(i).
+Next consider the reverse direction, i.e. we are given an
+execution ordering in γ̂(n). We can similarly map each
+sub-graph η̂ to a node η in γ(i), but there are some tricky
+bits here. Firstly execution of η̂ could be interleaved with
+execution of other nodes in γ̂(n). This is due to the nondeterminism inherent in dataflow execution where it can run
+ready nodes in any order and even concurrently. Secondly,
+there could be multiple operations in η̂ that touch mutable
+state at different times and we need to make sure η sees
+the same value for the state. To get an execution ordering,
+we first define a value Tη̂ as follows. If η̂ is stateless Tη̂ is
+the time when the last input (including control dependency
+edges) to η̂ got ready. For the case η̂ accesses some state,
+we define Tη̂ as the time the first read/write of some state
+actually happened inside η̂. An equivalent execution ordering of γ(i) can now be created by replacing η̂ with η and
+ordering this sequence by Tη̂ .
+To see why this ordering works, we first show that it is
+a valid execution order for γ(i). If Tη̂1 < Tη̂2 , data or
+control dependencies from η̂2 to η̂1 are ruled out since all
+outputs of η̂2 are produced after Tη̂2 while all inputs of η̂1
+are ready before Tη̂1 (see §3.8). Given our isomorphism,
+this similarly means that dependency from η2 to η1 is ruled
+out, thus ensuring validity of execution order. Next we
+argue why this ordering of nodes η simulates the execution
+of γ̂(n). To see that, note that accesses to state inside η̂ are
+atomically done and in the order defined by Tη̂ . Ordering
+η in the same order thus allows us to enforce that the state
+evolves in the same way in Γ.
+
+Auto-Vectorizing TensorFlow Graphs
+
+4
+
+I MPLEMENTATION
+
+Using the ideas mentioned in §3, we have implemented
+vectorization support in TensorFlow. We had the option
+of implementing this as an optimizing rewrite in the TensorFlow C++ runtime. However we chose to keep this in
+the Python frontend, as detailed below. This allowed us to
+build this external to TensorFlow and independent of the
+framework internals. In addition, for simplicity we chose to
+directly expose a parfor abstraction to the user instead of
+transparently optimizing sequential loops.
+We provide a new Python function, pfor, with the following signature: pfor(loop body fn, iters). Here
+loop body fn is a Python function that takes a scalar integer tensor, representing the loop variable, as input, and
+returns a nested structure of tensors. iters is a scalar
+integer tensor representing the number of pfor iterations
+to run. On being called, pfor returns a new set of graph
+nodes whose semantics is to runs the dataflow graph represented by loop body fn iters times, passing the values 0, 1, ...iters − 1 to the different iterations, and stacking
+the outputs returned by these iterations. Here is an example.
+a = tf.random_uniform([10, 20])
+b = tf.random_uniform([10, 20])
+def body(i):
+a_i = tf.gather(a, i)
+b_i = tf.gather(b, i)
+return a_i + b_i, a_i - b_i
+# Equivalent to a + b, a - b
+output = pfor(body, 10)
+Here body returns two tensors with shape [20] that respectively represent the sum and the difference of the ith rows
+of a and b. The semantics of this code is to run this function
+10 times, passing values 0, ..., 9 and then stacking the outputs, returning two tensors, each with shape [10, 20]. Given
+our vectorization process, the call to pfor above returns
+tensors a + b and a − b.
+Internally, the way it works is that the call to pfor first
+makes a single call to the function body to create a
+graph with four nodes (two Gather, one Addition,
+one Subtraction). Next the compiler is invoked which
+walks this graph using the greedy procedure describer earlier, and calls the converters for each node in the graph. Here
+the converters for Gather will return a and b respectively,
+since the vectorization process will essentially invert gathering each row. Next, converter for Addition will return
+a + b since that is the vectorization of adding the corresponding rows of its inputs. Similarly for Subtraction.
+Finally pfor will return these two symbolic tensors.
+Most of our work has focused on cases where the shapes
+
+of all inputs and outputs are loop invariant, and we have
+implemented support for more than 100 TensorFlow kernels, allowing us to vectorize models like convolutional
+networks and dynamic LSTMs. Shape invariance assumption allows us to use the vectorization layout we described
+in §3.4, which stacks all the underlying values along the first
+dimension.
+We have also built some initial prototypes that handle shape
+variance, by padding the inputs to maximum shape and keeping track of the actual shapes of the underlying components.
+In initial experiments with networks involving convolutions,
+relu and dense layers on top of inputs with ragged shapes,
+we were able to generate code that closely matched the
+performance of hand written code.
+
+5
+5.1
+
+A PPLICATIONS
+Jacobians
+
+TensorFlow doesn’t provide native support for computing jacobians efficiently. Instead it implements jacobianvector products. It is easy to see that jacobian computation is essentially a parallel-for, where each iteration computes the gradient of one scalar value in the output tensor. However implementing this using a tf.while loop
+is slow and doesn’t always work. In particular, TensorFlow’s tf.while loop gradient computation involves
+popping tensors out of a TensorFlow stack data structure which is populated during the forward pass. This
+means that these gradient computations cannot be repeated multiple times as the stack will already be empty
+after the first gradient call is finished. Given this, jacobian computation of tf.while loop (and in turn,
+tf.nn.dynamic rnn) is not supported by TensorFlow.
+For the same reason, hessians (jacobian of jacobian) of nonscalar outputs doesn’t work since that will involve jacobian
+of a tf.while loop generated by the first jacobian call.
+We provide a jacobian function, implemented using
+pfor, that is much faster than an iterative approach (§6.4).
+Given deep learning experiments can run for hours to days,
+these speedups alone make new research feasible. In addition, it enables the cases mentioned above, i.e., jacobians of
+tf.while loop and tf.nn.dynamic rnn, as well as
+hessians of non-scalar outputs.
+Our support for jacobian has already been used by multiple
+researchers. For example, (Pfau et al., 2018) build upon
+efficient jacobian computation to create a framework for
+computing eigenfunctions of linear operators via stochastic
+optimization, and use it for unsupervised feature generation
+on video data. (Matt Golub, 2018) use our implementation
+to build a framework for finding and analyzing the fixed
+points of RNNs.
+
+Auto-Vectorizing TensorFlow Graphs
+
+5.2
+
+Auto-Batching
+
+With auto-batching, users write their model code with a
+batch size of one, and then run that code across different
+inputs in a batch. The auto-batching framework makes it run
+faster by fusing similar operations. See §2 for a comparison
+of static and dynamic batching approaches and §6.2 for
+benchmarks.
+Auto-batching can be implemented by invoking the forward
+pass (or some part) of the model in a pfor loop. Here is
+some example code.
+def body(i):
+image, label = input_fn()
+prediction = model_fn(image)
+loss = loss_fn(prediction, label)
+return loss
+losses = pfor(body, batch_size)
+optimizer.minimize(losses)
+As mentioned earlier in §4, most of our current implementation assumes shape invariance, but we have some initial
+results generating code that automatically pads and unpads
+ragged tensors. This can enable auto-batching popular networks, like Transformers (Dehghani et al., 2018). A harder
+case is efficient auto-batching of tree and graph traversals
+and tree RNNs (e.g. (Gilmer et al., 2017; Tai et al., 2015)),
+where padding may not be very efficient. On top of that,
+TensorFlow’s support for recursive data structures and functions is somewhat limited which may require resorting to
+iterative traversals and specialized representations. Getting
+a good trade-off of user experience and performance with
+such models is an open research problem.
+5.3
+
+Per-Example Gradients
+
+The per-example gradients are regular gradients of the loss
+with respect to the variables, but the contributions from different examples in a batch are kept separate, not summed.
+Per-example gradients allow more sophisticated optimization strategies (e.g. (Alain et al., 2015)), but TensorFlow
+users today either need to run at batch size of 1, or perform special surgery on the generated graphs to compute
+per-example gradients. ((Goodfellow, 2015)).
+Computing per-example gradients can be seen as a special
+case of auto-batching where one puts the gradient computation inside the pfor loop as well, and provides a cleaner
+and more efficient method for the same. Extending the
+example from §5.2
+def body(i):
+image, label = input_fn()
+prediction = model_fn(image)
+loss = loss_fn(prediction, label)
+
+return gradients(loss)
+per_eg_grads = pfor(body, batch_size)
+§6.3 shares some benchmark numbers for computing perexample gradients.
+5.4
+
+Optimizing Map Functions And Input Pipelines
+
+tf.map fn runs a given function, fn, over all row slices of
+a tensor, or a set of tensors, and stitches back the generated
+outputs. This can be directly implemented using pfor.
+Here is a sample implementation for the simple case of a
+single tensor input.
+def pfor_map_fn(f, x):
+return pfor(
+lambda i: f(tf.gather(x, i)),
+tf.shape(x)[0])
+Similarly tf.data.Dataset based pipelines provide a
+map function that transforms each of the elements of the
+Dataset. This is generally followed later by a call to
+batch. These calls can be swapped and the function passed
+to map can then be vectorized using the given batch size.
+We benchmarked some toy input pipelines and simple
+map fn calls. Using pfor sped these up one to two orders
+of magnitude, in-line with results seen in §6.
+
+6
+6.1
+
+B ENCHMARKS
+Setup
+
+Experiments were run on a 6 core Intel Xeon E5-1650
+3.60GHz CPU with 64GB of RAM and a NVIDIA Maxwell
+Titan X GPU. We used two models in multiple experiments
+below. MNIST’s architecture is described in (tensorflow,
+2016). It is a stack of two conv-relu-maxpool blocks followed by a linear-relu-dropout-linear block. Inputs are
+batches of 28x28 images and output has shape [10]. The
+LSTM model we used is a single-layer unidirectional RNN
+based on the LSTM cell described in (Hochreiter & Schmidhuber, 1997). Inputs are sequences of 128 dimensional vectors. LSTM state size is 256 except if mentioned otherwise
+(e.g. in §6.4).
+6.2
+
+Auto Batching
+
+We compare the inference performance of 3 models implemented in different 4 way: using pfor auto-batching, using
+tf.while loop to loop over inputs in a batch, and using
+DyNet with and without auto-batching enabled. Experiments are run with and without GPU support and reported
+in Figure 1. Throughput (measured as gigaflops or images/tokens per second) is reported as function of batch size.
+
+Auto-Vectorizing TensorFlow Graphs
+
+TF: pfor
+
+TF: while_loop
+
+101
+101
+
+102
+
+103
+
+104
+
+102
+101
+100 0
+10
+
+101
+
+102
+
+103
+
+batch size
+a) Linear Projection
+
+104
+
+GPU: Tokens/Second
+
+102
+
+105
+104
+103 0
+10
+104
+
+101
+
+102
+
+103
+
+104
+
+103
+
+102 0
+10
+
+DyNet: no autobatching
+106
+
+CPU: Tokens/Second
+
+CPU: Gigaflops
+
+GPU: Images/Second
+
+103
+
+100 0
+10
+103
+
+DyNet: autobatching
+
+106
+
+CPU: Images/Second
+
+GPU: Gigaflops
+
+104
+
+101
+
+102
+
+batch size
+b) MNIST
+
+103
+
+104
+
+105
+104
+103 0
+10
+106
+
+101
+
+102
+
+103
+
+104
+
+102
+
+103
+
+104
+
+105
+104
+103 0
+10
+
+101
+
+batch size
+c) LSTM
+
+Figure 1. Auto-batching 3 models using DyNet and TensorFlow on GPU and CPU. Each column shows performance of a different model.
+Top row shows performance on GPU and bottom row on CPU. The x-axis is the batch size, i.e. the number of input examples that are
+auto-batched (in pfor and DyNet with auto-batching) or iterated over (for tf.while loop and DyNet without auto-batching). The
+y-axis is the achieved throughput.
+
+6.2.1
+
+Linear Projection
+
+We first study applying linear projection on input data. Inputs are randomly generated 768-dimensional vectors of
+floats. Projection matrix is a constant 768x768 matrix of
+floats. Figure 1a reports throughput measured in Gflops
+against batch size.
+We notice that DyNet performs better than TensorFlow at
+small batch sizes, especially on GPU. In this regime, the
+computation time is dominated by fixed overheads, which
+appear lower for DyNet. For moderate to large batch sizes,
+pfor-based implementation outperforms the other three,
+by 1 to 1.5 orders of magnitude. The DyNet auto-batching
+based implementation does not scale as well at higher batch
+sizes likely because the auto-batching is performed at runtime and its cost is proportional to the batch size.
+tf.while loop does well on CPU since it supports running multiple loop iterations in parallel, hence utilizing
+multiple CPU cores. In our implementation, DyNet without
+auto-batching is driven from a single Python thread and
+fails to utilize multiple CPU cores. It is likely possible to
+use multiple Python threads to achieve higher performance
+without auto-batching.
+6.2.2
+
+MNIST
+
+Figure 1b reports the number of images processed by the
+MNIST model per second as we vary the batch size. Overall
+trends look similar to those of the linear projection benchmark in §6.2.1. One noticeable difference is that on CPU
+
+tf.while loop’s performance scales better than in the
+linear projection benchmark. This is likely because the
+MNIST model requires more computation per iteration and
+execution overheads become less significant compared to
+it. pfor still outperforms the other three for moderate and
+large batch sizes.
+6.2.3
+
+LSTM
+
+Figure 1c reports tokens per second processed by an LSTM
+as we vary batch size. Input sequence lengths for LSTM
+are sampled uniformly at random between 1 and 100, inclusively. The LSTM is implemented by iterating to the actual
+length for each sequence. We neither perform padding of the
+inputs, nor do we iterate to the maximum sequence length
+in a batch.
+Here pfor needs relatively larger batch sizes to outperform other implementations and the margins are narrower.
+This is likely caused by the following two factors. Firstly,
+our implementation of vectorizing tf.while loop still
+has considerable overheads, which we are working on optimizing. Secondly, given that sequence lengths are randomly chosen, iterations of the sequential loop generated
+by pfor progressively operate on smaller batches. Smaller
+batch sizes have lower hardware utilization and also smaller
+speedup from vectorization compared to other strategies.
+The overall speedup is an expectation over the speedups at
+different batch sizes and hence lower than the speedup for
+linear and MNIST models, which have a fixed batch size
+throughout an experiment.
+
+Auto-Vectorizing TensorFlow Graphs
+105
+
+LSTM: pfor
+LSTM: while
+MNIST: pfor
+MNIST: while
+
+jacobian rows per second
+
+example gradients per second
+
+104
+
+103
+
+104
+
+VGG16 on 48x48: pfor
+VGG16 on 48x48: while
+VGG16 on 224x224: pfor
+VGG16 on 224x224: while
+LSTM: pfor
+LSTM: while
+
+103
+
+102
+102 0
+10
+
+101
+
+batch size
+
+102
+
+Figure 2. Throughput of per-example gradient computation on
+MNIST and LSTM with and without auto-vectorization, on GPU.
+The x-axis is the number of examples in the batch. The y-axis is
+the number of per-example gradients that can be computed.
+
+6.3
+
+Per-Example Gradients
+
+In this benchmark we evaluate the number of example gradients that pfor and tf.while loop based implementations can achieve versus the number of examples in the
+batch. Example is an image for MNIST and a complete
+input sequence for LSTM. All input sequences have length
+10 in this benchmark. The tf.while loop based implementation simply iterates over all the examples in the batch,
+computing gradients for each. pfor based implementation
+vectorizes this iteration.
+Figure 2 shows that tf.while loop based implementation achieves almost constant throughput for both MNIST
+and LSTM models. On the other hand, pfor based implementation is able to utilize the GPU better by vectorizing the
+gradient computation. At the highest batch size of 256 for
+the LSTM model, pfor outperforms tf.while loop by
+a factor of 38.
+6.4
+
+Jacobians
+
+This benchmark looks at computing jacobians of model
+output with respect to model inputs on GPU. As mentioned
+in 5.1, TensorFlow currently has no efficient native support
+for computing jacobians. The best available option is to
+compute the gradients of each scalar in the output with
+respect to inputs. Each such gradient is a row of the jacobian
+matrix. We vary the output size and measure throughput
+as rows of jacobian processed per second. This metric
+normalizes the compute done for a given task as we vary
+the output size. Figure 3 reports jacobian rows per second
+against output size.
+Besides the LSTM model that we used in other bench-
+
+100
+
+101
+
+output size
+
+102
+
+Figure 3. Throughput of computing jacobians (output with respect
+to input) for VGG16 and LSTM models as output size is varied,
+with and without vectorization, on GPU. VGG16 uses two different
+input image sizes.
+
+marks, we picked the VGG16 (Simonyan & Zisserman,
+2014) model since it supports different input image sizes as
+well as different number of output classes. We report results
+for two input image sizes: 48x48 and 224x224. The LSTM
+model is statically unrolled to 10 steps in this benchmark
+because of the TensorFlow’s restriction described in §5.1.
+Figure 3 shows that the unvectorized implementation scales
+poorly with output sizes. The only speed up it is able to get
+is from parallel execution of the loop body. pfor based
+implementation outperforms tf.while loop based implementation by more than an order of magnitude at higher
+output sizes. At the largest output size of 128, pfor outperforms tf.while loop by over 60x.
+
+7
+
+S UMMARY
+
+We proposed applying static vectorization to dataflow IR
+like TensorFlow graphs. We implemented a library that
+provides vectorized parallel-for loop construct for TensorFlow. This enables applications ranging from static autobatching and per-example gradients, to jacobians, hessians
+and optimization of input pipelines. GPU benchmarks show
+speedups of up to two orders of magnitude compared to
+TensorFlow’s sequential loop and an order of magnitude
+against DyNet with dynamic batching. There is ongoing
+work on better handling loop variant shapes by automatic
+padding and masking.
+Moving forward, these techniques can help optimize sequential loops. More research is needed in dealing with sparse
+computation, recursive computation like tree or graph traversals, handling memory constraints and applying polyhedral
+loop optimization, generating more optimized code using
+better heuristics and hardware cost models, etc.
+
+Auto-Vectorizing TensorFlow Graphs
+
+R EFERENCES
+Abadi, M., Agarwal, A., Barham, P., Brevdo, E., Chen, Z.,
+Citro, C., Corrado, G. S., Davis, A., Dean, J., Devin, M.,
+Ghemawat, S., Goodfellow, I. J., Harp, A., Irving, G.,
+Isard, M., Jia, Y., Józefowicz, R., Kaiser, L., Kudlur, M.,
+Levenberg, J., Mané, D., Monga, R., Moore, S., Murray, D. G., Olah, C., Schuster, M., Shlens, J., Steiner,
+B., Sutskever, I., Talwar, K., Tucker, P. A., Vanhoucke,
+V., Vasudevan, V., Viégas, F. B., Vinyals, O., Warden, P.,
+Wattenberg, M., Wicke, M., Yu, Y., and Zheng, X. Tensorflow: Large-scale machine learning on heterogeneous
+distributed systems. CoRR, abs/1603.04467, 2016. URL
+http://arxiv.org/abs/1603.04467.
+Alain, G., Lamb, A., Sankar, C., Courville, A., and Bengio,
+Y. Variance Reduction in SGD by Distributed Importance
+Sampling. ArXiv e-prints, November 2015.
+Barik, R., Zhao, J., and Sarkar, V. Efficient selection
+of vector instructions using dynamic programming. In
+Proceedings of the 2010 43rd Annual IEEE/ACM International Symposium on Microarchitecture, MICRO
+’43, pp. 201–212, Washington, DC, USA, 2010. IEEE
+Computer Society. ISBN 978-0-7695-4299-7. doi:
+10.1109/MICRO.2010.38. URL https://doi.org/
+10.1109/MICRO.2010.38.
+Chen, T., Moreau, T., Jiang, Z., Shen, H., Yan, E. Q., Wang,
+L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A.
+TVM: end-to-end optimization stack for deep learning.
+CoRR, abs/1802.04799, 2018. URL http://arxiv.
+org/abs/1802.04799.
+Dehghani, M., Gouws, S., Vinyals, O., Uszkoreit, J., and
+Kaiser, Ł. Universal Transformers. ArXiv e-prints, July
+2018.
+Frostig, R., Johnson, M. J., and Leary, C. Compiling machine learning programs via high-level tracing. In SysML,
+2018.
+Gers, F. A., Schmidhuber, J. A., and Cummins,
+F. A.
+Learning to forget: Continual prediction
+with lstm. Neural Comput., 12(10):2451–2471, October 2000.
+ISSN 0899-7667.
+doi: 10.1162/
+089976600300015015. URL http://dx.doi.org/
+10.1162/089976600300015015.
+Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O.,
+and Dahl, G. E. Neural message passing for quantum chemistry. CoRR, abs/1704.01212, 2017. URL
+http://arxiv.org/abs/1704.01212.
+Goodfellow, I. Efficient Per-Example Gradient Computations. ArXiv e-prints, October 2015.
+
+Graves, A. Adaptive computation time for recurrent neural
+networks. CoRR, abs/1603.08983, 2016. URL http:
+//arxiv.org/abs/1603.08983.
+Hochreiter, S. and Schmidhuber, J. Long short-term
+memory. Neural Comput., 9(8):1735–1780, November 1997. ISSN 0899-7667. doi: 10.1162/neco.1997.
+9.8.1735. URL http://dx.doi.org/10.1162/
+neco.1997.9.8.1735.
+Karrenberg, R. and Hack, S. Whole-function vectorization.
+In Proceedings of the 9th Annual IEEE/ACM International Symposium on Code Generation and Optimization, CGO ’11, pp. 141–150, Washington, DC, USA,
+2011. IEEE Computer Society. ISBN 978-1-61284-3568. URL http://dl.acm.org/citation.cfm?
+id=2190025.2190061.
+Looks, M., Herreshoff, M., Hutchins, D., and Norvig, P.
+Deep learning with dynamic computation graphs. CoRR,
+abs/1702.02181, 2017. URL http://arxiv.org/
+abs/1702.02181.
+Matt Golub. FixedPointFinder: a tensorflow toolbox
+for finding fixed points and linearized dynamics in recurrent neural networks. https://github.com/
+mattgolub/fixed-point-finder, 2018.
+Neubig, G., Goldberg, Y., and Dyer, C. On-the-fly operation
+batching in dynamic computation graphs. In Guyon,
+I., Luxburg, U. V., Bengio, S., Wallach, H., Fergus, R.,
+Vishwanathan, S., and Garnett, R. (eds.), Advances in
+Neural Information Processing Systems 30, pp. 3971–
+3981. Curran Associates, Inc., 2017.
+Nuzman, D., Rosen, I., and Zaks, A. Auto-vectorization of
+interleaved data for simd. SIGPLAN Not., 41(6):132–143,
+June 2006. ISSN 0362-1340. doi: 10.1145/1133255.
+1133997. URL http://doi.acm.org/10.1145/
+1133255.1133997.
+Paszke, A., Gross, S., Chintala, S., Chanan, G., Yang, E.,
+DeVito, Z., Lin, Z., Desmaison, A., Antiga, L., and Lerer,
+A. Automatic differentiation in pytorch. 2017.
+Pfau, D., Petersen, S., Agarwal, A., Barrett, D., and Stachenfeld, K. Spectral Inference Networks: Unifying Spectral
+Methods With Deep Learning. ArXiv e-prints, June 2018.
+Pharr, M. and Mark, W. R.
+ispc: A spmd compiler for high-performance cpu programming. IEEE,
+2012. ISBN 978-1-4673-2633-9. doi: 10.1109/InPar.
+2012.6339601. URL https://ieeexplore.ieee.
+org/document/6339601.
+Ragan-Kelley, J., Barnes, C., Adams, A., Paris, S., Durand,
+F., and Amarasinghe, S. Halide: A language and compiler
+for optimizing parallelism, locality, and recomputation in
+
+Auto-Vectorizing TensorFlow Graphs
+
+image processing pipelines. In Proceedings of the 34th
+ACM SIGPLAN Conference on Programming Language
+Design and Implementation, PLDI ’13, pp. 519–530, New
+York, NY, USA, 2013. ACM. ISBN 978-1-4503-2014-6.
+doi: 10.1145/2491956.2462176. URL http://doi.
+acm.org/10.1145/2491956.2462176.
+Salesforce.
+Matchbox.
+https://github.com/
+salesforce/matchbox, 2018.
+Simonyan, K. and Zisserman, A. Very deep convolutional networks for large-scale image recognition. CoRR,
+abs/1409.1556, 2014. URL http://arxiv.org/
+abs/1409.1556.
+Tai, K. S., Socher, R., and Manning, C. D. Improved semantic representations from tree-structured long short-term
+memory networks. CoRR, abs/1503.00075, 2015. URL
+http://arxiv.org/abs/1503.00075.
+tensorflow. models/tutorials/image/mnist/convolutional.py.
+https://github.com/tensorflow/models/
+blob/master/tutorials/image/mnist/
+convolutional.py, 2016.
+The SciPy community.
+Broadcasting.
+https:
+//docs.scipy.org/doc/numpy/user/
+basics.broadcasting.html, 2008.
+The XLA team.
+XLA - TensorFlow, compiled.
+https://developers.googleblog.com/
+2017/03/xla-tensorflow-compiled.html,
+2017.
+Trifunovic, K., Nuzman, D., Cohen, A., Zaks, A., and
+Rosen, I. Polyhedral-model guided loop-nest autovectorization. In Proceedings of the 2009 18th International Conference on Parallel Architectures and Compilation Techniques, PACT ’09, pp. 327–337, Washington, DC, USA, 2009. IEEE Computer Society. ISBN
+978-0-7695-3771-9. doi: 10.1109/PACT.2009.18. URL
+https://doi.org/10.1109/PACT.2009.18.
+Wei, R., Adve, V., and Schwartz, L. DLVM: A modern
+compiler infrastructure for deep learning. arXiv preprint
+arXiv:1711.03016, 2017.
+Yu, Y., Abadi, M., Barham, P., Brevdo, E., Burrows, M.,
+Davis, A., Dean, J., Ghemawat, S., Harley, T., Hawkins,
+P., Isard, M., Kudlur, M., Monga, R., Murray, D., and
+Zheng, X. Dynamic control flow in large-scale machine learning. In Proceedings of the Thirteenth EuroSys
+Conference, EuroSys ’18, pp. 18:1–18:15, New York,
+NY, USA, 2018. ACM. ISBN 978-1-4503-5584-1. doi:
+10.1145/3190508.3190551. URL http://doi.acm.
+org/10.1145/3190508.3190551.
+
+

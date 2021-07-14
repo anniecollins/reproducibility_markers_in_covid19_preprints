@@ -1,0 +1,1134 @@
+DISTRIBUTED FUNCTION MINIMIZATION IN APACHE
+SPARK
+
+arXiv:1909.07922v1 [cs.LG] 17 Sep 2019
+
+ANDREA SCHIOPPA
+Abstract. We report on an open-source implementation for distributed function minimization on top of Apache Spark by using gradient and quasi-Newton
+methods. We show-case it with an application to Optimal Transport and some
+scalability tests on classification and regression problems.
+
+Contents
+1. Introduction
+2. Architecture and Implementation
+3. Losses and Models
+4. Scalability Experiments
+References
+
+1
+4
+9
+13
+16
+
+1. Introduction
+1.1. Motivation. In this paper we report on an open-source implementation for
+distributed function minimization using gradient and quasi-Newton methods.
+This library distfom (GitHub repo 1) is geared towards mathematical problems
+that involve minimization of functions whose value / gradient require costly computations. The original motivation was to distribute computations related to Optimal
+Transport [TT16] where the underlying feature spaces have high cardinality and
+large amount of data-points are required in the data-driven approach.
+A possible approach to distribute such calculations might be renting a big server
+or using dedicated clusters with fast network connections relying on a messagepassing standard for parallel computing, e.g. MPI. However, we worked on a solution
+for “cheap” commodity clusters that, for example, can be rented from a Cloud
+provider or shared among users in a proprietary e-commerce company cluster.
+In this shared setting, besides the usual problem of node failure, we wanted to
+address a solution that can work with preemptible nodes, i.e. nodes that can be
+claimed back from the cloud provider or a job scheduler (e.g. in the e-commerce
+company scenario depending on the priority queue of the job). Being able to use
+preemptible nodes is often more cost effective than renting a locked resource. For
+example, at the time of writing a preemptible node is 80% cheaper on the Google
+Cloud Platform.
+1
+
+https://github.com/salayatana66/distfom
+1
+
+2
+
+ANDREA SCHIOPPA
+
+1.2. Extension to Machine Learning. From a Machine Learning perspective a
+large distributed Optimal Transport Problem presents both the challenges of model
+parallelism, as one needs the value of the potentials at each sampled point, and of
+data parallelism, as the cost matrix is large and has to be stored in a distributed
+file system.
+Therefore, using the same library for ML problems is viable. We thus implemented linear models and Factorization Machines, and loss functions for regression,
+(multi)-classification and ranking.
+Another motivation for this extension was this blog post 2 which we co-authored.
+The topic of the post is a comparison of open-source ML libraries for a regression problem relevant to an e-commerce company. We found using H2O slightly
+unsatisfactory because of limitations in handling categorical features with highcardinality and the cost of requiring non-preemtible nodes. We found Vowpal
+Wabbit [WDA+ 09, ACDL11, Vow] competitive both in a single and multi-node
+setting with the all reduce implementation [ACDL11]. However, Vowpal Wabbit
+requires broadcasting the whole model weights to each worker, thus limiting the
+cardinality of feature interactions by having to choose a smaller value of the hashing
+parameter. Finally, Spark-ML gave very good results out of the box and was very
+efficient relying on breeze [Bre] using LBFGS for function-minimization instead
+of Stochastic Gradient Descent. However, also for Spark-ML we had to bucketize
+feature interactions as model weights had to be broadcasted to each worker. While
+looking for solutions to shard the model weights across executors we came across
+the master thesis [Ker16] which used Spark to solve large convex linear problems
+that require distributing vectors and matrices across executors.
+1.3. Choice of Spark. We decided to build the library on top of an already existing / well-established framework. Note also that we focused on building a library
+rather than application for ease of future extendability. This is in contrast to the
+design choices of Vowpal Wabbit which, having virtually just one external dependency, manages to be intrinsically very fast at optimized but, as we feel, at the cost
+of extendability and integration with other systems.
+A popular platform is Hadoop [Had], an open-source implementation of MapReduce [DG04]; as observed by several authors, e.g. [ZCD+ 12, ACDL11, Ker16] the
+MapReduce framework does not fit well with iterative algorithms as it exposes
+a somewhat limited programming model and incurs repeated I/O operations not
+making full-usage of data caching.
+These issues were addressed by Spark [ZCD+ 12, Spa] which exposes a rather
+expressive programming model based on RDDs in a framework that can be run on
+top of several resource managers like Kubernetes, Mesos and Yarn.
+Spark takes care for the user of fault-tolerance, speculation to overcome presence
+of slow machines and usage of preemptible workers. Moreover one can develop in
+Scala [Sca] having access to a rich ecosystem of libraries written in Java and / or
+Scala.
+We thus decided to use Spark, being however aware of a disadvantage: it is not
+clear to us how to run an implementation of a Parameter Server [Li14, SN10] on
+top of the Spark library. The Parameter Server [Li14, SN10] is a very powerful
+framework which allows to combine data-parallelism and model-parallelism with
+2
+
+https://booking.ai/crunching-big-data-with-4-machine-learning-libraries-284ae3167885
+
+DISTFOM & SPARK
+
+3
+
+very favorable results, compare [Li14]. Therefore we end up using a different computational model than Parameter Server. However we just mention in passing of
+Tencent’s Angel [Ang], an open-source implementation of Parameter Server which
+has a module Spark on Angel.
+1.4. Previous Work. The Scala library breeze [Bre] implements several numerical algorithms; in particular it contains a general and extensible framework for
+function minimization based on gradient descent and quasi-Netwon methods. The
+architecture of our FirstOrderMinimizer is based on the corresponding one in
+the breeze package.
+In [Ker16] the author implemented Mehrotra’s predictor-corrector interior point
+algorithm on top of Spark to solve large linear programming problems; his implementation requires distributing vectors and matrices.
+For a nice overview of work about ML frameworks implementing parallel computing we refer to [Li14]. Here we just mention three approaches:
+• Vowpal Wabbit with AllReduce: in [ACDL11] the authors extend Vowpal
+Wabbit to a multi-node setting using AllReduce on top of Hadoop. They
+report on fitting a click-through model via a logistic regression; the model
+having 224 ∼ 16.8M parameters and their cluster using about 1000 nodes.
+This framework is very fast and efficient but it only implements data parallelism as model parameters need to be broad-casted to all the nodes. A
+very nice point made in [ACDL11] is the mixing of gradient descent for
+parameter initialization with LBFGS for fast convergence.
+• GraphLab [LBG+ 12, LGK+ 10]: it is a graph-parallel framework to express
+computational dependencies. In [LBG+ 12] a thorough comparison is made
+between GraphLab, Hadoop and MPI. The comparison looks very favorable
+to GraphLab in terms of resource usage. While part of it might be ascribed
+to usage of C++ instead of Java (Hadoop is written in Java), improvements
+are likely driven by asynchronous communication between nodes.
+• Parameter Server: as observed in [Li14] GraphLab lacks elastic scalability
+and is impeded by relying on coarse grained snapshots for fault tolerance.
+Parameter Server’s paradigm can be used to combine the elasticity of Spark
+or Hadoop with asynchronous updates. Instead of just relying on worker
+machines to process the training data, a few machines, called the servers,
+hold model weights, send them to workers processing training examples and
+update them asynchronously. An open-source implementation of Parameter
+Server which can be run on top of Yarn is Tencent’s Angel.
+• From the Optimal Transport literature we cite the parallel computation
+of Wasserstein barycenters [UDD+ 19, SCSJ17] and the large scale computation of Wasserstein distances [GCPB16]. For our setting [GCPB16]
+is particularly relevant as gradient descent is used for computing Sinkhorn
+distances between distributions of 20k sampled points from a space of wordembeddings. In [GCPB16] computations are sped up by using 4 Tesla K80
+GPUs.
+1.5. Contributions. We implemented an open-source library for distributed function minimization built on top of Spark and consistent with the breeze package.
+We implemented minimization of the optimal transport loss with entropic regularization [PC19, Chap. 4]. We also implemented linear models, Factorization
+
+4
+
+ANDREA SCHIOPPA
+
+Machines [RFGST09, Ren10] and commonly used losses for supervised learning
+and ranking problems.
+From a computational approach we implement a mixing of data and parameters
+splitting that allows circumventing the implementation of a Parameter Server in
+Spark.
+1.6. Future work. Arguably a favorable way to minimize a function in a setting
+where one can compute gradients globally or on large batches of data benefits from
+quasi-Newton or second order methods.
+However, as observed in [ACDL11] proper initialization is critical; convergence
+speed and algorithmic stability usually require being in a neighborhood of a solution. While for the optimal transport problem initialization is straightforward
+(with non-negative costs just set all the potentials to 0), for ML problems it can
+be tricky. The work [ACDL11] recommends using gradient descent on mini-batches
+to initialize model parameters before using a quasi-Newton method. In a modelparallel setting this can be relatively tricky and we leave its implementation for
+future work. However, in the current implementation one might already proceed
+with Adaptative Gradient Descent on larger batches.
+We finally leave for future work an implementation of Parameter Server.
+
+2. Architecture and Implementation
+2.1. High Level view of the Architecture. Let us look at how one might want
+to implement a First Order Minimization algorithm in a distributed setting. Such
+an algorithm, which we represent as an abstract class FirstOrderMinimizer
+(abr. FoMin) takes as input a differentiable function f and an initial point w0 .
+Then the algorithm starts updating w0 generating a sequence {wk }k ; during this
+process FoMin keeps track of f (wk ), k∇f (wk )k to decide when to stop.
+Now f is an object of which we must be able to compute values and gradients. In some cases, for the sake of computational efficiency, one might want different implementations depending on whether the value or the gradient of f are
+required, and hence we define differentiable functions as a trait having methods
+computeValue(w: T ): F , computeGrad(w: T ): T and compute(w: T ): (T, F )
+where T , F are the types of w and f (w) (i.e. the scalar field), respectively.
+When f is the empirical loss associated to a Machine Learning model, the value
+of f will also depend on data D, while w will usually represent model parameters. In this case it might be burdensome to evaluate f using all the data D
+and one might opt for a partitioning D = [B0 , · · · , Bm−1 ] into m batches. To be
+clear, here we expect the batches to be big contrary to the case of the batches
+considered in training models using Stochastic Gradient Descent. Then at each
+evaluation of f we might want to rotate the data batch used for evaluation, so that
+at the n-th evaluation the batch Bn mod m is used. In some cases (e.g. during line
+searches) we might however want to stop such a batch rotation and that is why the
+trait DistributedDiffFunction (abr. DDF) has methods holdBatch: () and
+stopHoldingBatch: ().
+The argument of a DDF must be a vector amenable to operations needed by
+gradient descent algorithms. We thus introduce the trait FomDistVec which
+besides the operations +,−,∗,/ has:
+
+DISTFOM & SPARK
+
+5
+
+• dot(other: F omDistV ec) : F taking the dot product of this and other,
+as for example required by LBFGS.
+• norm(p: Double): F representing the lp norm of this, as required when
+computing regularization or checking a convergence condition requiring
+k∇f k to be small.
+• keyedPairWiseFun[K](b: F omDistV ec)(f: K): F omDistV ec which maps
+this, b to a vector having as component i the value of f(i, this(i), b(i)),
+which is required by some algorithms involving l1 regularization, as for
+example OWLQN.
+We also make FomDistVec extend:
+• Persistable to deal with caching and un-caching vectors.
+• InterruptLineage to allow to truncate long RDD lineages that are generated by iterative algorithms. Indeed, with multiple iterations lineages can
+get long and stall the scheduling of tasks.
+Finally, the backbone of each implementation of FomDistVec is an implementation of the trait DistVec which supports just the basic component-wise operations
++,−,∗,/ besides extending Persistable.
+2.2. Implementations of DistVec. We can now concretely discuss implementations of distributed vector types starting from the simplest trait DistVec. The
+e
+basic idea is to split a vector w of length e (with indexing starting at 0) into eb
+blocks where eb is the number of elements per block. Concretely each block is a
+partition of an RDD[(Int, V )] containing a single element (i, v), and the j-th component of v would then represent the element of w with index i ∗ eb + j. Then
+pairwise vector operations can be implemented efficiently using zipPartitions; to
+further make the implementation stable we make the partitioning be enforced via
+a Partitioner of type BlockPartitioner.
+Two complications should be added to this picture. The first is that we deal
+with two vector types V :
+• DenseVector[F ] from the breeze library representing a standard dense
+vector. The resulting implementation of DistVec is named DistributedDenseVector[F ]
+(abb. DDV[F ]).
+• DenseMatrix[F ] to represent a family of vectors {wα }m
+α=1 where m is
+small and each partition now contains (i, M ) where M is an m×eb-matrix.
+We think of these vectors as being distributed across the column dimension
+and stacked on top of each other across the row dimension. Such vectors
+arise when we want to implement algorithms dealing with multi-label classification or Factorization Machines models. For this reason we name the resulting implementation DistributedStackedDenseVectors[F ] (abb. DSDV[F ]).
+Secondly we use generics to represent the field F , with specialized implementations
+of Double, F loat. We do not want to dwell on this topic, but mention in passing that
+we take advantage of Scala features like implicit values 3 (cmp. GenericField.scala)
+in the GitHub Repo4 and reflection using ClassTag5 and TypeTag6.
+3https://docs.scala-lang.org/tour/implicit-parameters.html
+4https://github.com/salayatana66/distfom
+5https://www.scala-lang.org/api/2.12.3/scala/reflect/ClassTag.html
+6https://docs.scala-lang.org/overviews/reflection/typetags-manifests.html
+
+6
+
+ANDREA SCHIOPPA
+
+2.3. Implementations of FomDistVec. Here we provide two implementations
+of FomDistVec: FomDistDenseVec (abr. FDDV) built on top of DDV and
+FomDistStackedDenseVec (abr. FDSDV) built on top of DSDV. The implementation is straightforward; we just note that to compute dot products and
+norms we use the method treeAggregate provided by Spark in the spirit of
+the “AllReduce” mentioned in [ACDL11]. On the language side, for the sake of
+interoperability with DDF both FDDV and FDSDV must be castable back and
+forth to FomDistVec. The Scala language offers an easy solution via implicit
+conversions 7.
+2.4. Architecture of FirstOrderMinimizer. The architecture of FoMin is
+based on the breeze package. The basic idea is that the most common iterative minimization algorithms using function values and gradients can be described
+in the same framework, see the following code:
+def minimizeAndReturnState ( f˜ : DDF , i n i t : T ) : State = {
+// a d j u s t t h e o b j e c t i v e , e . g . i f l1− r e g u l a r i z a t i o n i s used
+val f = t h i s . adjustFunction ( f˜)
+// s t a t e i n i t i a l i z a t i o n
+var numSteps = 0
+var x = i n i t
+var h = t h i s . initialHistory ( f , x )
+var ( f (x) , ∇f (x) ) = t h i s . calculateObjective ( f , x , h )
+var state = new State ( x , value = f (x) , grad = ∇f (x) ,
+history = h ,
+convergenceInfo : Option [ ConvergenceReason ] = None)
+// t h e i t e r a t i o n l o o p
+while ( state . convergenceInfo . isEmpty ) {
+// compute d e s c e n t d i r e c t i o n
+val w = t h i s . chooseDescentDirection ( state , f )
+w . persist ( )
+i f ( ( numSteps > 0 ) & ( numSteps % t h i s . interruptLinSteps
+== 0 ) )
+w . interruptLineage ( )
+w . count ( )
+// compute t h e s t e p s i z e
+i f ( t h i s . holdBatch) f . holdBatch ( )
+val η = t h i s . determineStepSize ( state , f , w )
+i f ( t h i s . holdBatch) f . stopHoldingBatch ( )
+// u p d a t e x
+x = t h i s . takeStep ( state , w , η )
+x . persist ( )
+i f ( ( numSteps > 0 ) & ( numSteps % t h i s . interruptLinSteps
+7https://docs.scala-lang.org/tour/implicit-conversions.html
+
+DISTFOM & SPARK
+
+7
+
+== 0 ) )
+x . interruptLineage ( )
+x . count ( )
+// f r e e s t o r a g e f o r w
+w . unpersist ( )
+// compute new o b j e c t i v e and g r a d i e n t
+( f (x) , ∇f (x) ) = t h i s . calculateObjective ( f , x ,
+state . history )
+∇f (x) . persist ( )
+i f ( ( numSteps > 0 ) & ( numSteps % t h i s . interruptLinSteps
+== 0 ) )
+∇f (x) . interruptLineage ( )
+∇f (x) . count ( )
+// measure improvement o f o b j e c t i v e
+val impr = ( |state . value − f (x)| ) / ( max(state . value , 10−6 ) )
+println ( s ” R e l a t i v e improvement : $impr ” )
+// u p d a t e h i s t o r y and c h e c k c o n v e r g e n c e
+h = t h i s . updateHistory ( x , ∇f (x) , x , f , state )
+val newCInfo = t h i s . convergenceCheck( x , ∇f (x) , f (x) ,
+state , state . convergenceInfo )
+state = new State ( x , f (x) , ∇f (x) , h ,
+convergenceInfo = newCInfo)
+}
+}
+Thus all that any concrete implementation of FoMin needs to do is implementing
+a few methods and data types:
+• History: representing information from past iterations needed to take
+decisions at the current iteration.
+• History’s initialization and management via initialHistory and updateHistory.
+• Possibility of modifying the objective, e.g. by adding regularization via
+adjustFunction.
+• Choosing a descent direction and a step size via chooseDescentDirection
+and determineStepSize.
+• Updating the x using takeStep.
+• Implementing convergence conditions in convergenceCheck.
+2.5. Implementations of FirstOrderMinimizer. With this framework several
+algorithms can be implemented.
+(1) Stochastic Gradient Descent which is history-less implementing a simple
+update:
+(1)
+
+xt = xt−1 − ηt ∇f (xt−1 )
+
+8
+
+ANDREA SCHIOPPA
+
+where ηt is either a constant learning rate or a learning rate decaying via a
+power law (in the number of iterations) specified by the user.
+(2) (a flavor of) Adagrad [DHS11] which adjusts the learning rate for each
+component of xt dynamically incorporating knowledge of the observed data
+to perform more informative choices at each takeStep. Concretely, f˜ can
+be adjusted adding l1 and l2 regularizations:
+α2
+(2)
+f (x) = f˜(x) + α1 kxk1 +
+kxk22 .
+2
+History is accumulated in a vector:
+(P
+t−1
+2
+if t ≤ m,
+i f (xs ))
+s=1 (∇
+
+(3)
+ht,i =
+1
+1
+2
+1 − m ht−1,i + m (∇i f (xt )) if t > m,
+
+(4)
+
+where m is a parameter controlling the memory length in accumulating
+history. The descent direction is just ∇f (xt−1 ) and the learning rate is
+just a constant η; however steps are taken adaptively. First one builds a
+direction-stretch σt vector:
+q
+σt,i = ht−1,i + (∇i f (xt−1 ))2 + δ,
+where δ is usually a small parameter supplied by the user which avoids
+division by 0. Then a tentative step without l1 -regularization is taken:
+
+(5)
+
+(6)
+
+x̃t,i =
+
+σt,i xt−1 + η∇i f (xt−1 )
+.
+σt,i + ηα2
+
+Finally a step with l1 -regularization is taken:
+(
+1
+0
+if |x̃t,i | < ηα
+σt,i
+xt,i =
+1
+x̃t,i − ηα
+σt,i sign x̃t,i otherwise.
+(3) LBFGS: In this Quasi-Newton method [NW06, Chap. 8] the descent direction at iteration t is of the form:
+
+(7)
+
+wt = −Ht ∇f˜(xt−1 ),
+
+where Ht is a matrix approximating the inverse of the Hessian ∇2 f˜(xt−1 )
+along the gradient direction ∇f˜(xt−1 ). In reality one does not need to
+store the whole Ht but just m, being a user-defined parameter, previous
+gradients. The details of computing Ht and freeing computational resources
+are handled by the implementation of History. To determine the step size
+one uses any line search algorithm, see [NW06, Chap. 3]. At the moment
+of writing implementations for a Strong Wolfe Line Search and a Back
+Tracking Line Search are provided.
+(4) OWLQN: this is an orthant-wise Quasi Newton method proposed in [AG07].
+This method is built on top of LBFGS for problems which have an additional l1 -regularization. As the l1 -regularization is non-smooth with corner points, this method aims at speeding the convergence properties of
+LBFGS. From an implementation point of view one just needs to add some
+projection-like operations on orthants as explained in [AG07]. In [AG07]
+it is shown that OWLQN can work well with large scale log-linear models. However, as observed by the authors of the breeze package on general
+
+DISTFOM & SPARK
+
+9
+
+problems the algorithm might fail to converge and we are not aware of
+theoretical guarantees regarding its convergence.
+
+3. Losses and Models
+3.1. Regularized Optimal Transport. For an introduction and review of Optimal Transport we refer the reader to [PC19, San15]; here we will follow the notations of [Sch19, Sec. 2]. Specifically, we focus on the discrete formulation of the
+entropy-regularized dual problem, with the following loss to maximize:
+(8)
+
+L=
+
+
+
+NY
+NY
+NX
+NX X
+X
+1 X
+ui + vj − ci,j
+1 X
+ε
+ui +
+exp
+vj −
+,
+NX i=1
+NY j=1
+NX NY i=1 j=1
+ε
+
+NY
+X
+where u = {ui }N
+i=1 , v = {vj }j=1 are variables to optimize (called the potentials),
+ci,j is the (pre-computed) cost matrix and ε is the regularization strength (which we
+want small). In our case both NX and NY are large making necessary to distribute
+the potentials across node clusters; the cost matrix can be quite large, in general
+a dense NX × NY -matrix that Spark will partially cache in memory and partially
+leave on disk.
+In Figure 3.1 we describe the computational approach that we use. The potentials u, v are combined together in the same FomDistVec; each partition of u
+(resp. v) is replicated by the number of partitions of v (resp. u); the cost matrix c
+is partitioned by a grid allowing to compute all the regularization terms involving
+triplets (ui , vj , ci,j ). The total loss L is computed using a treeAggregate on the
+grid; the gradient ∇u L (resp. ∇v L) is computed doing a reduction (via a sum) in
+j (resp. i).
+
+Figure 3.1. Our computational approach to distribute the optimal transport loss. We combine the potentials inside the same
+distributed vector and partition costs compatibly.
+
+vj
+
+ui
+ci,j
+
+Reduce in i: ∇v L
+
+i
+
+Reduce in j: ∇uL
+j
+
+10
+
+ANDREA SCHIOPPA
+
+3.2. Linear Models. In Figure 3.2 we describe the approach that we follow to
+score linear models. For simplicity, let us focus on the case that a single score needs
+to be produced for each training example. Our approach mixes data parallelism
+with model parallelism. Let x denote the distributed feature vector where the
+F −1
+features, indexed by α, are partitioned into sets {Fi }m
+; let D denote the datai=0
+E −1
+set of training examples and partitioned into sets {D}m
+j=0 . Let e ∈ Dj be an
+example; the features of e are stored into a sparse vector {fα }α (i.e. each fα 6= 0)
+and we denote the indices α such that α ∈ Fi by Fi (e). While Spark-ML would
+broadcast x across all the data points, we cannot do that. Neither we have at our
+disposal a centralized parameter server that we can use to fetch weights from for
+each example. The approach we take is thus to partition both x and the features of
+each example by creating a computational grid G such that the cell (j, i) contains a
+copy of {xα }α∈Fi and all the features {Fi (e)}e∈Dj . Thus we can compute the score
+s(e) in a distributed way via the formula
+X
+X
+(9)
+s(e) =
+fα xα ,
+i:Fi (e)6=∅ α∈Fi (e)
+
+where the outer sum is implemented as a reduceByKey in e.
+
+Figure 3.2. Example of distributed linear scoring with mE =
+3 and mF = 4. The example e does not have features for the
+partitions i = 1, 3.
+
+x
+
+F0
+
+F1
+
+F2
+
+F3
+
+F0 (e)
+
+∅
+
+F2 (e)
+
+∅
+
+D2
+
+E
+
+D1
+
+e
+
+s(e)
+
+D0
+
+G
+3.3. Factorization Machines. Factorization Machines [RFGST09, Ren10] produce the scores via pairwise interactions across all the distinct features. In this case
+mL −1
+x if of the form {(xkα )α }k=0
+, where mL is the latent dimension assumed much
+smaller than the possible range of α; in our case we represent x via an FDSDV.
+Now using the notation of Subsection 3.2 we can write
+(10)
+
+s(e) =
+
+L −1
+X mX
+α,β
+α6=β
+
+k=0
+
+fα fβ xkα xkβ .
+
+DISTFOM & SPARK
+
+11
+
+Distributing this computation can be reduced to the case of linear models by rewriting s(e) as:
+!2
+mL −1
+X
+X
+1 X
+k
+−
+(xkα )2 fα2
+s(e) =
+fα xα
+2
+α
+α
+k=0
+|
+| {z }
+{z
+}
+k
+(11)
+tk
+tl
+q
+=
+
+mL −1
+1 X
+(tkl )2 − tkq .
+2
+k=0
+
+(tkl )k
+
+Now the vectors
+and (tkq )k can be computed using the distributed approach
+presented in the previous section.
+3.4. Regression and Back-propagation. Up to now we have just discussed the
+construction of model scores s(e); such a score will enter, together with a label λ(e)
+and a weight w(e) the computation of the loss Le = w(e)L(s(e), λ(e)). Computing
+the scores and the loss is what in the Deep Learning Literature terminology is
+usually called the “forward” pass; we now describe the so-called “backward” pass,
+i.e. the computation of the gradient:
+X
+1
+∇x L e .
+(12)
+∇x L = P
+e∈E w(e)
+e∈E
+
+For the following discussion please refer to Figure 3.3; for the moment we just focus
+on the case in which s(e) is produced by a linear model. While the computational
+approach is generic in Le , in the library we have just implemented the l2 -loss, the
+quantile loss and the logistic loss for binary classification.
+Coming back to the computation of ∇x L, the chain rule gives:
+(13)
+
+∇x Le = ∇x s(e) · ∇s(e) Le ,
+
+∇s(e) Le being just a scalar; specializing to an index α such that fα 6= 0 we get:
+(14)
+
+∇xα Le = fα ∇s(e) Le .
+
+Thus for each e we just need to keep track those i’s for which Fi (e) 6= ∅ and
+pull back ∇s(e) Le to those cells (j(e), i) on G where Dj(e) is the data-partition
+containing e; finally we aggregate across the examples the contributions to each
+gradient component obtaining ∇x L as in Figure 3.3.
+3.5. Multi-classification and Back-propagation. We have also implemented
+multi-classification models where L is a softmax followed by a logloss. We allow
+multi-label targets with different weights for each target but we will not spell it
+out in the computational details for the sake of exposition. Now x is of the form
+C −1
+{(xkα )α }m
+k=0 , mC being the number of possible classes; in our case we represent x
+via an FDSDV. Now for each k we obtain a score sk (e) and the gradient of the
+loss takes the form:
+∂sk (e)
+∇sk (e) Le = fα ∇sk (e) Le ;
+(15)
+∇xkα Le =
+∂xkα
+this computation can be handled similarly as in Subsection 3.4 as the added complexity just amounts to handling the index k, e.g. in computing the gradient of the
+loss with respect to all the possible k’s.
+
+12
+
+ANDREA SCHIOPPA
+
+Figure 3.3. Representation of a gradient computation when s(e)
+is produced by a linear model. The dashed lines refer to the “forward” pass while the solid lines to the “backward” pass, i.e. the
+gradient computation.
+
+x
+
+F0
+
+F1
+
+F2
+
+F3
+
+F0 (e)
+
+∅
+
+F2 (e)
+
+∅
+
+D2
+
+E
+
+D1
+
+e
+
+s(e)
+
+Le
+
+∇s(e) Le
+
+D0
+
+G
+w(e), λ(e)
+
+3.6. Ranking with Negative Sampling and Back-propagation. As an application of Factorization Machines we consider the ranking problem with implicit
+feedback following [RFGST09, Ren10]. Whenever a user u makes a query / search
+q it receives a list of recommended items; each time an item is selected we form a
+positive example as a triplet (u, q, i). We will denote the set of positive examples
+by E + .
+For the moment we set modeling aside and assume that for each user / search
+pair (u, q) and each item k we can associate a score s(u, q; k) ∈ R; the higher
+the score the more likely is k to be selected by the user. In the implicit feedback
+setting we want to optimize s simply to give higher score to selected items compared
+to non-selected ones. Mathematically, to each (u, q; i) we associate a probability
+distribution N (u, q; i) from which we sample “negative” items j ∼ N (u, q; i); this
+framework is quite general, as for example the query q and i can narrow down the
+negative items eligible for sampling.
+Let sig(x) = 1/(1 + exp(−x)) be the sigmoid function; then the loss function for
+the example (u, q; i) becomes:
+(16)
+
+L(u,q;i) = −E log sig(s(u, q; i) − s(u, q; j)) : j ∼ N (u, q; i).
+
+In practice we fix a parameter nN and we draw a sample NS (u, q; i) ∼ N (u, q; i) of
+size nN and compute:
+X
+1
+(17)
+L(u,q;i) = −
+log sig(s(u, q; i) − s(u, q; j)).
+nN
+j∈NS (u,q;i)
+
+Our implementation is a bit more general; we represent (u, q; i) just as an example
+e (allowing more generality in the way features are encoded) and we let the user
+be able to specify a NegativeSampler class to generate the negative samples
+NS (u, q; i).
+
+DISTFOM & SPARK
+
+13
+
+In Figure 3.4 we describe the computational model for the loss. The data consists
+of positive examples E + and the NegativeSampler produces batches of negative
+examples {Eb− }b ; each computation is looped on the batch index b (and gradients
+/ losses are aggregated in b). From the positive examples E + we extract the labels
+T + and the features F + ; similarly from each Eb− we extract Tb− and Eb− . The data
+structure for the labels contains a “link” field to be able to identify which negative
+examples have been sampled for a specific positive example. The Factorization
+Machine model is then used to score positive and negative examples producing S + ,
+Sb− ; finally combining the labels and using the “link” field one gets the loss L.
+Let us spend a few words on the gradient computation. We can compute the
+gradient looking at the individual losses L(e+ , e− ) for each pair of positive / negative items. To get ∇x L(e+ , e− ) we first need two derivatives ∇s(e+ ) L(e+ , e− ),
+∇s(e− ) L(e+ , e− ); in the backward step, one derivative will flow back to the positive
+features, the other one to the negative features. Let us have a look at the derivative
+of the scores produced by the Factorization Machine: from (10) we get:
+X
+(18)
+∇xkα s(e) =
+fα fβ xkβ ;
+β6=α
+
+so during the forward step we just need compute the vector v(e) where
+X
+(19)
+v(e)k =
+fβ xkβ
+β
+
+that is used during the backward step to compute the gradient ∇xkα s(e).
+3.7. A few comments about batching. For large data-sets we allow the user to
+speed-up computations by splitting the data into batches. Here we think of a few
+number of batches, i.e. of batches with many examples, or “macro”-batches.
+For models with many parameters too-small macro-batches can lead to overfitting. During line searches this can manifest itself into taking too large steps. This
+is why we allow, optionally, to use a different batch for choosing the step-size than
+the batch used for choosing the descent direction. Together with implementation
+of regularization losses this provides a simple tool to prevent over-fitting.
+We think that a better theoretical understanding of the behavior of QuasiNewton methods that use “macro”-batches is an interesting topic for further research. As well we leave for further work to add more tools to the library to prevent
+over-fitting.
+4. Scalability Experiments
+We ran 3 “scalability” experiments to gain insight into the library performance.
+These experiments were not setup as benchmarks; for example the configuration
+of the Spark cluster was standardized and not much tuned, loosely following this
+blog 8. Similarly, timings were taken mainly to understand the cost of loading
+data and evaluating gradients across iterations. Finally, ML problems were chosen
+on synthetic data to create an unfavorable situation where features are sparse but
+yet one would need to learn many parameters to fit a model. Keys for the sparse
+features were selected using uniform distributions to make the problem kind of
+unfavorable from a scalability viewpoint. This is in contrast with the “manifold
+hypothesis” [AB17] that assumes data living on a low-dimensional sub-manifold
+8https://blog.cloudera.com/how-to-tune-your-apache-spark-jobs-part-2/
+
+14
+
+ANDREA SCHIOPPA
+
+Figure 3.4. Representation of ranking computations using Factorization Machines and implicit feedback. While only example
+−
+features are need to produce the scores S + , S0/1
+, the losses use
+−
+−
+−
++
++
+joins J (resp. J0/1 ) of S (resp. S0/1 ) with T + (resp. T0/1
+).
+
+E+
+
+NegativeSampler
+
+E0−
+
+E1−
+
+F0−T0−
+
+T +F +
+
+x
+
+FM
+
+S0−
+
+S+
+
+J0−
+
+J+
+L
+
+of the highly dimensional feature space. For this reason we avoid handling high
+cardinality features via the hashing trick (like in Vowpal Wabbit) or by deleting
+infrequent keys (like in some Parameter Server implementations on GitHub, e.g.
+this 9). We note however that in the current library dimensionality reduction can
+be achieved either by adding l1 -regularization or by using OWLQN as an optimizer.
+We set up the Spark Cluster to run with dynamic allocation with preemptible
+workers and speculation enabled. This implies that the number of active cores and
+the memory claimed from the cluster can change dynamically during execution.
+We did however cap the maximal number of executors to 400 with 2 cores per
+executor and 8GB of memory per executor. Note that executors are not nodes:
+depending on the number of cores per node one might need a cluster of variable size,
+e.g. 200 nodes or 50 nodes. This is a rather modest amount of resources compared
+9https://github.com/dmlc/ps-lite
+
+DISTFOM & SPARK
+
+15
+
+to [ACDL11] (which does not specify nodes setting) or [Li14]. Finally note that
+these settings imply that memory usage for our jobs cannot exceed 3.2TB. For the
+optimal transport problem we tightened these constraints to 100 executors so at
+most 800GB of memory usage.
+4.1. Modeling experiments. The first two experiments concern modeling tasks
+on synthetic data. We do so in order to focus on scalability, as we make the data
+generating process known, or in other words “a best” model is known.
+The first experiment is an l2 -regression; the cardinality of the model vector
+w = {wi }i is 109 with each wi sampled uniformly from [0, 1] independently of the
+others and w divided into 100 partitions. For each example e we choose a set I(e)
+of 30 indices and for each i ∈ I(e) we sample the feature fi (e) uniformly from
+[−1.0, 1.0] and independently from the other features. The response / label for e is
+deterministic:
+X
+(20)
+y(e) =
+fi (e)wi .
+i∈I(e)
+
+We construct 5 batches each one consisting of 108 examples partitioned into 100
+partitions.
+For the second experiment we consider a multi-classification task with 10 categories. The model consists of parameters w = {wik }k,i with k ∈ {0, . . . , 9} and
+i ∈ {0, . . . , 5 · 107 − 1} where each wik is sampled uniformly in [0, 1] and independently from the others; we still split w into 100 partitions. For each example e we
+choose a set I(e) of 100 indices and for each i ∈ I(e) we sample the feature fi (e)
+uniformly from [−1.0, 1.0] and independently from the other features. We then
+generate the label for e extracting k with probability
+
+
+X
+(21)
+pk (e) ∝ exp 
+wik fi (e) .
+i∈I(e)
+
+We construct 5 batches each consisting of 2.5 · 108 examples divided into 250 partitions. Note that even if the data generating process is known, in this case it is not
+deterministic so one cannot expect to obtain a logloss of 0. In both cases we use
+LBFGS for loss minimization.
+In the first experiment we can perfectly over-fit using a single batch in 4 iterations. On the other hand if we load a new batch after each iteration it takes 5
+iterations (i.e. a full pass over the data) to see a significant decrease in the loss, see
+Figure 4.1.
+In the second experiment, see Figure 4.2, one benefits from using a different batch
+during the line search than the one used to compute the gradient. For example,
+after 4 iterations the first approach yields a loss 20% lower than the one which
+keeps the same batch (and loads a new batch just for the next iteration).
+For the first experiment the time to load and cache a batch of features is 8.17 ±
+1.86 minutes and the time of each function value / gradient computation is 5.54 ±
+1.55 minutes. For the second experiment the time to load and cache a batch of
+features is 30.19 ± 5.82 minutes and the the time of each function value / gradient
+computation is 1.77 ± 0.20 hours. In the second experiment we suspect the slow
+down is driven by network communication and, with the limited amount of resources
+
+16
+
+ANDREA SCHIOPPA
+
+we use, might be reduced by adding to the library a function to aggregate gradients
+across “macro batches”.
+Figure 4.1. Experiment 1: Over-fitting on just one batch and
+regular batching; data reported up to the stopping iterations or a
+maximum of 10
+
+Scalability Experiment 1
+Regular Batching
+One Fixed Batch
+
+3.5
+3.0
+
+Loss (l 2)
+
+2.5
+2.0
+1.5
+1.0
+0.5
+0.0
+0
+
+2
+
+4
+
+Iteration #
+
+6
+
+8
+
+10
+
+4.2. Optimal Transport. For the optimal transport problem (8) we choose X =
+Y = R55 with NX = NY = 2.5 · 105 and ε = 0.1. The source distribution is the
+uniform one on the unit ball of R55 . For the destination distribution we randomly
+sample 20 dimensions i and sample uniformly from the 40 balls of radius 1/2 obtained by shifting the origin by 1/2, −1/2 across the direction i. The vectors u
+and v are split into 50 partitions yielding 25 · 103 partitions for the cost. We set
+the convergence criterion to having the gradient norm less than 0.5 · 10−4 which we
+achieve in 10 iterations using LBFGS see Figures 4.3, 4.4. The time of each function
+value / gradient computation is 12.25 ± 4.24 minutes. Note that the cost matrix
+considered in our problem is about 156 times the one considered by [GCPB16] as
+we sample 2.5 · 105 points versus the 20000 considered in [GCPB16].
+References
+[AB17]
+[ACDL11]
+
+[AG07]
+
+[Ang]
+
+Martin Arjovsky and Léon Bottou. Towards Principled Methods for Training Generative Adversarial Networks. arXiv e-prints, page arXiv:1701.04862, Jan 2017.
+Alekh Agarwal, Olivier Chapelle, Miroslav Dudik, and John Langford. A Reliable
+Effective Terascale Linear Learning System. arXiv e-prints, page arXiv:1110.4198,
+Oct 2011.
+Galen Andrew and Jianfeng Gao. Scalable training of l1-regularized log-linear models.
+In Proceedings of the 24th International Conference on Machine Learning, ICML ’07,
+pages 33–40, New York, NY, USA, 2007. ACM.
+Angel. https://github.com/Angel-ML/angel.
+
+DISTFOM & SPARK
+
+17
+
+Figure 4.2. Experiment 2: Different approaches to batching in
+a multi-classification problem; data reported up to the stopping
+iterations or a maximum of 10
+
+Scalability Experiment 2
+Regular Batching
+One Fixed Batch
+Refreshing the Batch @line-search
+
+Loss (logloss)
+
+3.0
+2.5
+2.0
+1.5
+0
+
+[Bre]
+[DG04]
+
+[DHS11]
+
+[GCPB16]
+
+[Had]
+[Ker16]
+[LBG+ 12]
+
+[LGK+ 10]
+
+[Li14]
+
+[NW06]
+[PC19]
+
+1
+
+2
+
+3
+Iteration #
+
+4
+
+5
+
+6
+
+Breeze. https://github.com/scalanlp/breeze.
+Jeffrey Dean and Sanjay Ghemawat. Mapreduce: Simplified data processing on large
+clusters. In OSDI’04: Sixth Symposium on Operating System Design and Implementation, pages 137–150, San Francisco, CA, 2004.
+John Duchi, Elad Hazan, and Yoram Singer. Adaptive subgradient methods for online learning and stochastic optimization. Journal of Machine Learning Research,
+12(Jul):2121–2159, 2011.
+Aude Genevay, Marco Cuturi, Gabriel Peyré, and Francis Bach. Stochastic optimization for large-scale optimal transport. In Proceedings of the 30th International
+Conference on Neural Information Processing Systems, NIPS’16, pages 3440–3448,
+USA, 2016. Curran Associates Inc.
+Hadoop. http://hadoop.apache.org/.
+Ehsan Mohyedin Kermani. Distributed linear programming with Apache Spark. Master’s thesis, The University of British Columbia, Vancouver, 2016.
+Yucheng Low, Danny Bickson, Joseph Gonzalez, Carlos Guestrin, Aapo Kyrola, and
+Joseph M. Hellerstein. Distributed graphlab: A framework for machine learning and
+data mining in the cloud. Proc. VLDB Endow., 5(8):716–727, April 2012.
+Yucheng Low, Joseph Gonzalez, Aapo Kyrola, Danny Bickson, Carlos Guestrin, and
+Joseph M. Hellerstein. Graphlab: A new framework for parallel machine learning.
+ArXiv, abs/1006.4990, 2010.
+Mu Li. Scaling distributed machine learning with the parameter server. In Proceedings
+of the 2014 International Conference on Big Data Science and Computing, BigDataScience ’14, pages 3:1–3:1, New York, NY, USA, 2014. ACM.
+Jorge Nocedal and Stephen J. Wright. Numerical Optimization. Springer, New York,
+NY, USA, second edition, 2006.
+Gabriel Peyr and Marco Cuturi. Computational optimal transport. Foundations and
+Trends in Machine Learning, 11(5-6):355–607, 2019.
+
+18
+
+ANDREA SCHIOPPA
+
+Figure 4.3. Experiment 3: Convergence of the Optimal Transport Loss with Entropic Regularization. Note the negative sign as
+we minimize −L in (8)
+
+Scalability Experiment 3 -- Function Value
+0.0
+
+Function value
+
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+
+[Ren10]
+
+0
+
+2
+
+4
+
+Iteration #
+
+6
+
+8
+
+10
+
+Steffen Rendle. Factorization machines. In Proceedings of the 2010 IEEE International Conference on Data Mining, ICDM ’10, pages 995–1000, Washington, DC,
+USA, 2010. IEEE Computer Society.
+[RFGST09] Steffen Rendle, Christoph Freudenthaler, Zeno Gantner, and Lars Schmidt-Thieme.
+Bpr: Bayesian personalized ranking from implicit feedback. In Proceedings of the
+Twenty-Fifth Conference on Uncertainty in Artificial Intelligence, UAI ’09, pages
+452–461, Arlington, Virginia, United States, 2009. AUAI Press.
+[San15]
+Filippo Santambrogio. Optimal Transport for Applied Mathematicians. Birkhuser
+Basel, 2015. Available at: https://www.math.u-psud.fr/∼filippo/OTAM-cvgmt.pdf.
+[Sca]
+Scala. https://www.scala-lang.org/.
+[Sch19]
+Andrea Schioppa. Learning to Transport with Neural Networks. arXiv e-prints, page
+arXiv:1908.01394, Aug 2019.
+[SCSJ17]
+Matthew Staib, Sebastian Claici, Justin Solomon, and Stefanie Jegelka. Parallel
+streaming wasserstein barycenters. In NIPS, 2017.
+[SN10]
+Alexander Smola and Shravan Narayanamurthy. An architecture for parallel topic
+models. Proc. VLDB Endow., 3(1-2):703–710, September 2010.
+[Spa]
+Spark. http://spark.apache.org/.
+[TT16]
+Giulio Trigila and Esteban G. Tabak. Data-driven optimal transport. Communications on Pure and Applied Mathematics, 69(4):613–648, 2016.
+[UDD+ 19] Cesar A. Uribe, Darina Dvinskikh, Pavel Dvurechensky, Alexander Gasnikov, and
+Angelia Nedich. Distributed computation of wasserstein barycenters over networks.
+In 2018 IEEE Conference on Decision and Control, CDC 2018, Proceedings of the
+IEEE Conference on Decision and Control, pages 6544–6549. Institute of Electrical
+and Electronics Engineers Inc., 1 2019.
+[Vow]
+Vowpal Wabbit. https://github.com/VowpalWabbit/vowpal_wabbit.
+[WDA+ 09] Kilian Weinberger, Anirban Dasgupta, Josh Attenberg, John Langford, and Alex
+Smola. Feature Hashing for Large Scale Multitask Learning. arXiv e-prints, page
+arXiv:0902.2206, Feb 2009.
+
+DISTFOM & SPARK
+
+19
+
+Figure 4.4. Experiment 3: Convergence of the gradient norm in
+the Optimal Transport Problem with Entropic Regularization
+
+Scalability Experiment 3 -- Gradient norm (log10-scale)
+2.5
+
+log10(||df||)
+
+3.0
+3.5
+4.0
+4.5
+
+[ZCD+ 12]
+
+2
+
+4
+
+6
+Iteration #
+
+8
+
+10
+
+Matei Zaharia, Mosharaf Chowdhury, Tathagata Das, Ankur Dave, Justin Ma, Murphy McCauley, Michael J. Franklin, Scott Shenker, and Ion Stoica. Resilient distributed datasets: A fault-tolerant abstraction for in-memory cluster computing. In
+Proceedings of the 9th USENIX Conference on Networked Systems Design and Implementation, NSDI’12, pages 2–2, Berkeley, CA, USA, 2012. USENIX Association.
+
+Amsterdam, Noord Holland
+E-mail address: ahisamuddatiirena+math@gmail.com
+
+

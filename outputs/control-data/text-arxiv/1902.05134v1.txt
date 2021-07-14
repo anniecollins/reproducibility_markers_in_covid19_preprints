@@ -1,0 +1,2466 @@
+1
+
+Efficient Continuous Multi-Query Processing
+over Graph Streams
+
+arXiv:1902.05134v1 [cs.DS] 13 Feb 2019
+
+Lefteris Zervakis, Vinay Setty, Christos Tryfonopoulos, Katja Hose
+Abstract—Graphs are ubiquitous and ever-present data structures that have a wide range of applications involving social networks,
+knowledge bases and biological interactions. The evolution of a graph in such scenarios can yield important insights about the nature
+and activities of the underlying network, which can then be utilized for applications such as news dissemination, network monitoring,
+and content curation. Capturing the continuous evolution of a graph can be achieved by long-standing sub-graph queries. Although, for
+many applications this can only be achieved by a set of queries, state-of-the-art approaches focus on a single query scenario. In this
+paper, we therefore introduce the notion of continuous multi-query processing over graph streams and discuss its application to a
+number of use cases. To this end, we designed and developed a novel algorithmic solution for efficient multi-query evaluation against a
+stream of graph updates and experimentally demonstrated its applicability. Our results against two baseline approaches using
+real-world, as well as synthetic datasets, confirm a two orders of magnitude improvement of the proposed solution.
+
+F
+
+1
+
+I NTRODUCTION
+
+I
+
+N recent years, graphs have emerged as prevalent data structures to model information networks in several domains such
+as social networks, knowledge bases, communication networks,
+biological networks and the World Wide Web. These graphs are
+massive in scale and evolve constantly due to frequent updates.
+For example, Facebook has over 1.4 billion daily active users who
+generate over 500K posts/comments and four million likes every
+minute resulting in massive updates to the Facebook social graph1 .
+To gain meaningful and up-to-date insights in such frequently
+updated graphs, it is essential to be able to monitor and detect
+continuous patterns of interest. There are several applications from
+a variety of domains that may benefit from such monitoring. In social networks, such applications may involve targeted advertising,
+spam detection [1], [2], and fake news propagation monitoring
+based on specific patterns [3], [4]. Similarly, other applications
+like (i) protein interaction patterns in biological networks [5],
+[6], (ii) traffic monitoring in transportation networks, (iii) attack
+detection (e.g., distributed denial of service attacks in computer
+networks), (iv) question answering in knowledge graphs [7], and
+(v) reasoning over RDF graphs [8] may also benefit from such
+pattern detection.
+For the applications mentioned above it is necessary to express
+the required patterns as continuous sub-graph queries over (one
+or many) streams of graph updates and appropriately notify the
+subscribed users for any patterns that match their subscription.
+Detecting these query patterns is fundamentally a sub-graph
+isomorphism problem which is known to be NP-complete due
+to the exponential search space resulting from all possible subgraphs [9], [10]. The typical solution to address this issue is to
+pre-materialize the necessary sub-graph views for the queries and
+
+•
+•
+•
+
+L. Zervakis, V. Setty, and K. Hose are with the Department of Computer
+Science, Aalborg University, Aalborg, Denmark.
+E-mail: {lefteris,vinay,khose}@cs.aau.dk
+L. Zervakis and C. Tryfonopoulos are with the Department of Informatics
+and Telecommunications, University of the Peloponnese, Tripolis, Greece.
+E-mail: {zervakis,trifon}@uop.gr
+V. Setty is also with the Department of Electrical Engineering and
+Computer Science, University of Stavanger, Stavanger, Norway.
+E-mail: vinay.j.setty@uis.no
+1. Facebook quarterly update http://bit.ly/2BIM30d
+
+(a)
+
+(b)
+
+Fig. 1: Spam detection: Users sharing and liking content with links
+to flagged domains. (a) A clique of users who know each other,
+and (b) Users sharing the same IP address.
+
+perform exploratory joins [11]; an expensive operation even for a
+single query in a static setting.
+These applications deal with graph streams in such a setup
+that is often essential to be able to support hundreds or thousands of continuous queries simultaneously. This leads to several
+challenges that require: (i) quickly detecting the affected queries
+for each update, (ii) maintaining a large number of materialized
+views, and (iii) avoiding the expensive join and explore approach
+for large sets of queries.
+To better illustrate the remarks above, consider the application
+of spam detection in social networks. Fig. 1 shows an example
+of two graph patterns that may emerge from malicious user
+activities, i.e., users posting links to domains that have been
+flagged as fraudulent. Notice that malicious behavior could be
+caused either because a group of users that know each other share
+and like each other’s posts containing content from a flagged
+domain (Fig. 1(a)), or because the group of users shared the
+same flagged post several times from the same IP. Even though
+these two queries are fundamentally different and produce different matching patterns, they share a common sub-graph pattern,
+shares
+links
+i.e., “User1−−−→Post1−−→Domain1”. If these two queries are
+evaluated independently, all the computations for processing the
+
+2
+
+• • We formalize the problem of continuous multi-query answer•
+
+•
+
+•
+
+ing over graph streams (Section 3).
+We propose a novel query graph clustering algorithm that is
+able to efficiently handle large numbers of continuous graph
+queries by resorting on (i) the decomposition of continuous
+query graphs to minimum covering paths and (ii) the utilization of tries for capturing the common parts of those paths
+(Section 4).
+Since no prior work in the literature has considered continuous multi-query answering, we designed and developed
+two algorithmic solutions that utilize inverted indexes for
+the query answering. Additionally, we deploy and extend
+Neo4j [14], a well-established graph database solution, to
+support our proposed paradigm. To this end, the proposed
+solutions will serve as baselines approaches during the experimental evaluation. (Section 5).
+We experimentally evaluate the proposed solution using three
+different datasets from social networks, transportation, and
+biology domains, and compare the performance against the
+
+1000.00
+
+100.00
+Answering time (msec/update)
+
+common pattern have to be executed twice. However, by identifying common patterns in query sets, we can amortize the costs of
+processing and answering them.
+One simple approach to avoid processing all the (continuous)
+queries upon receiving a graph update is to index the query graphs
+using an inverted-index at the granularity of edges. While this
+approach may help us quickly detect all the affected queries for a
+given graph update, we still need to perform several exploratory
+joins to answer the affected queries. For example, in Fig. 1, we
+would need to join and explore the edges matching the pattern
+Shares
+Links
+“User1−−−→Post1 and Post1−
+−−→Domain1” upon each update
+to process the two queries. On the contrary, if we first identify
+the maximal sub-graph patterns shared among the queries instead,
+we can minimize the number of operations necessary to answer
+the queries. Therefore, a solution which groups queries based
+on their shared patterns would be expected to deliver significant
+performance gains. To the best of our knowledge, none of the
+existing works provide a solution that exploits common patterns
+for continuous multi-query answering.
+In this paper, we address this gap by proposing a novel
+algorithmic solution, coined T RI C (T RIe-based Clustering) to
+index and cluster continuous graph queries. In T RI C, we first
+decompose queries into a set of directed paths such that each
+vertex in the query graph pattern belongs to at least one path (path
+covering problem [12]). However, obtaining such paths leads to
+redundant query edges and vertices in the paths; this is undesirable
+since it affects the performance of the query processing. Therefore,
+we are interested in finding paths which are shared among different
+queries, with minimal duplication of vertices. The paths obtained
+are then indexed using ‘tries’ that allow us to minimize query
+answering time by (i) quickly identifying the affected queries, (ii)
+sharing materialized views between common patterns, and (iii)
+efficiently ordering the joins between materialized views affected
+from the update.
+Fig. 2 shows the potential for improvement in query answering
+time with our query clustering solution T RI C, for the LDBC graph
+benchmark [13]. We can observe that T RI C provides a speedup of
+two orders of magnitude in query answering time, compared to
+two advanced baselines using the “inverted indexing technique”
+(I NV, I NC) and the graph database Neo4j that do not exploit the
+common sub-graph patterns in the queries.
+In summary, our contributions are:
+
+T RI C
+Neo4j
+I NC
+I NV
+
+10.00
+
+1.00
+
+0.10
+
+0.01
+
+0.00
+1
+
+10
+
+100
+
+1000
+
+Number of queries
+
+Fig. 2: Log-log plot comparing query answering time for the
+SN B dataset from the LDBC benchmark, when varying the
+number of queries exponentially.
+
+three baselines. In this context, we show that our solution can
+achieve up to two orders of magnitude improvement in query
+processing time (Section 6).
+
+2
+
+R ELATED W ORK
+
+Structural graph pattern search using graph isomorphism has been
+studied in the literature before [9], [10]. In [15], the authors
+propose a solution that aims at reducing the search space for
+a single query graph. The solution identifies candidate regions
+in the graph that can contain query embeddings, while it is
+coupled with a neighborhood equivalence locating strategy to
+generate the necessary enumerations. In the same spirit [16] aims
+at reducing the search space in the graph by exploiting the syntactic similarities present on vertex relationships. [17] considers
+the sub-graph isomorphism problem when multiple queries are
+answered simultaneously. However, these techniques are designed
+for static graphs and are not suitable for processing continuous
+graph queries on evolving graphs.
+Continuous sub-graph matching has been considered in [18]
+but the authors assume a static set of sub-graphs to be matched
+against update events, use approximate methods that yield false
+positives, and small (evolving) graphs. An extension to this work
+considers the problem of uncertain graph streams [19], over
+wireless sensor networks and PPIs. The work in [20] considers
+a setup of continuous graph pattern matching over knowledge
+graph streams. The proposed solution utilizes finite automatons
+to represent and answer the continuous queries. However, this
+approach can support a handful of queries, since, each query is
+evaluated separately, while, it generates false positives due to the
+adopted sliding window technique. These solutions are not suitable
+for answering large number of continuous queries on graphs with
+high update rates.
+There are a few publish/subscribe solutions on ontology graphs
+proposed in [21], [22], but they are limited to the RDF data model.
+Distributed pub/sub middleware for graphs has recently been
+proposed in [23], however, the main focus is on node constraints
+(attributes) while ignoring the graph structure.
+In graph streams research; [24], [25] propose algorithms to
+identify correlated graphs from a graph stream. This differs from
+
+3
+
+n
+
+sI
+
+plc
+
+P2
+
+k
+ec
+
+u3
+checksIn =(P3, plc)
+
+G'''
+knows
+
+checksIn
+
+P1
+
+knows
+
+P2
+
+ch
+
+n
+
+sI
+
+P3
+
+k
+ec
+
+plc
+
+ch
+
+n
+
+P3
+
+u2
+checksIn =(P2, plc)
+
+G''
+knows
+
+checksIn
+
+P1
+
+sI
+
+P3
+
+P2
+
+k
+ec
+
+u1
+checksIn =(P1 , plc)
+
+G'
+knows
+
+knows
+
+P1
+
+knows
+
+P2
+
+ch
+
+Update stream S
+u1 = (checksIn = (P1 , plc))
+u2 = (checksIn = (P2 , plc))
+u3 = (checksIn = (P3 , plc ))
+(a)
+
+G
+knows
+
+knows
+
+P1
+
+checksIn
+P3
+
+plc
+
+(b)
+
+Fig. 3: (a) An update stream S and (b) the evolution of graph G after inserting ui ∈ S .
+our setup since a sliding window that covers a number of batches
+of data is used, and the main focus is set on identifying subgraphs
+with high Pearson correlation coefficients. In [26], the authors propose continuous pattern detection in graph streams with snapshot
+isolation. However, this solution considers only single queries at a
+time and the patterns detected are also approximate.
+The work in [27] provides an exact subgraph search algorithm
+that exploits the temporal characteristics of representative queries for online news or social media monitoring. This algorithm
+exploits the structural and semantic characteristics of the graph
+through a specialized data structure. An extension of this work,
+considers continuous query answering with graph patterns over
+dynamic multi-relation graphs [28]. Finally, in [11] the authors
+perform subgraph matching over a billion node graph by proposing
+graph exploration methods based on cloud technologies. While
+the aforementioned works are similar to the query evaluation
+scenario, the emphasis is on efficient search mechanisms, rather
+than continuous answering over streaming graph data.
+
+Fig. 4: Example query graph pattern.
+
+Definition 3. A graph stream S = (u1 , u2 , . . . , ut ) of graph G is
+an ordered sequence of updates.
+Fig. 3(a) presents an update stream S consisting of three graph
+updates u1 , u2 , and u3 generated from social network events.
+While, Fig. 3 (b) shows the initial state of graph G and its
+evolution after inserting sequentially the three updates.
+3.2
+
+3
+
+DATA M ODEL AND P ROBLEM D EFINITION
+
+In this section we outline the data (Section 3.1) and query model
+(Section 3.2) that our approach builds upon.
+3.1
+
+Graph Model
+
+In this paper, we use attribute graphs [29] (Definition 1), as
+our data model, as they are used natively in a wide variety
+of applications, such as social network graphs, traffic network
+graphs, and citation graphs. Datasets in other data models can
+be mapped to attribute graphs in a straightforward manner so that
+our approach can be applied to them as well.
+Definition 1. An attribute graph G is defined as a directed labeled
+multigraph:
+
+G = (V, E, lV , lE , ΣV , ΣE )
+where V is the set of vertices and E the set of edges. An
+edge e ∈ E is an ordered pair of vertices e : (s, t), where
+s, t ∈ V represent source and target vertices. lV : V → ΣV
+and lE : E → ΣE are labeling functions assigning labels to
+vertices and edges from the label sets ΣV and ΣE .
+For ease of presentation, we denote an edge e as e = (s, t),
+where e, s and t are the labels of the edge(lE (e)), source vertex
+(lV (s)) and target vertex (lV (t)) respectively.
+As our goal is to facilitate efficient continuous multi-query
+processing over graph streams, we also provide formal definitions
+for updates and graph streams (Definitions 2 and 3).
+Definition 2. An update ut on graph G is defined as an addition
+(e) of an edge e at time t. An addition leads to new edges
+between vertices and possibly the creation of new vertices.
+
+Query Model
+
+For our query model we assume that users (or services operating
+on their behalf) are interested to learn when certain patterns
+emerge in an evolving graph. Definition 4 provides a formal
+definition of such query graph patterns defining structural and
+attribute constraints.
+Definition 4. A query graph pattern Qi is defined as a directed
+labeled multigraph:
+
+Qi = (VQi , EQi , vars, lV , lE , ΣV , ΣE )
+where VQi is a set of vertices, EQi a set of edges, and vars
+a set of variables. lV : V → {ΣV ∪ vars} and lE : E →
+ΣE are labeling functions assigning labels (and variables) to
+vertices and edges.
+Let us consider an example where a user wants to be notified
+when his friends visit places nearby. Fig. 4 shows the corresponding query graph pattern that will result in a user notification when
+two people check in at the same place/location in Rio.
+Based on the above definitions, let us now define the problem
+of multi-query processing over graph streams.
+Problem Definition. Given a set of query graph patterns
+QDB = {Q1 , Q2 , . . . , Qk }, an initial attribute graph G, and a
+graph stream S with continuous updates ut ∈ S , the problem
+of multi-query processing over graph streams consists of continuously identifying all satisfied query graph patterns Qi ∈ QDB
+when applying incoming updates.
+Query Set and Graph Modifications. A set of query graph
+patterns QDB is subject to modifications (i.e., additions and
+deletions). In this work, we focus on streamlining the query
+indexing phase, while developing techniques that allow processing
+each incoming query graph pattern separately, thus supporting
+
+4
+?f1
+
+hasMod
+
+?p1
+
+posted
+
+pst1
+
+posted
+
+Q1
+
+posted
+
+Q1
+
+Q2
+
+com1
+
+Q2
+
+?p1
+
+Q4
+
+posted
+
+hasM od
+
+posted
+
+P2 = {?var −−−−−−→?var −
+−−−−
+→ “pst2”}
+
+?f1
+
+hasMod
+
+hasM od
+
+P1 = {?var −−−−−−→?var}
+posted
+
+hasCreator
+
+containedIn
+hasMod
+
+hasM od
+
+P3 = {?var −−−−→ “pst2”}
+
+hasCreator
+
+Q3
+?f1
+
+Set of Covering Paths
+P1 = {?var −−−−−−→?var −
+−−−−
+→ “pst1”}
+
+pst1
+
+reply
+
+?com1
+
+pst2
+
+?p1
+
+Q3
+
+reply
+?f2
+
+Query ID
+
+containedIn
+?f1
+
+?p1
+
+posted
+
+P1 = {“com1” −−−−−−−−→?var −
+−−−−
+→
+containedIn
+
+“pst1” −−−−−−−−−→?var}
+hasM od
+
+Q4
+
+pst1
+
+posted
+
+P1 = {?var −−−−−−→?var −
+−−−−
+→ “pst1”
+containedIn
+
+−−−−−−−−−→?var}
+
+(b)
+
+(a)
+
+continuous additions in QDB . In the same manner, a graph G
+is subject to edge additions and deletions, our main objective is to
+efficiently determine the queries satisfied by an edge addition. The
+proposed model does not require indexing the entire graph G and
+retains solely the necessary parts of G for the query answering. To
+this end, we do not further discuss deletions on QDB and G, as we
+focus on providing high performance query answering algorithms.
+
+Step 1
+
+Fig. 5: (a) Four query graph patterns that capture events generated inside a social network and (b) their covering paths.
+
+1
+2
+3
+4
+
+5
+
+4
+
+T RIE -BASED C LUSTERING
+
+To solve the problem defined in the previous section, we propose
+T RI C (T RIe-based Clustering). As motivated in Section 1, the key
+idea behind T RI C lies in the fact that query graph patterns overlap
+in their structural and attribute restrictions. After identifying and
+indexing these shared characteristics (Section 4.1), they can be
+exploited to batch-answer the indexed query set and in this way
+reduce query response time (Section 4.2).
+4.1
+
+Query Indexing Phase
+
+T RI C indexes each query graph pattern Qi by applying the
+following two steps:
+1. Transforming the original query graph pattern Qi into a set
+of path conjuncts, that cover all vertices and edges of Qi , and
+when combined can effectively re-compose Qi .
+2. Indexing all paths in a trie-based structure along with unique
+query identifiers, while clustering all paths of all indexed
+queries by exploiting commonalities among them.
+In the following, we present each step of the query indexing
+phase of Algorithm T RI C, give details about the data structures
+utilized and provide its pseudocode (Fig. 6).
+Step 1 : Extracting the Covering Paths. In the first step of
+the query indexing process, Algorithm T RI C decomposes a query
+graph pattern Qi and extracts a set of paths CP (Qi ) (Fig. 6,
+line 1). This set of paths, covers all vertices V ∈ Qi and edges
+E ∈ Qi . At first, we give the definition of a path and subsequently
+define and discuss the covering path set problem.
+Definition 5. A path Pi ∈ Qi is defined as a list of vertices
+ek
+e1
+e2
+Pi = {v1 −→
+v2 −→
+. . . vk −→
+vk+1 } where vi ∈ Qi , such
+that two sequential vertices vi , vi+1 ∈ Pi have exactly one
+edge ei ∈ Qi connecting them, i.e., ek = (vk , vk+1 ).
+Definition 6. The covering paths [30] CP of a query graph Qi
+is defined as a set of paths CP (Qi ) = {P1 , P2 , . . . , Pk }
+that cover all vertices and edges of Qi . In more detail, we are
+interested in the least number of paths while ensuring that for
+
+Step 2
+
+6
+
+7
+8
+9
+10
+11
+12
+
+13
+
+Input: Query Qi = (VQi , EQi , vars, lV , lE , ΣV , ΣE )
+Output: QDB ← QDB ∪ Qi
+P aths ← CP(Qi ); // Obtain the set of covering paths
+foreach Pi ∈ P aths do // For each covering path Pi of Qi
+foreach trie Ti with root(Ti ) = e1 : e1 ∈ Pi do
+depthFirstSearch(Ti ); // Traverse trie in DFS
+// If there exists a trie that can store Pi
+if ∃{n0 → . . . ni → . . . nk } ⊆ Pi then
+// Store the trie path positions
+positions ← {n0 → . . . ni → . . . nk };
+// If all edges ei ∈ Pi cannot be indexed,
+create additional trie nodes to index them
+if positions ∩ Pi 6= Ø then
+create nodes(Pi \ positions);
+last(positions) ← id(Qi ); // Store the query id
+// Keep a reference to the last trie node
+pathP ositions → pathP ositions ∪ last(positions);
+// Store tries Ti under which, edge ei is indexed
+foreach ei ∈ Pi do
+edgeInd[ei ] ← Ti ;
+
+// Store the nodes that Qi was indexed under
+queryInd[id(Qi )] ← pathP ositions
+
+Fig. 6: Query indexing phase of Algorithm T RI C.
+
+every vertex vi ∈ Qi there is at least one path Pj that contains
+vi , i.e., ∀i∃j : vi ∈ Pj , vi ∈ Qi . In the same manner, for
+every edge ei ∈ Qi there is at least one path Pj that contains
+ei , i.e., ∀i∃j : ei ∈ Pj .
+Obtaining the Set of Covering Paths. The problem of obtaining
+a set of paths that covers all vertices and edges is a graph
+optimization problem that has been studied in literature [30], [31].
+In our approach, we choose to solve the problem by applying
+a greedy algorithm, as follows: For all vertices vi in the query
+graph Qi execute a depth-first walk until a leaf vertex (no outgoing
+edge) of the graph is reached, or there is no new vertex to visit.
+Subsequently, repeat this step until all vertices and edges of the
+query graph Qi have been visited at least once and a list of paths
+has been obtained. Finally, for each path in the obtained list, check
+if it is a sub-path of an already discovered path, and remove it from
+the list of covering paths. The end result of this procedure yields
+the set of covering paths.
+Example 1. In Fig. 5(a) we present four query graph patterns.
+These query graph patterns capture activities of users inside
+a social network. By applying Definition 6 on the four query
+graph patterns presented, Algorithm T RI C extracts four sets of
+covering paths, presented in Fig. 5(b).
+Obtaining a set of paths serves two purposes: (a) it gives a
+less complex representation of the query graph that is easier to
+
+5
+Q1
+matV[hasMod = (?var, ?var)]
+
+?var
+
+?var
+
+?var
+
+pst1
+
+f1
+f2
+
+p1
+p1
+
+p1
+p2
+
+pst1
+pst1
+
+matV[hasMod = (?var, ?var)]
+
+matV[hasMod = (?var, ?var),
+posted = (?var, pst1)]
+
+matV[posted = (?var, pst1)]
+
+=
+
+P1 :
+
+matV[posted = (?var, pst2)]
+
+?var
+
+?var
+
+?var
+
+pst2
+
+f1
+f2
+
+p1
+p1
+
+p1
+
+pst2
+
+?var
+
+?var
+
+pst1
+
+f1
+f2
+
+p1
+p1
+
+pst1
+pst1
+
+matV[hasMod = (?var, ?var),
+posted = (?var, pst2)]
+
+=
+
+P2 :
+
+?var
+
+?var
+
+pst2
+
+f1
+f2
+
+p1
+p1
+
+pst2
+pst2
+
+matV[reply = (?var, pst2)]
+
+P3 :
+
+?var
+
+pst2
+
+com1
+
+pst2
+
+Fig. 7: Materialized views of Q1 .
+manage, index and cluster, as well as (b) it provides a streamlined
+approach on how to perform the materialization of the subgraphs
+that match a query graph pattern, i.e., the query answering during
+the evolution of the graph.
+Materialization. Each edge ei that is present in the query set
+has a materialized view that corresponds to its matV [ei ]. The
+materialized view of ei stores all the updates ui that contain ei .
+In order to obtain the subgraphs that satisfy a query graph pattern
+Qi all edges ei ∈ Qi must have a non-empty materialized view
+(i.e., matV 6= Ø) and the materialized views should be joined as
+defined by the query graph pattern.
+In essence, the query graph pattern determines the execution
+plan of the query. However, given that a query pattern in itself is a
+graph there is a high number of possible execution plans available.
+e1
+e2
+A path Pi = {v1 −→ v2 −→ . . . vk } serves as a model that
+defines the order in which the materialization should be performed.
+Thus, starting from the source vertex v1 ∈ Pi and joining all the
+materialized views from v1 to the leaf vertex vk ∈ Pi : |P | = k
+yields all the subgraphs that satisfy the path Pi . After all paths Pi
+that belong in Qi have been satisfied, a final join operation must be
+performed between all the paths. This join operation will produce
+the subgraphs that satisfy the query graph Qi . To achieve this path
+joining set, additional information is kept about the intersection of
+the paths Pi ∈ Qi . The intersection of two paths Pi and Pj are
+their common vertices.
+Example 2. Fig. 7 presents some possible materialized views
+that correspond to the covering paths of query graph Q1
+(Fig. 5 (b)). In order to locate all subgraphs that satisfy the
+structural and attribute restrictions posed by paths P1 , P2 and
+P3 their materialized views should be calculated. More specifposted
+hasM od
+ically, path P1 = {?var −−−−−→?var −−−−→ “pst1”}, is
+formulated by two edges, edges hasM od = (?var, ?var)
+and posted = (?var, pst1), thus, their materialized views
+matV [hasM od = (?var, ?var)] and matV [posted =
+(?var, pst1)] must be joined. These two views contains
+all updates ui that correspond to them, while the result
+of their join operation will be a new materialized view
+matV [hasM od = (?var, ?var), posted = (?var, pst1)]
+as shown in Fig. 7. In a similar manner, the subgraphs that
+satisfy path P2 are calculated, while P3 that is formulated by
+a single edge does not require any join operations. Finally, in
+order to calculate the subgraphs that match Q1 all materialized
+views that correspond to paths P1 , P2 and P3 must be joined.
+Step 2 : Indexing the Paths. Algorithm T RI C proceeds into
+indexing all the paths, extracted in Step 1, into a trie-based data
+structure. For each path Pi ∈ CP (Qi ), T RI C examines the forest
+
+for trie roots that can index the first edge e1 ∈ Pi (Fig. 6, lines
+3 − 6). To access the trie roots, T RI C utilizes a hash table (namely
+rootInd ) that indexes the values of the root-nodes (keys) and the
+references to the root nodes (values). If such trie Ti is located,
+Ti is traversed in a DFS manner to determine in which sub-trie
+path Pi can be indexed (Fig. 6, line 4). Thus, T RI C traverses the
+forest to locate an existing trie-path {n1 → . . . ni → . . . nk }
+that can index the ordered set of edges {e1 , . . . , ek } ∈ Pi . If the
+discovered trie-path can index Pi partially (Fig. 6, line 7), T RI C
+proceeds into creating a set of new nodes under nk that can index
+the remaining edges (Fig. 6, line 8). Finally, the algorithm stores
+the identifier of Qi at the last node of the trie path (Fig. 6, line 9).
+Algorithm T RI C makes use of two additional data structures,
+namely edgeInd and queryInd . The former data structure is a
+hash table that stores each edge ei ∈ Pi (key) and a collection of
+trie roots Ti which index ei as the hash table’s value (Fig. 6, lines
+11 − 12). Finally, T RI C utilizes a matrix queryInd that indexes
+the query identifier along side the set of nodes under which its
+covering paths Pi ∈ CP (Qi ) was indexed (Fig. 6, line 13).
+Example 3. Fig. 8 presents an example of rootInd , queryInd
+and edgeInd of Algorithm T RI C when indexing the set of
+covering paths of Fig. 5 (b). Notice, that T RI C indexes paths
+P1 , P2 ∈ Q1 , path P1 ∈ Q2 and path P1 ∈ Q4 under
+the same trie T1 , thus, clustering together their common
+structural restrictions (all the aforementioned paths) and their
+attribute restrictions. Additionally, note that the queryInd data
+structure keeps references to the last node where each path
+Pi ∈ Qi is stored, e.g. for Q1 it keeps a set of node positions
+{&n2 , &n4 , &n5 } that correspond to its original paths P1 ,
+P2 and P3 respectively. Finally, edgeInd stores all the unique
+edges present in the path set of Fig. 5 (b), with references
+to the trie roots under which they are indexed, e.g. edge
+posted = (?var, pst1) that is present in P1 ∈ Q1 , P1 ∈ Q3
+and P1 ∈ Q4 , is indexed under both tries T1 and T3 , thus this
+information is stored in set {&T1 , &T3 }.
+The time complexity of Algorithm T RI C when indexing a path
+Pi , where |Pi | = M edges and B the branching factor of the
+forest, is O (M ∗ B), since T RI C uses a DFS strategy, with the
+maximum depth bound by the number of edges. Thus, for a new
+query graph pattern Qi with N covering paths, the total time
+complexity is O (N ∗ M ∗ B). Finally, the space complexity of
+Algorithm T RI C when indexing a query Qi is O (N ∗ M ), where
+M is the number of edges in a path and N the cardinality of Qi ’s
+covering paths.
+Variable Handling. A query graph pattern Qi contains vertices
+that can either be literals (specific entities in the graph) identified
+by their label, or variables denoted with the generic label “?var”.
+This approach is applied in order to alleviate restrictions posed by
+naming conventions and thus leverage on the common structural
+constraints of paths.
+However, by substituting the variable vertices with the generic
+“?var” requires us to keep information about the joining order of
+each edge ei ∈ Pi , as well as, how each Pi ∈ CP (Qi ) intersects
+with the rest of the paths in CP (Qi ). In order to calculate the
+subgraphs that satisfy each covering path Pi ∈ CP (Qi ), each
+matV [ei ] : ei ∈ Pi must be joined. Each path Pi that is indexed
+under a trie path {n1 → . . . ni → . . . nk } maintains the original
+ordering of its edges and vertices, while the order under which
+each edge of a node ni is connected with its children nodes
+(chn(ni )), is determined as follows: the target vertex t ∈ ei
+
+6
+
+Fig. 8: Data structures utilized by Algorithm T RI C to cluster query graph patterns.
+
+1
+2
+3
+4
+5
+6
+
+Input: Update ui = (ei ) : ei = (s, t)
+Output: Locate matched queries
+af f ectedT ries ← edgeInd[ei ]; // Get affected tries
+foreach Ti ∈ af f ectedT ries do
+foreach node ni ∈ Ti do // Traverse Ti in DFS
+if edge(nc ) = ei then // If current node indexes ei
+f ndP os ← n ; // Store the position
+break ;
+// Terminate the traversal
+
+matV[n1]
+(a)
+
+matV[n2]
+
+matV[posted = (?var, pst1)]
+
+?var
+
+?var
+
+?var
+
+pst1
+
+f1
+f2
+f2
+
+p1
+p1
+p2
+
+p1
+
+pst1
+
+p2
+
+pst1
+
+u1
+
+=
+
+?var
+
+?var
+
+pst1
+
+f1
+f2
+
+p1
+p1
+
+pst1
+pst1
+
+f2
+
+p2
+
+pst1
+
+Step 1
+
+matV[hasCreator = (pst1, ?var)]
+7
+8
+9
+10
+11
+12
+13
+
+// Update matV s of f ndP os and its children
+af f ectedQueries ← Trie Traversal & Materialization (f ndP; os)
+foreach query Qi ∈ af f ectedQueries do
+results ← Ø;
+foreach Pi ∈ Qi do // For the covering paths of Qi
+results ← results 1 matV [Pi ];
+if results 6= Ø then
+mark Matched(Qi );
+
+Fig. 9: Query answering phase (Step 1) of Algorithm T RI C.
+
+(where ei is indexed under ni ) is connected with the source node
+s ∈ ei+1 : ei+1 ∈ chn(ni ) of the parent node ni . Finally, for
+each covering path Pi ∈ CP (Qi ) T RI C maintains information
+about the vertices that intersected in the original query graph
+pattern Qi ; this information is utilized during the query answering
+phase.
+4.2
+
+Query Answering Phase
+
+During the evolution of the graph, a constant stream of updates
+S = (u1 , u2 , . . . , uk ) arrives at the system. For each update ui ∈
+S Algorithm T RI C performs the following steps:
+1. Determines which tries are affected by update ui and proceeds
+in examining them.
+2. While traversing the affected tries, performs the materialization and prunes sub-tries that are not affected by ui .
+In the following, we describe each step of the query answering
+phase of Algorithm T RI C. The pseudocode for each step is
+provided in Figs. 9 and 11.
+Step 1 : Locate and Traverse Affected Tries. When an update ui arrives at the system, Algorithm T RI C utilizes the edge
+ei ∈ ui to locate the tries that are affected by ui . To achieve
+this, T RI C uses the hash table edgeInd to obtain the list of
+tries that contain ei in their children set. Thus, Algorithm T RI C
+receives a list (af f ectedT ries) that contains all the tries that
+were affected by ui and must be examined (Fig. 9, line 1).
+Subsequently, Algorithm T RI C proceeds into examining each trie
+Ti ∈ af f ectedT ries by traversing each Ti in order to locate
+the node ni that indexes edge ei ∈ ui . When node ni is located,
+
+(b)
+
+(c)
+
+pst1
+
+?var
+f1
+f2
+f2
+
+matV[n2]
+?var
+pst1
+p1
+pst1
+p1
+pst1
+p2
+
+?var
+
+matV[containedIn = (pst1, ?var)]
+pst1
+
+?var
+
+=
+
+∅
+
+pst1
+
+Fig. 10: Updating materialized views.
+
+the algorithm proceeds in Step2 of the query answering process
+described below (Fig. 9, lines 3 − 7).
+Example 4. Let us consider the data structures presented in
+Fig. 8, the materialized views in Fig. 10, and an update
+u1 = (posted = (p2, pst1)) that arrives into the evolving graph (Fig. 10(a)). Algorithm T RI C prompts hash table
+edgeInd and obtains list {&T1 , &T3 }. Subsequently, T RI C
+will traverse tries T1 and T3 . When traversing trie T1 T RI C
+locates node n2 that matches update e1 ∈ u1 and proceeds
+in Step2 (described below). Finally, when traversing T3 T RI C
+will stop the traversal at root node n6 as its materialized view
+is empty matV [hasCreator = (pst1, ?var)] = Ø (Fig. 10
+(b)), thus all sub-tries will yield empty materialized views.
+Step 2 : Trie Traversal and Materialization. Intuitively, a trie
+path {n0 → . . . ni → . . . nk } represents a series of joined
+materialized views matV s = {matV 1 , matV 2 , . . . , matV k }.
+Each materialized view matV i ∈ matV s corresponds to a
+node ni that stores edge ei and the materialized view matV i .
+The materialized view contains the results of the join operation
+between the matV [ei ] and the materialized view of the parent
+node ni (matV (prnt(ni )]), i.e., matV i = matV [prnt(ni )] 1
+matV [ei ]. Thus, when an update ui affects a node ni in this
+“chain” of joins, ni ’s and its children’s (chn(ni )) materialized
+views must be updated with ui . Based on this T RI C searches for
+and locates node ni inside Ti that is affected by ui and updates
+ni ’s sub-trie.
+After locating node ni ∈ Ti that is affected by ui , Algorithm T RI C continues the traversal of ni ’s sub-trie and prunes
+the remaining sub-tries of Ti (Fig. 9, line 7). Subsequently, T RI C
+
+7
+
+1
+2
+
+Step 2
+
+3
+
+Function: Trie Traversal & Materialization
+Input: Node ni
+Output: Locate matched queries
+// Update the current materialized view by joining
+the parent materialized view with the
+materialized view of the edge in node ni
+result ← matV [prnt(ni )] 1 matV [edge(ni )];
+if result = Ø then
+return;
+
+6
+
+// Store the query identifiers of node ni
+af f ectedQueries ← af f ectedQueries ∪ qIDs(ni );
+// Recursively update the matV s of ni ’s children
+foreach nc ∈ chn(ni ) do
+Trie Traversal & Materialization (nc );
+
+7
+
+return af f ectedQueries ; // Return the affected qIDs
+
+4
+5
+
+Fig. 11: Query answering phase (Step 2) of Algorithm T RI C.
+
+updates the materialized view of ni by performing a join operation
+between its parent’s node materialized view matV [prnt(ni )]
+and the update ui , i.e., results = matV [prnt(ni )] 1 ui .
+Notice, that Algorithm T RI C calculates the subgraphs formulated
+by the current update solely based on the update u1 and does
+not perform a full join operation between matV [prnt(ni )] and
+matV [edge(ni )], the updated results are then stored in the
+corresponding matV [ni ].
+For each child node nj ∈ chn(ni ), T RI C updates its corresponding materialized view by joining its view matV [nj ] that
+corresponds to the edge that it stores (given by matV [edge(nj )])
+with its parent node materialized view matV [ni ] (Fig. 11, lines
+1 − 7). If at any point the process of joining the materialized views returns an empty result set the specific sub-trie is
+pruned, while, the traversal continues in a different sub-trie of
+Ti (Fig. 11, lines 5 − 6). Subsequently, for each trie node nj in
+the trie traversal when there is a successful join operation among
+matV [ej ] : ej ∈ nj and matV [ni ], the query identifiers indexed
+under nj are stored in af f ectedQueries list (Fig. 11, lines 4
+and 7). Note that similarly to before, only the updated part of a
+materialized view is utilized as the parent’s materialized view, an
+approach applied on database-management system [32].
+Example 5. Let us consider the data structures presented in Fig. 8,
+Fig. 10, and an update u1 = (posted = (p2, pst1)) that
+arrives into the evolving graph. After locating the affected trie
+node n2 (described in Example 4) T RI C proceeds in updating
+the materialized view of n2 , i.e., matV [n2 ], by calculating
+the join operation between its parents materialized view, i.e.,
+matV [n1 ] and the update u1 . Fig. 10, demonstrates the operations of joining matV [n2 ] with update u1 , the result of the operation is tuple (f 2, p2, pst1), which is added into matV [n2],
+presented in Fig. 10(a). While the query identifiers of n2
+(i.e., Q1 ) are indexed in af f ectedQueries. Finally, T RI C
+proceeds in updating the sub-trie of n2 , node n3 , where the
+updated tuple (f 2, p2, pst1) is joined with matV [edge(n3 )]
+(i.e., matV [containedIn = (pst1, ?var)]). This operation
+yields an empty result (Fig. 10(c)), thus terminating the traversal.
+Finally, to complete the filtering phase Algorithm T RI C iterates through the affected list of queries and performs the join
+operations among the paths that form a query, thus, yielding the
+final answer (Fig. 9, lines 8 − 13).
+The time complexity, of Algorithm T RI C when filtering an
+update ui , is calculated as follows: The traversal complexity is
+O (T ∗ (Pm ∗ B)), where T denotes the number of tries that
+
+contain ei ∈ ui , Pm denotes the size of the longest trie path,
+and B the branching factor. The time complexity of joining two
+materialized views matV 1 and matV 2 , where |matV 1 | = N
+and |matV 2 | = M , is O (N ∗ M ). Finally, the total time
+complexity is calculated as O ((T ∗ (Pm ∗ B)) ∗ (N ∗ M )).
+Caching. During Step 2, two materialized views are joined using
+a typical hash join operation with a build and a probe phase. In
+the build phase, a hash table for the smallest (in the number of
+tuples) table is constructed, while in the probe phase the largest
+table is scanned and the hash table is probed to perform the join.
+Algorithm T RI C discards all the data structures and intermediate
+results after the join operation commences. In order to enhance
+this resource intensive operation, we cache and reuse the data
+structures generated during the build and probe phases as well as
+the intermediate results whenever possible. This approach constitutes an extension of our proposed solution (Algorithm T RI C) and
+it is coined T RI C+.
+
+5
+
+A DVANCED BASELINES
+
+Since no prior work in the literature considers the problem of
+continuous multi-query evaluation, we designed and implemented
+Algorithms I NV and I NC, two advanced baselines that utilize
+inverted index data structures. Finally, we provide a third baseline
+that was based on the well-established graph database Neo4j [14].
+5.1
+
+Algorithm INV
+
+Algorithm I NV (I NVerted Index), utilizes inverted index data
+structures to index the query graph patterns. The inverted index
+data structure is able to capture and index common elements
+of the graph patterns at the edge level during indexing time.
+Subsequently, the inverted index is utilized during filtering time
+to determine which queries have been satisfied. In the following
+sections we describe the query indexing and answering phase of
+I NV.
+The Query Indexing Phase of Algorithm I NV, for each query
+graph pattern Qi , is performed in two steps: (1) Transforming
+the original query graph pattern Qi into a set of path conjuncts,
+that cover all vertices and edges of Qi , and when combined can
+effectively re-compose Qi , and finally, indexing those covering
+paths in a matrix along the unique query identifier, (2) Indexing all
+edges ei ∈ Qi into an inverted index structure. In the following,
+we present each step of the query indexing phase of I NV and give
+details about the data structures utilized.
+Step 1 : Extracting the Covering Paths. In the first step of
+the query indexing phase, Algorithm I NV decomposes a query
+graph Qi into a set of paths CP , a process described in detail in
+Section 4.1. Thus, given the query set presented in Fig. 5 (a), I NV
+yields the same set of covering paths CP (Fig. 5 (b)). Finally, the
+covering path set CP is indexed into an array (queryInd ) with
+the query identifier of Qi .
+Step 2 : Indexing the Query Graph. Algorithm I NV builds
+three inverted indexes, where it stores the structural and attribute
+constrains of the query graph pattern Qi . Hash table edgeInd
+indexes all edges ei ∈ QDB (keys), and the respective query
+identifiers as values, hash table sourceInd indexes the source
+vertices of each edge (key), where the edges are indexed as values
+, and hash table targetInd that indexes the target vertices of each
+edge (key), where the edges are indexed as values. In Fig. 5(a) we
+present four query graph patterns, and in Fig. 12 the data structures
+
+8
+
+Fig. 12: Data structures utilized by Algorithm I NV to index query
+graph patterns.
+
+of I NV when indexing those queries. Finally, I NV applies the same
+techniques of handling variables as Algorithm T RI C (Section 4.1).
+The Query Answering Phase of Algorithm I NV, when a constant
+stream of updates S = (u1 , u2 , . . . , uk ) arrives at the system,
+is performed in three steps: (1) Determines which queries are
+affected by update ui , (2) Prompts the inverted index data structure
+and determines which paths have been affected by update ui , (3)
+Performs the materialization while querying the inverted index
+data structures. In the following, we describe each step of the
+query answering phase:
+Step 1 : Locate the Affected Queries. When a new update ui
+arrives at the system, Algorithm I NV utilizes the edge ei ∈ ui
+to locate the queries that are affected, by querying the hash
+table edgeInd to obtain the query identifier qIDs that contain ei . Subsequently, the algorithm iterates through the list of
+af f ectedQueries and checks each query Qi ∈ qIDs. For each
+query Qi the algorithm checks ∀ei ∈ Qi if matV [ei ] 6= Ø, i.e.,
+each ei should have a non empty materialized view. The check
+is performed by iterating through the edge list that is provided
+by queryInd and a hash table that keeps all materialized views
+present in the system. Intuitively, a query Qi is candidate to match,
+as long as, all materialized views that correspond to its edges can
+be used in the query answering process.
+Step 2 : Locate the Affected Paths. Algorithm I NV proceeds to
+examine the inverted index structures sourceInd and targetInd
+by making use of ei ∈ ui . I NV queries sourceInd and targetInd
+to determine which edges are affected by the update, by utilizing
+the source and target vertices of update ui . I NV examines each
+current edge ec of the affected edge set and recursively visits
+all edges connected to ec , which are determined by querying
+the sourceInd and targetInd . While examining the current edge
+ec , I NV checks if ec is part of af f ectedQueries, if not, the
+examination of the specific path is pruned. For efficiency reasons,
+the examination is bound by the maximum length of a path
+present in af f ectedQueries which is calculated by utilizing the
+queryInd data structure.
+Step 3 : Path Examination and Materialization. While I NV
+examines the paths affected by update ui (Step 2), it performs the
+materialization on the currently examined path. More specifically,
+while I NV searches through the paths formulated by the visits of
+edge sets determined by targetInd and sourceInd , it maintains a
+ek
+e1
+e2
+path Pc = {v1 −→ v2 −→ . . . vk −→ vk+1 } that corresponds to
+the edges already visited.
+While, visiting each edge ec , I NV accesses the materialized
+
+view that corresponds to it (i.e., matV [ec ]) and updates the set of
+materialized views matV s = {matV 1 , matV 2 , . . . , matV k }
+that correspond to the current path. For example, given an already
+e2
+e1
+visited path P = {v1 −→ v2 −→ v3 } its materialized view
+matV [P ] will be generated, by matV [P ] = matV [e1 ] 1
+matV [e2 ]. When visiting the next edge en , a new path P 0 is
+generated and its materialized view matV [P 0 ] = matV [P ] 1
+matV [en ] will be generated. If at any point, the process of joining
+the materialized views yields an empty result set the examination
+of the edge is terminated (pruning). This allows us to prune
+paths that are not going to satisfy any Qi ∈ af f ectedQueries.
+If a path Pi yields a successful series of join operations (i.e.,
+matV [Pi ] 6= Ø), it is marked as matched.
+Finally, to produce the final answer subgraphs Algorithm I NV iterates through the affected list of queries qIDs ∈
+af f ectedQueries and performs the final join operation among
+all the paths that comprise the query.
+Caching. In the spirit of Algorithm T RI C+ (Section 4.2), we developed an extension of Algorithm I NV, namely Algorithm I NV +,
+that caches and reuses the calculated data structures of the hash
+join phase.
+5.2
+
+Algorithm INC
+
+Based on Algorithm I NV we developed an algorithmic extension,
+namely Algorithm I NC. Algorithm I NC utilizes the same inverted
+index data structures to index the covering paths, edges, source
+and target vertices as Algorithm I NV, while the examination
+of a path affected during query answering remains similar. The
+key difference lies in executing the joining operations between
+the materialized views that correspond to edges belonging to a
+path. More specifically, when Algorithm I NV executes a series of
+joins between the materialized views (that formulate a path) to
+determine which subgraphs match a path; it utilizes all tuples of
+each materialized view that participate in the joining process. On
+the other hand, Algorithm I NC makes use of only the update ui
+and thus reduces the number of tuples examined through out the
+joining process of the paths.
+Caching. In the spirit of Algorithm T RI C+ (Section 4.2), we developed an extension of Algorithm I NC, namely Algorithm I NC +,
+that caches and reuses the calculated data structures of the hash
+join phase.
+5.3
+
+Neo4j
+
+To evaluate the efficiency of the proposed algorithm against a realworld approach, we implemented a solution based on the wellestablished graph database Neo4j [14]. In this approach, we extend Neo4j’s native functionality with auxiliary data structures to
+efficiently store the query set. They are used during the answering
+phase to located affected queries and execute them on Neo4j.
+The Query Indexing Phase. To address the continuous multiquery evaluation scenario, we designed main-memory data structures to facilitate indexing of query graph patterns. To this end,
+each query graph pattern Qi is indexed in three steps: (1) Qi
+is converted into Neo4j’s native query language Cypher2 , (2)
+indexing each query in a matrix (queryInd ), and (3) indexing all
+edges ei ∈ Qi by an inverted index structure (edgeInd ), where
+ei is used as key and a collection of query identifiers as values
+(similarly to Algorithms I NV/I NC Fig. 12).
+2. https://neo4j.com/developer/cypher/
+
+9
+
+The Query Answering Phase. Each update that is received as
+part of an incoming stream of updates S = (u1 , u2 , . . . , uk ) is
+processed as follows: (1) an incoming update ui is applied to
+Neo4j (2) by querying the inverted index edgeInd with ei ∈ ui , it
+is determined which queries are affected, (3) all affected queries
+are retrieved from matrix queryInd and the appropriate parameters are set, (4) the affected queries are executed.
+To enhance performance, the following configurations are
+applied: (1) the graph database builds indexes on all labels of
+the schema allowing for faster look up times of nodes, (2) the
+execution of Cypher queries employs the parameters syntax3 as it
+enables the execution planner of Neo4j to cache the query plans
+for future use, (3) the number of writes per transaction4 in the
+database and the allocated memory were optimized based on the
+hardware configuration (see Section 6.1).
+
+6
+
+E XPERIMENTAL E VALUATION
+
+In this section we present the data and query sets, the algorithmic
+and technical configuration, the metrics employed and finally,
+present and extensively discuss the experimental evaluation results.
+6.1
+
+Experimental Setup
+
+Data and Query Sets. For the experimental evaluation we used a
+synthetic and two real-world datasets.
+The SNB Dataset. The first dataset we utilized is the LDBC
+Social Network Benchmark (SN B ) [13]. SN B is a synthetic
+benchmark designed to accurately simulate the evolution of a
+social network through time (i.e, vertex and edge sets labels, event
+distribution etc). This evolution is modeled using activities that
+occur inside a social network (i.e. user account creation, friendship
+linking, content creation, user interactions etc). Based on the
+SN B generator we simulated the evolution of a graph consisting
+of user activities over a time period of 2 years. From this dataset
+we derived 3 query loads and configurations: (i) a set with a graph
+size of |GE | = 100K edges and |GV | = 57K vertices, (ii) a
+set with a graph size of |GE | = 1M edges and |GV | = 463K
+vertices, and (iii) a set with a graph size of |GE | = 10M edges
+and |GV | = 3.5M .
+The NYC Dataset. The second dataset we utilized is a real
+world set of taxi rides performed in New York City (T AXI ) in
+2013 [33] utilized in DEBS 2015 Grand Challenge [34]. T AXI
+contains more that 160M entries of taxi rides with information
+about the license, pickup and drop-off location, the trip distance,
+the date and duration of the trip, and the fare. We utilized the
+available data to generate a stream of updates that result in a graph
+of |GE | = 1M edges and |GV | = 280K , accompanied by a set
+of 5K query graph patterns.
+The BioGRID Dataset. The third dataset we utilized is BioGRID [35], a real world dataset that represents protein to protein
+interactions. This dataset is used as a stress test for our algorithms
+since it contains one type of edge (interacts) and vertex (protein),
+and thus every update affects the whole query database. We used
+BioGRID to generate a stream of updates that result in a graph
+size of |GE | = 1M edges and |GV | = 63K vertices, with a set
+of 5K query graph patterns.
+3. https://neo4j.com/docs/cypher-manual/current/syntax/parameters/
+4. https://neo4j.com/docs/cypher-manual/current/introduction/transactions/
+
+Query Set Configuration. In order to construct the set of query
+graph patterns QDB we identified three distinct query classes that
+are typical in the relevant literature: chains, stars, and cycles [20],
+[36]. Each type of query graph pattern was chosen equiprobably
+during the generation of the query set. The baseline values for the
+query set are: (i) an average size l of 5 edges/query graph pattern, a
+value derived from the query workloads presented in SN B [13],
+(ii) a query database |QDB | size of 5K graph patterns, (iii) a
+factor that denotes the percentage of the query set QDB that will
+ultimately be satisfied, denoted as selectivity σ = 25%, and (iv) a
+factor that denotes the percentage of overlap between the queries
+in the set, o = 35%.
+Metrics. In our evaluation, we present and discuss the filtering
+and indexing time of each algorithm, along with the total memory
+requirements.
+Technical Configuration. All algorithms were implemented in
+Java 8 while for the materialization implementation the Stream
+API was employed. The Neo4j-based approach was implemented
+using the embedded version of Neo4j 3.4.7. Extensive experimentation evaluation concluded that a transaction5 can perform
+up to 20K writes in the database without degrading Neo4j’s
+performance, while in order to ensure indexes are cached in main
+memory 55GB of main memory were allocated. A machine with
+Intel(R) Xeon(R) Processor E5-2650 at 2.00GHz , 64GB RAM,
+and Ubuntu Linux 14.04 was used. The time shown in the graphs
+is wall-clock time and the results of each experiment are averaged
+over 10 runs to eliminate fluctuations in measurements.
+6.2
+
+Results for the SNB Dataset
+
+In this section, we present the evaluation for the SN B benchmark
+and highlight the most significant findings.
+Query Answering Time. Fig. 13(a) presents the results regarding
+the query answering time, i.e., the average time in milliseconds
+needed to determine which queries are satisfied by an incoming
+update, against a query set of QDB = 5K . Please notice that the
+y-axis is split due to the high differences in the performance of
+T RI C/T RI C+and its competitors. We observe that the answering
+time increases for all algorithms as the graph size increases.
+Algorithms T RI C/T RI C+ achieve the lowest answering times,
+suggesting better performance. Contrary, the competitors are more
+sensitive in graph size changes, with Algorithm I NV performing
+the worst (highest query answering time). When comparing Algorithm T RI C to I NV, I NC and Neo4j the query answering time is
+improved by 99.15%, 98.14% and 91.86% respectively, while the
+improvement between I NC and I NV is 54.33%. Finally, comparing Algorithm T RI C+ to I NV +, I NC + and Neo4j demonstrates
+a performance improvement of 99.62%, 99.17% and 96.74%
+respectively, while the difference of I NC + and I NV + is 54.6%.
+The results (Fig. 13(a)) suggest that all solutions that implement caching are faster compared to the versions without
+it. In more detail, Algorithms T RI C+/I NV +/I NC + are consistently faster than their non-caching counterparts, by 59.95%,
+9.36% and 9.91% respectively. This is attributed to the fact
+that Algorithms T RI C/I NV/I NC, have to recalculate the probe
+and build structures required for the joining process, in contrast
+to Algorithms T RI C+/I NV +/I NC + that store these structures and
+incrementally update them, thus providing better performance.
+5. https://neo4j.com/docs/cypher-manual/current/introduction/transactions/
+
+10
+Graph size (Vertices x1000)
+16
+
+22
+
+28
+
+33
+
+38
+
+43
+
+48
+
+52
+
+1000
+
+57
+
+T RI C+
+T RI C
+Neo4j
+I NC +
+100 I NC
+I NV +
+I NV
+
+350
+300
+
+2.0
+T RI C
+T RI C+
+
+1.5
+1.0
+0.5
+0.0
+
+10
+
+20
+
+30
+
+40
+
+50
+
+60
+
+70
+
+80
+
+90
+
+100
+
+250
+200
+150
+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+Answering time (msec/update)
+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+Answering time (msec/update)
+
+Answering time (msec/update)
+
+10
+200
+180
+160
+140
+120
+100
+80
+60
+40
+20
+
+100
+50
+20
+3.5
+3.0 T RI C
+2.5 T RI C+
+2.0
+1.5
+1.0
+0.5
+0.0
+10%
+
+10
+
+1
+
+0
+
+15%
+
+Graph size (Edges x1000)
+
+20%
+
+25%
+
+30%
+
+1000
+
+(a) Query answering time for |QDB | = 5K ,
+l = 5, σ = 25%, o = 35% and |GE | = 10K
+to |GE | = 100K .
+
+(c) Query answering time for |GE | = 100K ,
+l = 5, o = 35%, σ = 25%, and |QDB | =
+1K to |QDB | = 5K .
+57
+
+250
+
+2000
+1500
+
+200
+Answering time (msec/update)
+
+Answering time (msec/update)
+
+2500
+
+1000
+500
+15
+6.0
+5.0
+4.0
+3.0
+2.0
+1.0
+0.0
+
+T RI C
+T RI C+
+
+3
+
+5
+
+7
+
+9
+
+150
+100
+
+3.0
+2.5
+2.0
+1.5
+1.0
+0.5
+0.0
+25%
+
+106
+
+149
+
+Graph size (Vertices x1000)
+188
+226
+270
+318
+
+*
+
+T RI C
+T RI C+
+
+1000
+
+367
+
+415
+
+463
+
+800
+
+900
+
+1000
+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+1500
+
+50
+20
+
+**
+
+500
+20
+10
+T RI C
+T RI C+
+
+8
+6
+4
+2
+
+35%
+
+Varying l
+
+(d) Query answering time for |QDB | = 5K ,
+o = 35%, σ = 25%, |GE | = 100K , and
+l = 3 to l = 9.
+
+2000
+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+Answering time (msec/update)
+
+Neo4j
+I NV
+I NV +
+I NC
+I NC +
+
+5000
+
+Varying |QDB |
+
+(b) Query answering time for |QDB | = 5K ,
+l = 5, o = 35%, |GE | = 100K and σ =
+10% to σ = 30%.
+
+3500
+3000
+
+3000
+
+Varying σ
+
+45%
+
+55%
+
+65%
+
+Varying o
+
+(e) Query answering time for |QDB | = 5K ,
+l = 5, σ = 25%, |GE | = 100K , and o =
+25% to o = 65%.
+
+0
+100
+
+200
+
+300
+
+400
+
+500
+
+600
+
+700
+
+Graph size (Edges x1000)
+
+(f) Query answering time for |QDB | = 5K ,
+l = 5, σ = 25%, o = 35% and |GE | =
+100K to |GE | = 1M .
+
+Fig. 13: Results for the SN B dataset.
+
+In Fig. 13(b) we present the results when varying the parameter
+σ , for 10%, 15%, 20%, 25% and 30% of a query set for
+|QDB | = 5K and |GE | = 100K . In this setup the algorithms are
+evaluated for a varying percentage of queries that match. A higher
+number of queries satisfied, increases the number of calculations
+performed by each algorithm. The results show that all algorithms
+behave in a similar manner as previously described. In more detail,
+Algorithm T RI C+ is the most efficient of all, and thus the fastest
+among the extensions that utilize caching, while T RI C is the
+most efficient solution among the solutions that do not employ
+a caching strategy. Finally, the percentage differences, between
+the algorithmic solutions remain the same as before in most cases.
+In Fig. 13(c) we give the results of the experimental evaluation when varying the size of the query database |QDB |.
+More specifically, we present the answering time per triple when
+|QDB | = 1K , 3K and 5K , and |GE | = 100K . Please notice
+the y-axis is in logarithmic scale. The results demonstrate that
+all algorithm’s behavior is aligned with our previous observations. More specifically, Algorithms T RI C+ and T RI C exhibit
+the highest performance (i.e., lowest answering time), throughout
+the increase of |QDB |s, and thus determine faster which queries
+of |QDB | have matched given an update ui . Similarly to the
+previous setups, the competitors have the lowest performance,
+while Algorithms I NC and I NC + perform better compared to I NV
+and I NV +.
+In Fig. 13(d) we give the results of the experimental evaluation
+when varying the average query size l. More specifically, we
+present the answering time per triple when l = 3, 5, 7 and 9
+of a query set for |QDB | = 5K and |GE | = 100K . We observe
+that the answering time increases for all algorithms as the average
+
+query length increases. More specifically, Algorithms T RI C+ and
+T RI C exhibit the highest performance (i.e., lowest answering
+time), throughout the increase of ls, and thus determine faster
+which queries have been satisfied. Similarly to the previous evaluation setups, the Algorithms I NV/I NV +/I NC/I NC +/Neo4j have
+the lowest performance, and increase significantly their answering
+time when l increases, while Algorithms I NC and I NC + perform
+better compared to I NV, I NV + and Neo4j when l = 9.
+In Fig. 13(e) we give the results of the experimental evaluation
+when varying the parameter o, for 25%, 35%, 45%, 55% and
+65% of a query set for |QDB | = 5K and |GE | = 100K . In
+this setup the algorithms are evaluated for varying percentage of
+query overlap. A higher number of query overlap, should decrease
+the number of calculations performed by algorithms designed to
+exploit commonalities among the query set. The results show
+that all algorithm behave in a similar manner as previously
+described, while AlgorithmsI NV/I NV +/I NC/I NC + observe higher
+performance gains. Algorithm T RI C+ is the most efficient of all,
+and thus the fastest among the extensions that utilize caching
+techniques, while T RI C is the most efficient solution among the
+solutions that do not employ caching.
+Fig. 13(f) presents the results regarding the query answering time, for all algorithms when indexing a query set of
+|QDB | = 5K and a final graph size of |GE | = 1M and
+|GV | = 463K . Given the extremely slow performance of some
+algorithms we have set a execution time threshold of 24 hours,
+for all algorithms under evaluation, thus, when the threshold
+was crossed the evaluation was terminated. We again observe
+that the answering time increases for all algorithms as the graph
+size increases. Algorithms T RI C/T RI C+ achieve the lowest an-
+
+11
+Graph size (Vertices x1000)
+463
+
+829
+
+1128
+
+1444
+
+1878
+
+2465
+
+1.00
+2820
+
+3146
+
+I NC +
+I NC
+T RI C+
+T RI C
+
+3531
+
+*
+Indexing time (msec/query)
+
+Answering time (msec/update)
+
+30
+
+2159
+
+25
+*
+20
+T RI C
+Neo4j
+T RI C+
+
+15
+10
+
+I NV +
+I NV
+Neo4j
+
+0.10
+
+0.01
+
+5
+0
+
+0.00
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+1
+
+10
+
+Graph size (Edges x106 )
+
+2
+
+3
+
+4
+
+5
+
+Varying QDB (x1000)
+
+Fig. 14: Query answering time for |QDB | = 5K , l = 5, σ =
+25%, o = 35% and |GE | = 1M to |GE | = 10M .
+
+Fig. 15: Query insertion time for l = 5, σ = 25%, o = 35% and
+|QDB | = 1K to |QDB | = 5K .
+
+swering times, suggesting better performance. Contrary, the Algorithms I NV/I NV +/I NC/I NC + are more sensitive in graph size
+changes and thus fail to terminate within the time threshold. More
+specifically, Algorithms I NV/I NV + time out at |GE | = 210K ,
+while Algorithms I NC/I NC + time out at |GE | = 310K as denoted
+by the asterisks in the plot. When comparing Algorithms T RI C and
+T RI C+ to Neo4j the query answering is improved by 77.01% and
+92.86% respectively.
+Fig. 14 presents the results regarding the query answering
+time, for Algorithms T RI C, T RI C+ and Neo4j when indexing a
+query set of QDB = 5K and a final graph size of |GE | = 10M
+and |GV | = 3.5M . Again, we have set an execution time threshold of 24 hours, for all the algorithms under evaluation. In this
+experimental setup, we observe that the answering time increases
+for all algorithms as the graph size increases. Algorithm T RI C+
+achieves the lowest answering times, suggesting better performance, while Algorithms T RI C and Neo4j fail to terminate within
+the given time threshold. More specifically, Algorithm T RI C times
+out at |GE | = 5.47M , while Algorithm Neo4j times out at
+|GE | = 4.3M as denoted by the asterisks in the plot.
+Overall, Algorithms T RI C+ and T RI C, the two solutions that
+utilize trie structures to capture and index the common structural
+and attribute restrictions of query graphs achieve the lowest query
+answering times, compared to Algorithms I NV/I NV +/I NC/I NC +
+that employ no clustering techniques, as well as when compared with commercial solutions such as Neo4j. Additionally,
+adopting the incremental joining techniques (found in Algorithm T RI C) into Algorithm I NC does not seem to significantly
+improve its performance when compared to Algorithm I NV. In
+the same manner, adopting caching techniques that store the
+data structures generated during the join operations, change significantly the performance of the algorithms applied on, i.e.,
+Algorithms T RI C+/I NV +/I NC +. Taking all the above into consideration, we conclude that the algorithms that utilize trie-based
+indexing are able to achieve low query answering times compared
+to their competitors.
+
+database, additionally as the queries share common restrictions
+less time is required for creating new entries in the data structures
+of algorithms. Additionally, the time required to index a query
+graph pattern in the database does not vary significantly for
+all algorithms. Notice that query indexing time is not a critical
+performance parameter in the proposed paradigm, since the most
+important dimension is query answering time.
+
+Indexing Time. Fig. 15 presents the indexing time in milliseconds
+required to insert 1, 000 query graph patterns when the query
+database size increases. We observe that the time required to go
+from an empty query database to a query database of size 1, 000
+is higher compared to the time required for the next iterations
+of the query database. Please notice the y-axis is in logarithmic
+scale. This can be explained as follows, all algorithms utilize data
+structures that need to be initialized during the initial stages of
+query indexing phase, i.e. when inserting queries in an empty
+
+6.3
+
+Results for the NYC and BioGRID Dataset
+
+In this section, we present the evaluation for the N Y C and
+BioGRID dataset and highlight the most significant findings.
+The N Y C Dataset. Fig. 16(a) presents the results from the evaluation of the algorithms for the N Y C dataset. More specifically,
+we present the results regarding the query answering performance
+of all algorithms when QDB = 5K , l = 5, o = 35%,
+σ = 25% and an execution time threshold of 24 hours. Please
+notice that the y-axis is split due to high differences in the
+performance of the algorithms. Algorithms I NV and I NV + fail to
+terminate within the time threshold and time out at |GE | = 210K
+and |GE | = 300K respectively. Similarly, Algorithms I NC and
+I NC + time out at |GE | = 220K and 360K respectively. When
+comparing Algorithms T RI C and T RI C+ to Neo4j the query answering is improved by 59.68% and 81.76% respectively. These
+results indicate that again an algorithmic solution that exploits and
+indexes together the common parts of query graphs (i.e., Algorithms T RI C/T RI C+) achieves significantly lower query answering time compared to approaches that do not apply any clustering
+techniques (i.e., AlgorithmsI NV/I NV +I NC/I NC +/Neo4j).
+The BioGRID Dataset. Figs. 16(b) and 16(c) present the results
+from the evaluation of the algorithms for the BioGRID dataset.
+In Fig. 16(b) we present the results regarding the query answering
+performance of the algorithms, when QDB = 5K , σ = 25%
+for a final graph size of |GE | = 100K and |GV | = 17.2K .
+Additionally, we set an execution time threshold of 24 hours due
+to the high differences in the performance of the algorithms. The
+BioGRID dataset serves as a stress test for our algorithms, since
+it contains only one type of edge and vertex, thus each incoming
+update will affect (but not necessarily satisfy) the entire query
+database. To this end, Algorithms I NV/I NV +/I NC exceed the time
+threshold and time out at |GE | = 50K , while I NC + times out
+at |GE | = 60K as denoted by the asterisks in the plot. Finally,
+Fig. 16(c) presents the results for the BioGRID dataset for a final
+graph size of |GE | = 1M and |GV | = 63K . We again observe
+that Algorithms T RI C and T RI C+ achieve the lowest answering
+
+12
+121
+
+147
+
+174
+
+202
+
+228
+
+254
+
+280
+
+*
+
+400
+
+500
+
+600
+
+700
+
+6.4
+
+7.6
+
+11.9
+
+15.0
+
+5000
+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+900
+
+1000
+
+16.2
+
+16.5
+
+16.8
+
+17.1
+
+17.2
+
+3000
+2000
+
+27
+
+29
+
+35
+
+44
+
+48
+
+54
+
+58
+
+61
+
+63
+
+100
+T RI C
+T RI C+
+
+800
+
+900
+
+1000
+
+Neo4j
+T RI C
+T RI C+
+
+*
+
+160
+
+1000
+
+14
+12
+10
+8
+6
+4
+2
+0
+
+17
+180
+
+I NV
+* I NV +
+I NC
+I NC +
+Neo4j
+
+*
+*
+*
+
+4000
+
+800
+
+15.7
+
+Graph size (Vertices x1000)
+
+Answering time (msec/update)
+
+44
+70
+96
+800
+700
+*
+*
+600
+500
+400
+*
+300
+200
+100
+25
+12
+10 T RI C+
+8 T RI C
+6
+4
+2
+0
+100
+200
+300
+
+Graph size (Vertices x1000)
+
+Answering time (msec/update)
+
+Answering time (msec/update)
+
+Graph size (Vertices x1000)
+
+140
+120
+100
+80
+60
+40
+20
+
+10
+
+20
+
+30
+
+Graph size (Edges x1000)
+
+40
+
+50
+
+60
+
+70
+
+80
+
+90
+
+100
+
+0
+100
+
+200
+
+300
+
+Graph size (Edges x1000)
+
+400
+
+500
+
+600
+
+700
+
+Graph size (Edges x1000)
+
+(a) Query answering time for QDB = 5K , (b) Query answering time for QDB = 5K ,
+σ = 25% and GE = 100K to 1M .
+σ = 25% and GE = 10K to 100K .
+
+(c) Query answering time for QDB = 5K ,
+σ = 25% and GE = 100K to 1M .
+
+Fig. 16: Results for (a) the T AXI dataset, (b) & (c) the BioGRID dataset.
+TABLE 1: Memory usage for |QDB | = 5K , l = 5, σ = 25%,
+o = 35% and |GE | = 100K .
+Algorithm
+T RI C
+T RI C+
+I NV
+I NV +
+I NC
+I NC +
+Neo4j
+
+SN B
+201MB
+248MB
+205MB
+228MB
+206MB
+228MB
+443MB
+
+Dataset
+NY C
+257MB
+273MB
+273MB
+381MB
+273MB
+378MB
+590MB
+
+BioGRID
+233MB
+262MB
+271MB50K
+301MB50K
+270MB50K
+310MB60K
+314MB
+
+time, while Neo4j exceeds the time threshold and times out at
+|GE | = 550K . As it is demonstrated from the results yielded by
+the evaluation, Algorithms T RI C and T RI C+ are the most efficient
+of all; this is attributed to the fact that both algorithms create
+a combined representation of the query graph patterns that can
+efficiently be utilized during query answering time.
+Comparing Memory Requirements. Table 1 presents the memory requirements of each algorithm, for the SN B , N Y C and
+BioGRID datasets when indexing |QDB = 5K| and a graph
+of |GE | = 100K . We observe, that across all datasets, Algorithms T RI C, I NV and I NC have the lowest main memory
+requirements, while, Algorithms T RI C+, I NV +, I NC + and Neo4j
+exhibit higher memory requirements. The higher memory requirements of algorithms that employ a caching strategy, (i.e.,
+Algorithms T RI C+/I NV +/I NC +) is attributed to the fact that all
+structures calculated during the materialization phase are kept
+in memory for future usage; this results in higher memory requirements compared to algorithms that do not apply this caching
+technique (i.e., Algorithms T RI C/I NV/I NC). Finally, Neo4j is a
+full fledged database management system, thus it occupies more
+memory to support the required specifications.
+
+7
+
+A PPLICATIONS
+
+In this section, we briefly discuss additional application scenarios
+for continuous query evaluation over graph streams.
+Social Networks. Social network graphs emerge naturally from
+the evolving social interactions and activities of the users. Many
+applications such as advertising, recommendation systems, and information discovery can benefit from continuous pattern matching.
+Prompt identification of influential users and active monitoring of
+
+content propagation inside the network could increase the effectiveness in those applications. In such scenarios, applications may
+leverage on sub-graph matching where patterns already observed
+in social networks can be utilized [37], [38], [39]. Finally, realtime reporting of influential users could be achieved through
+monitoring of the dissemination of posts inside the network [40],
+[28].
+Protein Interaction Graphs. Protein-protein interaction (PPI)
+graphs are important data repositories in which proteins are
+represented as vertices and identified interactions between them
+as edges. PPI graphs are typically stored in central repositories
+[35], [6], where they are constantly updated due to new protein
+interaction additions and invalidation of existing interactions.
+Scientists are typically forced to manually query these repositories
+on a regular basis to discover new patterns they are interested
+in, since the existing tools are unable to capture new patterns
+in the evolving graphs. Therefore, there is a clear need for an
+efficient solution that provides the continuous subgraph matching
+functionality over PPI graphs.
+Other Domains. The techniques proposed in this paper can also
+be applied in a wide range of domains such as cybersecurity,
+knowledge graphs, road network monitoring, and co-authorship
+graphs. In cybersecurity, subgraph pattern matching could be
+applied to monitor the network traffic and capture denial of
+service and exfiltration attacks [41]. In road network monitoring,
+subgraph pattern matching could be applied to capture traffic
+congestion events, and taxi route pricing [33]. In the domain
+of co-authorship graphs, users may utilize the continuous query
+evaluation algorithms in services similar to Google Scholar Alerts,
+when requesting to be notified about newly published content, by
+making use of appropriate graphical user interface tools.
+
+8
+
+C ONCLUSIONS AND O UTLOOK
+
+In this work, we proposed a new paradigm to efficiently capture
+the evolving nature of graphs through query graph patterns. We
+proposed a novel method that indexes and continuously evaluates queries over graph streams, by leveraging on the shared
+restrictions present in query sets. We evaluated our solution
+using three different datasets from social networks, transportation
+and biological interactions domains, and demonstrated that our
+approach is up to two orders of magnitude faster when compared
+to typical join-and-explore inverted index solutions, and the wellestablished graph database Neo4j. We plan on extending our
+
+13
+
+methods to support graph deletions and increase expressiveness
+through query classes that aim at clustering coefficient, shortest
+path, and betweenness centrality.
+
+ACKNOWLEDGMENTS
+This research was partially funded by the Danish Council for
+Independent Research (DFF) under grant agreement No. DFF4093-00301.
+
+R EFERENCES
+[1]
+[2]
+[3]
+[4]
+[5]
+[6]
+[7]
+[8]
+[9]
+[10]
+[11]
+[12]
+[13]
+[14]
+[15]
+[16]
+[17]
+[18]
+[19]
+[20]
+[21]
+[22]
+[23]
+[24]
+[25]
+[26]
+[27]
+[28]
+[29]
+[30]
+[31]
+
+Y. Boshmaf, I. Muslukhov, K. Beznosov, and M. Ripeanu, “The socialbot
+network: when bots socialize for fame and money,” in ACSAC, 2011.
+A. H. Wang, “Don’t follow me - spam detection in twitter,” in SECRYPT,
+2010.
+C. Song, T. Ge, C. X. Chen, and J. Wang, “Event pattern matching over
+graph streams,” PVLDB, 2014.
+D. Williams, “Detecting Fake News with Neo4j & KeyLines,” 2017.
+[Online]. Available: https://bit.ly/2HSbhgM
+I. Xenarios, L. Salwnski, X. Duan, P. Higney, S. Kim, and D. Eisenberg,
+“DIP, the Database of Interacting Proteins: a research tool for studying
+cellular networks of protein interactions,” NAR, 2002.
+The UniProt Consortium, “UniProt: the universal protein knowledgebase,” NAR, 2017.
+D. Barbieri, D. Braga, S. Ceri, E. Valle, and M. Grossniklaus, “CSPARQL: A Continuous Query Language for RDF Data Streams,” IJSC,
+2010.
+“Reasoning on RDF streams,” 2013. [Online]. Available: http:
+//streamreasoning.org/publications
+D. Shasha, J. Wang, and R. Giugno, “Algorithmics and Applications of
+Tree and Graph Searching,” in PODS, 2002.
+H. He and A. Singh, “Closure-Tree: An Index Structure for Graph
+Queries,” in ICDE, 2006.
+Z. Sun, H. Wang, H. Wang, B. Shao, and J. Li, “Efficient Subgraph
+Matching on Billion Node Graphs,” PVLDB, 2012.
+R. Diestel, “Graph Theory,” GTM, 2005.
+O. Erling, A. Averbuch, J. Larriba-Pey, H. Chafi, A. Gubichev, A. PratPérez, M. Pham, and P. A. Boncz, “The LDBC Social Network Benchmark: Interactive Workload,” in ACM SIGMOD, 2015.
+J. Webber, “A programmatic introduction to Neo4j,” in SPLASH, 2012.
+W. Han, J. Lee, and J. Lee, “Turboiso : towards ultrafast and robust subgraph isomorphism search in large graph databases,” in ACM SIGMOD,
+2013.
+X. Ren and J. Wang, “Exploiting vertex relationships in speeding up
+subgraph isomorphism over large graphs,” VLDB, 2015.
+——, “Multi-query optimization for subgraph isomorphism search,”
+PVLDB, 2016.
+C. Wang and L. Chen, “Continuous Subgraph Pattern Search over Graph
+Streams,” in ICDE, 2009.
+L. Chen and C. Wang, “Continuous Subgraph Pattern Search over Certain
+and Uncertain Graph Streams,” IEEE TKDE, 2010.
+S. Gillani, G. Picard, and F. Laforest, “Continuous graph pattern matching over knowledge graph streams,” in ACM DEBS, 2016.
+M. Petrovic, H. Liu, and H.-A. Jacobsen, “G-ToPSS - fast filtering of
+graph-based metadata,” in WWW, 2005.
+J. Wang, B. Jin, and J. Li, “An Ontology-Based Publish/Subscribe
+System,” in Middleware, 2004.
+C. Canas, E. Pacheco, B. Kemme, J. Kienzle, and H.-A. Jacobsen,
+“GraPS: A Graph Publish/Subscribe Middleware,” in Middleware, 2015.
+S. Pan and X. Zhu, “CGStream: continuous correlated graph query for
+data streams,” in CIKM, 2012.
+——, “Continuous top-k Query for Graph Streams,” in CIKM, 2012.
+J. Gao, C. Zhou, and J. X. Yu, “Toward continuous pattern detection over
+evolving large graph with snapshot isolation,” VLDB Journal, 2016.
+S. Choudhury, L. Holder, A. Ray, G. C. Jr., and J. Feo, “Continuous
+Queries for Multi-Relational Graphs,” CoRR, 2012.
+S. Choudhury, L. B. Holder, G. C. Jr., K. Agarwal, and J. Feo, “A
+Selectivity based approach to Continuous Pattern Detection in Streaming
+Graphs,” in EDBT, 2015.
+T. H. Cormen, C. E. Leiserson, R. L. Rivest, and C. Stein, Introduction
+to Algorithms. MIT Press, 2009.
+P. Ammann and J. Offutt, Introduction to software testing. Cambridge
+University Press, 2008.
+S. C. Ntafos and S. L. Hakimi, “On Path Cover Problems in Digraphs
+and Applications to Program Testing,” IEEE TSE, 1979.
+
+[32] A. Gupta, I. S. Mumick, and V. S. Subrahmanian, “Maintaining Views
+Incrementally,” in ACM SIGMOD, 1993.
+[33] C. Whong, “FOILing NYC’s Taxi Trip Data,” 2014. [Online]. Available:
+https://chriswhong.com/open-data/foil nyc taxi/
+[34] Z. Jerzak and H. Ziekow, “The DEBS 2015 grand challenge,” in ACM
+DEBS, 2015.
+[35] C. Stark, B.-J. Breitkreutz, T. Reguly, L. Boucher, A. Breitkreutz, and
+M. Tyers, “BioGRID: a general repository for interaction datasets,”
+Oxford Academic NAR, 2006.
+[36] J. Mondal and A. Deshpande, “CASQD: continuous detection of activitybased subgraph pattern queries on dynamic graphs,” in ACM DEBS,
+2016.
+[37] J. Leskovec, A. Singh, and J. M. Kleinberg, “Patterns of Influence in a
+Recommendation Network,” in PAKDD, 2006.
+[38] J. Leskovec, L. A. Adamic, and B. A. Huberman, “The dynamics of viral
+marketing,” ACM TWEB, 2007.
+[39] C. Zang, P. Cui, C. Song, C. Faloutsos, and W. Zhu, “Structural patterns of information cascades and their implications for dynamics and
+semantics,” CoRR, 2017.
+[40] M. Cha, H. Haddadi, F. Benevenuto, and P. K. Gummadi, “Measuring
+User Influence in Twitter: The Million Follower Fallacy,” in ICWSM,
+2010.
+[41] C. Joslyn, S. Choudhury, D. Haglin, B. Howe, B. Nickless, and B. Olsen,
+“Massive scale cyber traffic analysis: a driver for graph database research,” in GRADES SIGMOD/PODS, 2013.
+
+

@@ -1,0 +1,606 @@
+Multi-Preference Actor Critic
+
+arXiv:1904.03295v1 [cs.LG] 5 Apr 2019
+
+Ishan Durugkar ∗
+Department of Computer Science
+University of Texas at Austin
+Austin, TX 78712, USA
+ishand@cs.utexas.edu
+Matthew Hausknecht, Adith Swaminathan & Patrick MacAlpine
+Microsoft Research
+Redmond, WA
+{matthew.hausknecht, adswamin, Patrick.MacAlpine}@microsoft.com
+
+Abstract
+Policy gradient algorithms typically combine discounted future rewards with an
+estimated value function, to compute the direction and magnitude of parameter
+updates. However, for most Reinforcement Learning tasks, humans can provide
+additional insight to constrain the policy learning. We introduce a general method
+to incorporate multiple different feedback channels into a single policy gradient
+loss. In our formulation, the Multi-Preference Actor Critic (M-PAC), these different types of feedback are implemented as constraints on the policy. We use
+a Lagrangian relaxation to satisfy these constraints using gradient descent while
+learning a policy that maximizes rewards. Experiments in Atari and Pendulum
+verify that constraints are being respected and can accelerate the learning process.
+
+1
+
+Introduction
+
+We examine how to incorporate human preferences into policy gradient reinforcement learning
+algorithms to achieve higher performance in fewer environment interactions. Many existing papers
+have studied how human preferences can be incorporated into reinforcement learning: Human expert
+demonstrations, one of the more direct expressions of human preference, have been incorporated
+through a behavior-cloning pre-training phase or by mixing demonstrations with episodic experiences
+during updates [8, 15, 21]. When an expert is available to provide on-policy feedback, methods
+such as Dagger [17] and Aggrevate [16] query the expert to gain access to on-policy demonstrations,
+reducing the problem of covariate shift. Inverse Reinforcement Learning (IRL) attempts to use
+demonstrations to infer the demonstrator’s reward function [1, 22, 9, 5]. IRL methods are particularly
+useful in tasks in which there are no explicit rewards and only expert demonstrations are available.
+In certain domains, it is difficult for humans to provide direct demonstrations. Therefore a number
+of alternate ways of specifying human preferences have been explored: The TAMER framework
+[12] uses human feedback as an estimate of the value function. [13] show that positive and negative
+feedback signals provided by humans during the course of an episode can be used to learn advantages
+over actions. [4] show that it is possible to learn complex behavior in environments using only a
+reward function inferred from asking humans to repeatedly choose between two potential policies.
+Other human preferences are encoded as a part of the agent’s loss function. For example, maximumentropy reinforcement learning [22, 7] reflects the intuition that a policy should exhibit as much
+randomness as possible while maximizing rewards. This preference for greater entropy is expressed as
+∗
+
+while at Microsoft Research
+
+Preprint. Work in progress.
+
+a regularization term applied to the agent’s objective function. Similarly, trust region methods [18, 19]
+enforce the human preference that the learning agent’s policy should not change drastically between
+updates.
+Motivated by the variety of human preferences and feedback modalities, we construct a unifying
+architecture for learning from diverse human preferences. Multi-Preference Actor Critic (M-PAC)
+uses a single-actor network paired with multiple critic networks, where each source of preference
+feedback is encoded by a different critic. We formulate a constrained optimization problem in which
+each critic represents a soft constraint applied to the actor’s policy, enforcing the corresponding
+human preference. This formulation allows us to use a Langrangian relaxation to automatically and
+dynamically learn the relative weighting of each preference. For example, in the early stages of the
+learning process, the agent may place strong emphasis on the critic encouraging similarity to human
+demonstrations, but later in the learning process, switch emphasis to ensure safe policy updates.
+We conduct experiments combining four types of human preferences: entropy regularization, safe
+policy updates, behavior cloning, and GAIL. Our experiments demonstrate that incorporating these
+preferences as critics in a constrained optimization framework allows faster learning and higher
+eventual performance. Furthermore, using this framework it is possible to incorporate other forms of
+human feedback in a straightforward manner.
+
+2
+
+Background
+
+In this paper, we look at the setting of a Markov Decision Process hS, A, r, P, µ, γi defined by a set
+of states S, a set of actions A, a reward function r(s, a, s0 ) and transition probabilities P(s, a, s0 ) =
+Pr(st+1 = s0 |st = s, at = a), where s, s0 ∈ S and a ∈ A. µ is the initial state distribution of the
+MDP and 0 < γ < 1 is the discount factor.
+A policy π(a|s) maps states to a probability distribution over actions. The discounted value of starting
+in a particular state at time t and then following policy π is given by
+"∞
+#
+X
+t
+Vπ (s) : = Eπ
+γ r(st , at , st+1 )|s0 = s
+(1)
+t=0
+
+The advantage of taking an action at in state st can be considered as the additional value that the
+agent would get if it took action at and then followed policy π from state st+1 over just following
+policy π in state st .
+Aπ (st , at ) : = r(st , at , st+1 ) + γVπ (st+1 ) − Vπ (st )
+
+(2)
+
+The aim of training a reinforcement learning agent is to find a policy that can maximize the agent’s
+value over all states.
+π ∗ : = arg max Es∼µ Vπ (s)
+
+(3)
+
+π
+
+This search can be done using gradient descent by minimizing the loss L = Eπ − Aπ (s, a). Since
+Aπ (s, a) cannot be directly optimized in closed form, we typically use the policy gradient trick
+whereby the policy gradient is ∇θ L = −Eπθ Aπθ (s, a) log πθ (a|s). In practice, the Advantage Actor
+Critic method also adds an entropy term (H) to the loss, to prevent early convergence to a sub-optimal
+policy.
+L = Eπθ [−Aπθ (s, a) − βH(πθ (a|s, θ)]
+
+3
+
+(4)
+
+Multi-Preference Actor Critic
+
+Consider K possible preferences. We define preference ck (π) as a function mapping inputs π to
+R+ . This preference metric measures the amount by which the preference is violated, and is 0 if the
+preference is perfectly satisfied. As a concrete example, consider a preference on agent behavior
+expressed through demonstrations (s1 , a1 , s2 , a2 , . . . ). We can do behavior cloning to learn a policy
+πbc using this demonstration data. A preference ck (π) can then simply be the KL-divergence between
+2
+
+π and πbc : ck (π) = Eπ log π(s, a) − log πbc (s, a). All the preferences we study in this paper can be
+viewed as expectations over samples drawn from π. As shorthand, we express these preferences as
+ck (π) = Eπ dk (π, s, a); in the example above, dk (π, s, a) = log π(s, a) − log πbc (s, a).
+When we consider incorporating the above preferences into our policy search, observe that each ck
+can be naturally interpreted as a critic in actor-critic architectures. So, one possibility is to add the
+preferences as additional costs incurred by the policy. The different preferences can then be folded
+into a single reward function by weighting each cost with a hyper-parameter.
+
+"
+
+#
+
+L = Eπ −Aπ (s, a) +
+
+X
+
+λk dk (π, s, a))
+
+(5)
+
+k
+
+This is the approach we see in [11, 6, 8, 15]. It can be difficult to find the right hyperparameter
+values to weigh these preferences against each other. Moreover, the relative usefulness of individual
+preferences might change as the agent’s proficiency increases.
+A technique to incorporate varied preferences into the policy learning procedure that can weigh
+preferences in a principled manner is required. Consider instead a policy search procedure that is
+done only in the space of policies that satisfy the preferences. This leads to a constrained formulation
+of Equation 3.
+Consider again the preference metric ck (π). We can specify how much the policy can stray from this
+preference by setting a threshold lk . The search for the optimal policy can then be written as
+
+π ∗ : = arg max Es∼µ Vπ (s)
+π
+"
+#
+X
+s.t. ∀k Es∼µ
+dk (π, s, a) ≤ lk
+
+(6)
+(7)
+
+a
+
+If our preferences are sufficiently diverse, the set of policies that satisfies the above constraints will be
+much smaller than the set of all policies we were searching over when we had only the environmental
+returns to guide us.
+We can now turn to Lagrangian relaxation of these constraints so that they are no longer hard
+constraints and furthermore, we can use policy gradient to find a feasible policy. If the agent policy
+is a function with parameters θ, Lagrangian relaxation with parameters λk ∈ R+ on the constraints
+leads to the following saddle point problem.
+
+"
+
+#
+
+min max Eπθ −Aπθ (s, a) +
+θ
+
+λ
+
+X
+
+λk (dk (πθ , s, a) − lk ) .
+
+(8)
+
+k
+
+When we use policy gradients or any other stochastic gradient method to optimize this saddle point
+formulation, the λk weight is increased if the preference is violated beyond our threshold. It decreases
+to 0 if the preference metric stays within that threshold. Policy gradient simultaneously updates
+θ to minimize the joint objective. Equation 8 looks remarkably like Equation 5, but also offers a
+principled way to adjust the weighting on the preferences.
+
+4
+
+Examples of Preferences
+
+We now consider how the preferences that we discussed in Section ?? can be incorporated in the
+M-PAC framework we set up in Section 3. To incorporate preferences we convert a preference
+into the form of a function that maps π, s, a to R+ . We show below that this conversion is fairly
+straightforward for all the preferences we have considered.
+3
+
+4.0.1
+
+Entropy
+
+A high entropy policy is a common preference that is usually enforced as a regularization by means of
+a surrogate loss [14, 7]. Such an entropy loss ensures exploration and prevents premature convergence
+to a locally optimal policy.
+However, the gradient of this loss acts on the policy even when it is nowhere close to being deterministic. We can instead present a high entropy policy as a preference, and define the entropy preference
+dentropy (π, s) as
+
+dentropy (πθ , s) = KL(πθ (s)||q)
+1
+∀a ∈ A : q(a) =
+kAk
+4.0.2
+
+(9)
+(10)
+
+Conservative Updates
+
+Conservative Policy Iteration [10], TRPO [18] and PPO [19] have shown ensuring updates to the
+policy do not cause a large divergence from the current policy helps to ensure that the policy
+performance does not change too drastically.
+Instead of constraining the update, however, we introduce a preference of staying close to a previous
+policy. Let θ0 be the parameters of this older policy. The conservative policy preference is given by
+
+dconserve (πθ , s) = KL(πθ (s)||πθ0 (s))
+
+(11)
+
+We update the previous policy by moving its parameters slowly closer to the training policy.
+θ0 ← ηθ + (1 − η)θ0
+4.0.3
+
+(12)
+
+Reference Policy
+
+Suppose we have access to a reference policy πref that we believe does fairly well. This reference
+policy might have been learned by Behavior Cloning, from observations [20] or the output of a
+scripted agent. We can add a preference that our agent’s policy tries to follow this policy. Similar to
+the ones above, this preference can also be modeled as a divergence measure.
+
+dref erence (πθ , s) = KL(πθ (s)||πref (s))
+
+(13)
+
+In our experiments we learn this reference policy by behavior cloning from demonstrations. These
+demonstrations are typically provided by a human or a trained agent.
+4.0.4
+
+Inverse RL
+
+When the preference we want to model can be expressed as a policy, modeling it as the divergence of
+the learned policy from this preferred policy is natural. However, preferences can be more expressive
+than that, and can be expressed as a cost-to-go function.
+Expert demonstrations can also be used to infer a reward function, which can then be used to
+compute the advantages used in policy gradient Reinforcement Learning [9, 1]. As an example of
+the expressiveness of our preference measure, we consider Inverse RL via GAIL [9]. GAIL uses
+transitions from an expert policy in the environment along with an agent’s transitions from its current
+policy to generate an adversarial reward function rgail (s, a).
+This reward can then be used as any reward in reinforcement learning to learn a policy that mimics
+the expert. We learn a value function Vgail (s) and use it to calculate the advantage Agail (s, a) of
+taking an action. The GAIL preference is then defined as
+dgail (πθ , s, a) = − log π(a|s, θ)Agail (s, a)
+4
+
+(14)
+
+5
+
+Experiments
+
+Our experiments seek to answer the following questions:
+• Does M-PAC respect the constraints imposed by the preferences while maximizing reward?
+• How much impact do different preferences have on the learning process, and at what times in
+learning are certain preferences preferred over others?
+• Do domain specific preferences such as GAIL and Reference Policies accelerate the learning?
+We instantiated M-PAC using Advantage Actor Critic (A2C) as the base policy gradient learning
+algorithm upon which the preferences in Section 4 were incorporated. To show that M-PAC is
+capable of incorporating various types of preferences, Section 5.1 compares M-PAC and A2C on
+the Pendulum domain. An ablation analysis is also performed to analyze the effect of the different
+preferences in this domain.
+Next, Section 5.2 examines the effects of incorporating human demonstrations using the Behavioral
+Cloning and GAIL preferences on the Ms. Pac-man domain. Finally, Section 5.3 evaluates M-PAC on
+multiple Atari games without demonstrations using the entropy and conservative update preferences.
+Experimental details and hyper-parameters are included in Appendix B.
+5.1
+
+Pendulum
+
+To understand how each preference contributes to overall performance, we focus on the Pendulum
+environment from OpenAI gym. Refer to Figure 1 for the results.
+We save demonstrations by running a pre-trained policy trained using A2C that gets an average score
+of −195. We run this policy in the environment to get 10000 demonstrations. These demonstrations
+are then used for behavior cloning and for learning the GAIL reward. Both the A2C and M-PAC
+policies are learned through a multi-layer perceptron with 2 layers of 512 units each. We evaluate the
+agent every 1000 iterations by evaluating its score on 10 episodes. Figures are plotted by taking an
+average of 10 independent runs with separate seeds.
+From Figure 1a, we can see that with enough data, both GAIL and Behavior Cloning can provide
+enough guidance for the agent to explore and reach the optimal behavior faster than A2C. Learning
+from a reference policy directly is very beneficial initially, while GAIL provides a more indirect
+exploration signal due to its adversarial learning procedure.
+To compare the benefits of the preferences for conservative updates and a high entropy policy, we
+consider Figure 1b. Both these preferences individually and in tandem help the policy learn faster
+than A2C. This is interesting because A2C includes entropy regularization already.
+Another important aspect of M-PAC is the λ parameters and how they change with respect to violated
+constraints. Figure 2 compares the λ parameters for the different preferences considered. Here we see
+that the λ associated with behavior cloned reference policy preference (BC) and conservative update
+preference (conserve) shoots up to a value where it can control these values according to the threshold
+we set. λ associated with the GAIL advantages keeps climbing steadily as the advantages keep
+providing signal to the policy, and is eventually weighted more than the behavior cloned reference
+policy. In all this while, the policy entropy does not stray far enough away from a high entropy
+reference to cause its λ to increase from 0.
+5.2
+
+Using Human Demonstrations
+
+One of the most widely used human feedback mechanisms is learning from demonstrations. This
+experiment seeks to measure the effectiveness of human demonstrations incorporated into M-PAC’s
+policy gradient update using the Behavioral Cloning and GAIL preferences.
+We collected six episodes of demonstration from a single non-expert play-tester for the Ms. Pac-Man
+game. M-PAC uses these demonstrations in two ways: First they are used to estimate the human’s
+policy via supervised learning, and constrain the learned policy to stay close to the human’s policy.
+Second, the demonstrations are used to train the GAIL preference’s discriminator to discern between
+M-PAC and human trajectories.
+5
+
+(a) Demonstrations
+
+(b) No Demonstrations
+
+Figure 1: Pendulum ablation studies remove one preference of M-PAC at a time and compare to
+A2C to assess the relative importance of each preference. In Figure 1a, we utilize demonstrations
+provided by a policy learned by A2C to learn the reference policy and GAIL reward. In Figure 1b
+we compare the performance when no demonstrations are available. We see that both entropy and
+conservative update preferences help to guide learning compared to vanilla A2C.
+
+Figure 2: Change of λ values over time for different preferences in Pendulum. Behavior cloning is
+heavily used near the beginning of learning while GAIL is increasingly employed during later stages
+of policy refinement. Conservative updates are used throughout, while entropy isn’t needed.
+
+Figure 3 compares the performance of M-PAC using the high entropy and conservative update
+preferences (no demonstrations) to M-PAC with demonstrations additionally using the Behaviorcloning and GAIL preferences. Comparisons are done across 10 independent runs of each method.
+As expected, M-PAC derives clear benefits from preferences that use demonstrations in the form of
+accelerated policy learning.
+5.3
+
+Without Demonstrations
+
+In order to assess the general applicability of M-PAC, we perform a rough parameter sweep on seven
+well-known Atari games with no demonstrations. For these experiments M-PAC uses the entropy
+and conservative updates preferences which do not require additional human feedback. We choose
+to compare M-PAC to A2C and PPO baselines because the entropy preference can be considered a
+replacement for the entropy regularization used in A2C, while the conservative update preference is
+similar in effect to the trust-region updates in PPO.
+Each algorithm is trained over 10 million steps (40 million in game frames) across 16 parallel training
+environments, and PPO results are considered as reported in [19]. They are each run 10 times
+independently with different seeds. Preliminary results in Table 1 and learning curves in Appendix A
+show that M-PAC is competitive with PPO and A2C across a variety of games.
+6
+
+Figure 3: Benefit of demonstrations: M-PAC performance on Ms. Pac-Man with and without
+access to human demonstrations.
+Game
+
+A2C
+
+PPO
+
+M-PAC
+
+MsPacman
+BeamRider
+Breakout
+Pong
+Seaquest
+SpaceInvaders
+Qbert
+
+1686.1
+3031.7
+303.0
+19.7
+1714.3
+744.5
+5879.25
+
+2096.5
+1590.0
+274.8
+20.7
+1204.5
+942.5
+14293.3
+
+2495.22
+3157.36
+326.675
+20.41
+908.33
+600
+3769.37
+
+Table 1: Comparison on ALE Using only conservative updates and entropy regularization, M-PAC outperforms
+A2C and PPO on three games, ties on one, and performs worse on three.
+
+6
+
+Discussion
+
+Motivated by the diversity and effectiveness of human feedback, we present an algorithm for incorporating multiple human preferences to guide an agent’s search for a high-performing policy. To
+implement this idea we formalize preferences as constraints on the policy, which can be softened by
+Lagrangian relaxation to allow policy gradient. This Lagrangian relaxation also allows the policy to
+stray away from the preferred policies if its value function indicates better returns.
+We examined four different preferences in the M-PAC framework and experimentally evaluated it on
+Pendulum and Atari environments, and validated that access to even non-expert human demonstrations
+helps accelerate the search for high-quality policies.
+One possible downside of the M-PAC framework is the inability to find an optimal policy if the
+preferences don’t contain the optimal policy in or near their constraint set. This might happen if the
+preferences contradict each other, or if the preferences are not good indicators of optimal behaviors.
+Alternatively, if the constraints are set too tight, the lambda values might grow prohibitively and take
+over as the main component of the loss signal. We occasionally observed this phenomenon when
+using human demonstrations on Atari games.
+In future work we seek to consider environment-specific preferences, which can provide very strong
+signals for learning a proficient policy. Humans quickly understand the interactions in games and
+could encode this knowledge as preferences. For example, to avoid specific entities such as ghosts in
+Ms. Pac-Man. Beyond the exploration in this paper, it is our hope that M-PAC provides an extensible
+framework for incorporating novel forms of human feedback that may arise in future work.
+7
+
+References
+[1] Pieter Abbeel and Andrew Y. Ng. Apprenticeship learning via inverse reinforcement learning.
+In Proceedings of the Twenty-first International Conference on Machine Learning, 2004.
+[2] Marc G Bellemare, Yavar Naddaf, Joel Veness, and Michael Bowling. The arcade learning
+environment: An evaluation platform for general agents. 2013.
+[3] Greg Brockman, Vicki Cheung, Ludwig Pettersson, Jonas Schneider, John Schulman, Jie Tang,
+and Wojciech Zaremba. Openai gym. arXiv preprint arXiv:1606.01540, 2016.
+[4] Paul F Christiano, Jan Leike, Tom Brown, Miljan Martic, Shane Legg, and Dario Amodei. Deep
+reinforcement learning from human preferences. In Advances in Neural Information Processing
+Systems, pages 4299–4307, 2017.
+[5] Chelsea Finn, Sergey Levine, and Pieter Abbeel. Guided cost learning: Deep inverse optimal
+control via policy optimization. In ICML, volume 48 of JMLR Workshop and Conference
+Proceedings, pages 49–58. JMLR.org, 2016.
+[6] Yang Gao, Ji Lin, Fisher Yu, Sergey Levine, Trevor Darrell, et al. Reinforcement learning from
+imperfect demonstrations. arXiv preprint arXiv:1802.05313, 2018.
+[7] Tuomas Haarnoja, Haoran Tang, Pieter Abbeel, and Sergey Levine. Reinforcement learning
+with deep energy-based policies. In Proceedings of the Thirty-Fourth International Conference
+on Machine Learning, 2017.
+[8] Todd Hester, Matej Vecerik, Olivier Pietquin, Marc Lanctot, Tom Schaul, Bilal Piot, Dan
+Horgan, John Quan, Andrew Sendonaris, Ian Osband, Gabriel Dulac-Arnold, John Agapiou,
+Joel Z Leibo, and Audrunas Gruslys. Deep q-learning from demonstrations. In Annual Meeting
+of the Association for the Advancement of Artificial Intelligence (AAAI), 2018.
+[9] Jonathan Ho and Stefano Ermon. Generative adversarial imitation learning. In Advances in
+Neural Information Processing Systems 29, pages 4565–4573. 2016.
+[10] Sham Kakade and John Langford. Approximately optimal approximate reinforcement learning.
+In ICML, volume 2, pages 267–274, 2002.
+[11] Bingyi Kang, Zequn Jie, and Jiashi Feng. Policy optimization with demonstrations. In
+International Conference on Machine Learning, pages 2474–2483, 2018.
+[12] W. Bradley Knox and Peter Stone. Interactively shaping agents via human reinforcement: The
+TAMER framework. In The Fifth International Conference on Knowledge Capture, September
+2009.
+[13] James MacGlashan, Mark K. Ho, Robert Loftin, Bei Peng, Guan Wang, David L. Roberts,
+Matthew E. Taylor, and Michael L. Littman. Interactive learning from policy-dependent human
+feedback. In Proceedings of the 34th International Conference on Machine Learning, volume 70,
+pages 2285–2294, 2017.
+[14] Volodymyr Mnih, Adria Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy Lillicrap, Tim Harley, David Silver, and Koray Kavukcuoglu. Asynchronous methods for deep
+reinforcement learning. In International conference on machine learning, pages 1928–1937,
+2016.
+[15] Ashvin Nair, Bob McGrew, Marcin Andrychowicz, Wojciech Zaremba, and Pieter Abbeel.
+Overcoming exploration in reinforcement learning with demonstrations. arXiv preprint
+arXiv:1709.10089, 2017.
+[16] Stéphane Ross and J. Andrew Bagnell. Reinforcement and imitation learning via interactive
+no-regret learning. CoRR, abs/1406.5979, 2014.
+[17] Stéphane Ross, Geoffrey J. Gordon, and Drew Bagnell. A reduction of imitation learning and
+structured prediction to no-regret online learning. In AISTATS, volume 15 of JMLR Proceedings,
+pages 627–635, 2011.
+8
+
+[18] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region
+policy optimization. In Proceedings of the 32nd International Conference on Machine Learning
+(ICML-15), pages 1889–1897, 2015.
+[19] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal
+policy optimization algorithms. arXiv preprint arXiv:1707.06347, 2017.
+[20] Faraz Torabi, Garrett Warnell, and Peter Stone. Behavioral cloning from observation. In
+Proceedings of the 27th International Joint Conference on Artificial Intelligence (IJCAI), July
+2018.
+[21] Matej Vecerik, Todd Hester, Jonathan Scholz, Fumin Wang, Olivier Pietquin, Bilal Piot, Nicolas
+Heess, Thomas Rothörl, Thomas Lampe, and Martin A. Riedmiller. Leveraging demonstrations for deep reinforcement learning on robotics problems with sparse rewards. CoRR,
+abs/1707.08817, 2017.
+[22] Brian D. Ziebart, Andrew Maas, J. Andrew Bagnell, and Anind K. Dey. Maximum entropy
+inverse reinforcement learning. In Proceedings of the 23rd National Conference on Artificial
+Intelligence - Volume 3, AAAI’08, pages 1433–1438. AAAI Press, 2008.
+
+9
+
+Appendices
+A
+
+ALE Learning Curves
+
+(a) Beamrider
+
+(b) Space Invaders
+
+(c) Ms. Pacman
+
+(d) Seaquest
+
+(e) Qbert
+
+(f) Pong
+
+(g) Breakout
+
+Figure 4: Runs on ALE comparing M-PAC with A2C. M-PAC uses the High Entropy and Conservative
+update preferences.
+
+B
+
+Experiment Details
+
+Atari experiments are conducted in several well-studied games in the Atari Learning Environment [2]
+using the OpenAI Gym [3] environment wrapper. Experiments are conducted using the Tensorflow
+library version 1.10. Diversity was ensured by seeding each run with a different seed. Every method
+10
+
+was run 10 times with seeds set from 0 to 9. This seed was used to set the random seed for tensorflow,
+numpy and the test environment using the Gym wrapper. The seed was also used as a multiplier in
+setting a seed for the parallel training environments. After each epoch, the current policy is evaluated
+on the test environment.
+B.1
+
+Acrobot
+
+Network: Multi-layer perceptron with 2 hidden layers, 512 units each, ReLU activations
+Training and Reference policy for Behavior Cloning are separate with identical architectures. Behavior
+Cloning network includes dropout layers with dropout rate 20%
+Policy Learning rate: 10−4
+Policy Optimizer: ADAM
+A2C entropy factor: 0.1
+Lagrangian Learning rate: 10−4
+Policy Optimizer: Gradient Descent
+Entropy threshold: 2.
+Conservative Update Threshold: 0.03
+GAIL Threshold: 0.1
+Behavior Cloning Threshold: 0.1
+Number of parallel envs: 8
+Epoch: 1000 steps
+Number of epochs: 100
+evaluation episodes: 10
+All the lagrangian parameters are initialized at 0.
+Experiments were conducted on a CPU
+B.2
+
+ALE
+
+Network: A2C network
+•
+•
+•
+•
+
+Convolutional layer 1:
+Convolutional layer 2:
+Convolutional layer 1:
+Fully connected layer:
+
+32 filters, size 8, stride 4
+64 filters, size 4, stride 2
+64 filters, size 3, stride 1
+512 units
+
+Training and Behavior Cloned Reference policy share the features of this fully connected hidden
+layer. Behavior cloning additionally applies dropout of 20% on top of these features.
+Policy Learning rate: 7 × 10−4
+Policy Optimizer: ADAM
+A2C entropy factor: 0.01
+Lagrangian Learning rate: 10−4
+Policy Optimizer: Gradient Descent
+Entropy threshold: 1.5
+Conservative Update Threshold: 0.03
+GAIL Threshold: 0.1
+Behavior Cloning Threshold: 0.1
+Number of parallel envs: 16
+Epoch: 6250 steps
+Number of epochs: 100
+evaluation episodes: 20
+All the lagrangian parameters are initialized at 0
+Experiments were conducted on a Nvidia K40 GPUs.
+
+11
+
+

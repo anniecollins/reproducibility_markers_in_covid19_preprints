@@ -1,0 +1,2369 @@
+Massively Multilingual Neural Machine Translation
+in the Wild: Findings and Challenges
+Naveen Arivazhagan ∗
+
+Ankur Bapna ∗
+
+Orhan Firat ∗
+
+Dmitry Lepikhin
+
+Melvin Johnson
+
+Maxim Krikun
+
+Mia Xu Chen
+
+Yuan Cao
+
+George Foster
+
+Colin Cherry
+
+Wolfgang Macherey
+
+Zhifeng Chen
+
+Yonghui Wu
+
+Google AI
+
+arXiv:1907.05019v1 [cs.CL] 11 Jul 2019
+
+Abstract
+We introduce our efforts towards building a
+universal neural machine translation (NMT)
+system capable of translating between any
+language pair. We set a milestone towards
+this goal by building a single massively
+multilingual NMT model handling 103 languages trained on over 25 billion examples.
+Our system demonstrates effective transfer learning ability, significantly improving translation quality of low-resource languages, while keeping high-resource language translation quality on-par with competitive bilingual baselines. We provide indepth analysis of various aspects of model
+building that are crucial to achieving quality and practicality in universal NMT. While
+we prototype a high-quality universal translation system, our extensive empirical analysis exposes issues that need to be further
+addressed, and we suggest directions for future research.
+
+1
+
+Introduction
+
+Sequence-to-sequence neural models (seq2seq)
+(Kalchbrenner and Blunsom, 2013; Sutskever
+et al., 2014; Cho et al., 2014; Bahdanau et al.,
+2014) have been widely adopted as the stateof-the-art approach for machine translation, both
+in the research community (Bojar et al., 2016a,
+2017, 2018b) and for large-scale production systems (Wu et al., 2016; Zhou et al., 2016; Crego
+et al., 2016; Hassan et al., 2018). As a highly expressive and abstract framework, seq2seq models
+can be trained to perform several tasks simultaneously (Luong et al., 2015), as exemplified by
+multilingual NMT (Dong et al., 2015; Firat et al.,
+∗
+
+Equal contribution.
+Correspondence
+navari,ankurbpn,orhanf@google.com
+
+to
+
+2016a; Ha et al., 2016c; Johnson et al., 2017) - using a single model to translate between multiple
+languages.
+Multilingual NMT models are appealing for
+several reasons. Let’s assume we are interested in
+mapping between N languages; a naive approach
+that translates between any language pair from
+the given N languages requires O(N 2 ) individually trained models. When N is large, the huge
+number of models become extremely difficult to
+train, deploy and maintain. By contrast, a multilingual model, if properly designed and trained,
+can handle all translation directions within a single model, dramatically reducing the training and
+serving cost and significantly simplifying deployment in production systems.
+Apart from reducing operational costs, multilingual models improve performance on low and
+zero-resource language pairs due to joint training and consequent positive transfer from higherresource languages (Zoph et al., 2016; Firat et al.,
+2016b; Nguyen and Chiang, 2017; Johnson et al.,
+2017; Neubig and Hu, 2018; Aharoni et al., 2019;
+Escolano et al., 2019; Arivazhagan et al., 2019;
+Hokamp et al., 2019). Unfortunately, this simultaneously results in performance degradation
+on high-resource languages due to interference
+and constrained capacity (Johnson et al., 2017;
+Tan et al., 2019). Improving translation performance across the board on both high and low resource languages is an under-studied and challenging task.
+While multilingual NMT has been widely studied, and the above benefits realized, most approaches are developed under constrained settings; their efficacy is yet to be demonstrated in
+real-world scenarios. In this work, we attempt
+to study multilingual neural machine translation
+in the wild, using a massive open-domain dataset
+
+from being progressively applicable: as we increase the number of languages with a fixed model
+capacity2 , the positive/negative transfer boundary
+becomes salient, and high resource languages start
+to regress due to a reduction in per-task capacity.
+From a function of mapping perspective, there
+are three common categories of multilingual NMT
+models in the literature, depending on the languages covered on the source and target sides:
+many-to-one, one-to-many and many-to-many
+models (Dong et al., 2015; Firat et al., 2016a;
+Johnson et al., 2017). Many-to-one multilingual
+NMT models learn to map any of the languages
+in the source language set into the selected target
+language, usually chosen to be English due to the
+easy availability of parallel corpora with English
+on one side. Similarly, one-to-many multilingual
+NMT models aim to translate a single source language into multiple target languages. Many-toone multilingual NMT can be categorized as a
+multi-domain3 learning problem (Dredze et al.,
+2010; Joshi et al., 2012; Nam and Han, 2015),
+where the task of translating into a selected language remains the same, but the input distribution
+is different across source languages (Arivazhagan
+et al., 2019). On the other hand, one-to-many
+multilingual NMT can be considered a multi-task
+problem (Caruana, 1997; Thrun and Pratt, 1998;
+Dong et al., 2015), where each source-target pair
+is a separate task. Many-to-many translation is
+the super-set of both these tasks. Regardless of
+the number of languages considered on the source
+or the target side, improvements in multilingual
+NMT are expected to arise from positive transfer between related domains and transferable
+tasks.
+Multi-domain and multi-task learning across a
+very large number of domains/tasks, with wide
+data imbalance, and very heterogeneous intertask relationships arising from dataset noise and
+topic/style discrepancies, differing degrees of linguistic similarity, etc., make the path towards universal MT highly challenging. These problems
+are typically approached individually and in con-
+
+containing over 25 billion parallel sentences in
+103 languages.
+We first survey the relevant work in various areas: vocabulary composition, learning techniques,
+modeling and evaluation. In each area, we identify key determinants of performance and assess
+their impact in our setting. The result is a map
+of the landscape on this still largely unexplored
+frontier of natural language processing (NLP) and
+machine learning (ML). To the best of our knowledge, this is the largest multilingual NMT system to date, in terms of the amount of training
+data and number of languages considered at the
+same time. Based on experiments centered around
+different aspects of multilingual NMT we highlight key challenges and open problems on the
+way to building a real-world massively multilingual translation system.
+
+2
+
+Towards Universal Machine
+Translation
+
+Enabling a single model to translate between an
+arbitrary language pair is the ultimate goal of universal MT. In order to reach this goal, the underlying machinery, the learner, must model a massively multi-way input-output mapping task under
+strong constraints: a huge number of languages,
+different scripting systems, heavy data imbalance
+across languages and domains, and a practical
+limit on model capacity. Now let us take a look
+at the problem from a machine learning perspective.
+Machine learning algorithms are built on inductive biases in order to enable better generalization (Mitchell, 1997). In the setting of multilingual NMT, the underlying inductive bias is that the
+learning signal from one language should benefit the quality of other languages (Caruana, 1997).
+Under this bias, the expectation is that as we increase the number of languages, the learner will
+generalize better due to the increased amount of
+information1 added by each language (or task).
+This positive transfer is best observed for lowresource languages (Zoph et al., 2016; Firat et al.,
+2016a; Neubig and Hu, 2018). Unfortunately the
+above mentioned constraints prevent these gains
+
+2
+Loosely measured in terms of the number of free parameters for neural networks.
+3
+Note that we use the machine learning notion of domain
+here where each domain refers to a particular distribution of
+the input, while the target distribution remain unchanged.
+
+1
+
+Which can be sharing of semantic and/or syntactic structure, or ease of optimization via shared error signals etc.
+
+2
+
+strained settings. Here we approach this challenge
+from the opposite end of the spectrum, determining what is possible with our current technology
+and understanding of NMT and ML, and probing
+for the effect of various design strategies in an extreme, real-world setting.
+Our desired features of a truly multilingual
+translation model can be characterized as:
+• Maximum throughput in terms of the number of languages considered within a single
+model.
+
+Figure 1: Per language pair data distribution of
+the training dataset used for our multilingual experiments. The x-axis indicates the language pair
+index, and the y-axis depicts the number of training examples available per language pair on a logarithmic scale. Dataset sizes range from 35k for
+the lowest resource language pairs to 2 billion for
+the largest.
+
+• Maximum inductive (positive) transfer towards low-resource languages.
+• Minimum interference (negative transfer) for
+high-resource languages.
+• Robust multilingual NMT models that perform well in realistic, open-domain settings.
+In the next sections we analyze different aspects
+of multilingual NMT, and investigate the implications of scaling up the dataset size and the number
+of languages considered within a single model. In
+each section we first discuss approaches described
+in recent literature, followed by our experimental
+setup, findings, and analysis. We also highlight
+some challenges and open problems identified in
+recent literature or as a result of our analyses. We
+start by describing our data setup, followed by an
+analysis of transfer and interference in the massively multilingual setting. We then analyze the
+pre-processing and vocabulary problems in multilingual NLP, discuss modeling approaches and
+the effect of increasing model capacity. We close
+with a discussion of evaluation and open problems
+in massively multilingual NMT.
+
+3
+
+language pair. (ii) European parliamentary documents (Koehn, 2005) which include versions in
+21 European languages having 1M to 2M sentence
+pairs. (iii) The UNCorpus (Ziemski et al., 2016) is
+another multilingual dataset of parliamentary documents of United Nations, consisting of around
+11 million sentences in 6 languages. (iv) A compilation of the datasets used for the WMT News
+Translation shared task from 2005-19 (Bojar et al.,
+2016b, 2018a) covers a broader set of domains
+in around 15 languages, each containing between
+10k to 50M sentence pairs. (v) Other smaller parallel corpora for specific domains are indexed by
+OPUS (Tiedemann, 2012) for various language
+pairs. (vi) The Bible corpus is perhaps the most
+multilingual corpus publicly available, containing
+30k sentences in over 900 languages (Tiedemann,
+2018).
+
+Data and Baselines
+
+As with any machine learning problem, the quality and the amount of the data has significant impact on the systems that can be developed (Goodfellow et al., 2016). Multilingual NMT is typically studied using various public datasets or combinations of them. The most commonly used
+datasets include: (i) TED talks (Cettolo et al.,
+2012) which includes 59 languages (Qi et al.,
+2018) with around 3k to 200k sentence pairs per
+
+The results of various works on these datasets
+have greatly contributed to the progress of multilingual NMT. However, methods developed on
+these datasets and the consequent findings are not
+immediately applicable to real world settings outside those datasets due to their narrow domains,
+the number of languages covered or the amount of
+training data used for training.
+3
+
+3.1
+
+Our Data Setup
+
+exhibits a power-law in terms of number of training examples across language pairs, and spans a
+rich set of domains with varying noise levels—
+making our overall attempt as realistic as possible.
+Please see Table 8 in the Appendix for the full list
+of languages.
+
+Our problem significantly extends those studied
+by these previous works: we study multilingual
+NMT on a massive scale, using an in-house corpus generated by crawling and extracting parallel
+sentences from the web (Uszkoreit et al., 2010).
+This corpus contains parallel documents for 102
+languages, to and from English, containing a total of 25 billion sentence pairs.4 The number
+of parallel sentences per language in our corpus ranges from around tens of thousands to
+almost 2 billion. Figure 1 illustrates the data
+distribution across language pairs for all 204 language pairs we study. The following specifics of
+our dataset distinguish our problem from previous
+work on multilingual NMT:
+
+3.2
+
+Experiments and Baselines
+
+Throughout this paper we perform several experiments on the training dataset described above, to
+highlight challenges associated with different aspects of multilingual models. We first train dedicated bilingual models on all language pairs to
+ground our multilingual analyses. We perform
+all our experiments with variants of the Transformer architecture (Vaswani et al., 2017), using
+the open-source Lingvo framework (Shen et al.,
+2019). For most bilingual experiments, we use
+a larger version of Transformer Big (Chen et al.,
+2018a) containing around 375M parameters, and a
+shared source-target sentence-piece model (SPM)
+(Kudo and Richardson, 2018) vocabulary with
+32k tokens. We tune different values of regularization techniques (e.g. dropout (Srivastava et al.,
+2014)) depending on the dataset size for each language pair. For most medium and low resource
+languages we also experiment with Transformer
+Base. All our models are trained with Adafactor
+(Shazeer and Stern, 2018) with momentum factorization, a learning rate schedule of (3.0, 40k),5 and
+a per-parameter norm clipping threshold of 1.0.
+For Transformer Base models, we use a learning
+rate schedule of (2.0, 8k), unless otherwise necessary for low-resource experiments.
+In order to minimize confounding factors and
+control the evaluation set size and domain, we created our validation (development) and test sets as
+multi-way aligned datasets containing more than
+3k and 5k sentence pairs respectively for all languages. For our bilingual baselines, BLEU scores
+are computed on the checkpoint with the best validation set performance, while we compute test
+BLEU on the final checkpoint (after training for
+around 1M steps) for our multilingual models, on
+true-cased output and references6 . For all our
+
+• Scale: Even on our lowest resource languages we often exceed the amount of data
+available in a majority of the previously studied datasets. Given the amount of data, techniques developed in relatively low-resource
+setups may not be as effective.
+• Distribution: The availability of quality parallel data follows a sharp power law, and data
+becomes increasingly scarce as we expand
+the scope of the system to more languages.
+There is a discrepancy of almost 5 orders of
+magnitude between our highest and our lowest resource languages. Balancing between
+these different language pairs now becomes
+a very challenging problem.
+• Domain and Noise: Having been mined from
+the web, our dataset spans a vast range of
+domains. However, such web crawled data
+is also extremely noisy; this problem gets
+worse in the multilingual setting where the
+level of noise might be different across different languages. While clean sources of parallel data are also available, they are often
+limited to narrow domains and high resource
+languages.
+To summarize, the training data used in our
+study is drawn from 102 languages (+ English),
+
+5
+(3.0, 40k) schedule is the shorthand for a learning rate
+of 3.0, with 40k warm-up steps for the schedule, which is decayed with the inverse square root of the number of training
+steps after warm-up.
+6
+We used an in-house implementation of mteval-v13a.pl
+
+4
+
+Limited to approximately this amount for experimentation.
+
+4
+
+En→Any
+Bilingual
+Any→En
+Bilingual
+
+High 25
+29.34
+High 25
+37.61
+
+Med. 52
+17.50
+Med. 52
+31.41
+
+Low 25
+11.72
+Low 25
+21.63
+
+Table 1: Average translation quality (BLEU) of
+bilingual models over different groups of languages. High 25 refers to the top 25 languages
+by dataset size (left-most portion of Fig. 1), while
+low 25 refers to the bottom 25 (right-most portion
+of Fig. 1).
+that translation performance on both En→Any and
+Any→En falls as the size of the training dataset
+decreases, as expected. In the next section we
+empirically analyze how multilingual models fare
+on the transfer-interference trade-off by using and
+comparing against the baselines introduced in this
+section.
+Figure 2: Quality (measured by BLEU) of individual bilingual models on all 204 supervised
+language pairs, measured in terms of BLEU (yaxes). Languages are arranged in decreasing order
+of available training data from left to right on the
+x-axes (pair ids not shown for clarity). Top plot
+reports BLEU scores for translating from English
+to any of the other 102 languages. Bottom plot
+reports BLEU scores for translating from any of
+the other 102 languages to English. Performance
+on individual language pairs is reported using dots
+and a trailing average is used to show the trend.
+
+4
+
+Learning
+
+Multilingual NMT is one of the largest multi-task
+problems being studied in academia or industry
+(Neubig and Hu, 2018; Aharoni et al., 2019), with
+hundreds of tasks (one per language pair) being
+learned in a single model. As is evident from
+Figure 1, multilingual NMT suffers from a severe
+data imbalance problem when studied in an unconstrained realistic setting.7 While there is an
+abundance of data for some language pairs, making it difficult to go through even a single epoch
+over the entire dataset before model convergence,
+low resource languages suffer from data scarcity,
+making learning difficult. To make things worse,
+these learning problems might have varying levels
+of learning ‘difficulty’ due to the linguistic properties of particular languages; designing a learning
+algorithm to train a single model on all of these
+tasks simultaneously is non-trivial.
+In this section we will study the learning aspect of multilingual NMT, first examining the interaction between transfer and interference in our
+setup. Next, we will touch upon solutions to
+counter interference and lay out a set of future directions. And last, we will delve deeper into the
+
+baselines we use a batch size of 1M tokens perbatch, by using large scale data parallelism over
+16 TPUv3 chips (Jouppi et al., 2017). We find
+that increasing the batch size offers noticeable improvements in model quality, while also significantly speeding up convergence.
+We plot the BLEU scores for different language pairs in Figure 2. These results are also
+summarized in Table 1. For brevity, we plot
+two main directions separately in different plots.
+When the source language is in English and we
+are translating from English to any other language,
+En→Any is used for convenience, and similarly
+Any→En for the opposite directions. We notice
+
+7
+
+The data-imbalance problem is also apparent in academical settings when multiple datasets are mixed, e.g. mixing
+TED talks with UN corpus.
+
+from Moses to evaluate BLEU scores.
+
+5
+
+2017). We compare the performance of two training approaches against bilingual baselines following two strategies:
+
+transfer dynamics towards universal NMT.
+4.1
+
+Transfer and Interference
+
+Multitask learning (Caruana, 1997) has been successfully applied to multiple domains, including NLP, speech processing, drug discovery and
+many others (Collobert and Weston, 2008; Deng
+et al., 2013; Ramsundar et al., 2015; Maurer et al.,
+2016; Ruder, 2017; Kaiser et al., 2017). Other
+problems closely related to multitask learning include zero or few-shot learning (Lake et al., 2011;
+Romera-Paredes and Torr, 2015; Vinyals et al.,
+2016; Pan and Yang, 2010), meta-learning and
+life-long learning (Thrun and Mitchell, 1995; Silver et al., 2013; Chen and Liu, 2016; Parisi et al.,
+2018; Golkar et al., 2019; Sodhani et al., 2018;
+Lopez-Paz et al., 2017). Although these learning
+paradigms make different assumptions about the
+underlying problem setting, they share the common goal of leveraging the inductive bias and regularization from a set of tasks to benefit another
+set of tasks. This inductive transfer could be parallel or sequential.
+Multilingual NMT has been studied under
+many of these settings to various extents. Most
+existing literature deals with sequential transfer,
+where the goal is to leverage a set of high resource tasks that are already mastered, to improve
+the performance on a new (predominantly) low resource task (Zoph et al., 2016). We consider the
+parallel learning problem, where the goal is to
+learn a single multi-task model trained concurrently on all tasks and hence is capable of performing all tasks simultaneously once the training is accomplished.
+In this section we investigate the effect of data
+imbalance across languages on these learning dynamics, particularly through the lens of transfer and interference (Caruana, 1997; Rosenstein
+et al., 2005). Reiterating from Section 2, two
+desired characteristics of our universal machine
+translation model are (1) maximum (positive)
+transfer to low-resource languages and (2) minimum interference (negative transfer) for highresource languages. Now let us examine the interaction between variables considered. For the baseline experiment, we start by following common
+conventions in literature on multilingual NMT
+(Firat et al., 2017; Lee et al., 2017; Johnson et al.,
+
+(i) all the available training data is combined as
+it is, with the data distribution in Figure 1,
+(ii) we over-sample (up-sample) low-resource
+languages so that they appear with equal
+probability in the combined dataset.
+In order to guide the translation with the intended target language, we pre-pend a target language token to every source sequence to be translated (Johnson et al., 2017). Further, to study
+the effect of transfer and interference at its limit,
+we shared a single encoder and decoder across
+all the language pairs. During training, minibatches are formed by randomly sampling examples from the aggregated dataset following strategies (i) or (ii), as described above. We train a
+single Transformer-Big with a shared vocabulary
+of 64k tokens, all Transformer dropout options
+turned on with probability 0.1, and the same values as the bilingual baselines used for other hyperparameters. We use batch sizes of 4M tokens for
+all our multilingual models to improve the rate
+of convergence. All Transformer-Big runs utilize
+data parallelism over 64 TPUv3 chips. The results
+are depicted in Figure 3.
+The performance of these two models highlights the trade-off between transfer and interference. If we sample equally from all datasets by
+over-sampling low-resource languages (strategy
+(ii)), we maximize transfer (right-most portion of
+Figure 3) and beat our bilingual baselines by large
+margins, especially in the Any→En direction.
+However, this also has the side-effect of significantly deteriorated performance on high resource
+languages (left-most portion of Figure 3). On the
+other hand, sampling based on the true data distribution (strategy (i)) retains more performance
+on high resource languages, at the cost of sacrificing performance on low resource languages. We
+also note that the transfer-interference tradeoff is more pronounced in the Any→En direction: the cost-benefit trade-off between low and
+high-resource languages is more severe than
+that for the En→Any direction.
+Another interesting finding is the performance
+deterioration on high resource languages when
+6
+
+hundreds of languages from different families are
+jointly considered.
+4.2
+
+Countering Interference: Baselines and
+Open Problems
+
+The results in Figure 3 indicate that, in a large
+multi-task setting, high resource tasks are starved
+for capacity while low resource tasks benefit significantly from transfer, and the extent of interference and transfer are strongly related. However, this trade-off could be controlled by applying
+proper data sampling strategies.
+To enable more control over sampling, we investigate batch balancing strategies (Firat et al.,
+2017; Lee et al., 2017), along the lines of the temperature based variant used for training multilingual BERT (Devlin et al., 2018). For a given language pair, l, let Dl be the size of the available
+parallel corpus. Then if we adopt a naive strategy and sample from the union of the datasets, the
+probability of the sample being from language l is
+pl = ΣkDDl k . However, this strategy would starve
+low resource languages. To control the ratio of
+samples from different language pairs, we sample a fixed number of sentences from the training
+data, with the probability of a sentence belong-
+
+Figure 3: Effect of sampling strategy on the performance of multilingual models. From left to
+right, languages are arranged in decreasing order
+of available training data. While the multilingual
+models are trained to translate both directions,
+Any→En and En→Any, performance for each of
+these directions is depicted in separate plots to
+highlight differences. Results are reported relative to those of the bilingual baselines (2). Performance on individual language pairs is reported
+using dots and a trailing average is used to show
+the trend. The colors correspond to the following
+sampling strategies: (i) Blue: original data distribution, (ii) Green: equal sampling from all language pairs. Best viewed in color.
+
+1
+
+ing to language pair l being proportional to plT ,
+where T is the sampling temperature. As a result,
+T = 1 corresponds to true data distribution and
+T = 100 corresponds to (almost) equal number
+of samples for each language (close to a uniform
+distribution with over-sampled low-resource languages). Please see Figure 4 for an illustration of
+the effect of temperature based sampling overlaid
+on our dataset distribution.
+
+translating from Any→En, contrary to existing results in multilingual NMT (Firat et al., 2016a;
+Johnson et al., 2017), exaggerated by the limited
+model capacity and the scale and imbalance of
+our dataset. All these observations again underscore the difficulty in multitask learning, especially when hundreds of tasks are to be learned
+simultaneously, each of which may come from
+a different distribution. Although (Maurer et al.,
+2016) demonstrates the benefit of multitask learning when invariant features can be shared across
+all tasks, such a premise is not guaranteed when
+
+Figure 4: Temperature based data sampling strategies overlaid on the data distribution.
+We repeat the experiment in Section 4.1 with
+temperature based sampling, setting T = 5 for
+7
+
+En→Any
+Bilingual
+T=1
+T=100
+T=5
+Any→En
+Bilingual
+T=1
+T=100
+T=5
+
+High 25
+29.34
+28.63
+27.20
+28.03
+High 25
+37.61
+34.60
+33.25
+33.85
+
+Med. 52
+17.50
+15.11
+16.84
+16.91
+Med. 52
+31.41
+27.46
+30.13
+30.25
+
+Low 25
+11.72
+6.24
+12.87
+12.75
+Low 25
+21.63
+18.14
+27.32
+26.96
+
+Table 2: Average translation quality (BLEU) of
+multilingual models using different sampling temperatures, over different groups of languages.
+High 25 refers to the top 25 languages by dataset
+size, while low 25 refers to the bottom 25.
+
+hinted that an appropriate data sampling strategy
+can potentially mitigate the interference. But the
+imbalance in dataset across tasks is not the only
+variable interacting with the transfer - interference dilemma. In all the experiments described
+above, multilingual models have the same capacity as the baselines, a strategy which could be interpreted as reducing their per-task capacity. To
+highlight the exacerbating effect of interference
+with increasing multilinguality, we train three additional models on a growing subset of 10, 25, and
+50 languages. The specific languages are chosen
+to get a mixed representation of data size, script,
+morphological complexity and inter-language relatedness. Results for the 10 languages, with a
+data sampling strategy T = 5, that are common across all subsets are reported in Figure 6
+and clearly highlight how performance degrades
+for all language pairs, especially the high and
+medium resource ones, as the number of tasks
+grows.
+
+Figure 5: Effect of varying the sampling temperature on the performance of multilingual models.
+From left to right, languages are arranged in decreasing order of available training data. Results
+are reported relative to those of the bilingual baselines (2). Performance on individual language
+pairs is reported using dots and a trailing average is used to show the trend. The colors correspond to the following sampling strategies: (i)
+Green: True data distribution (T = 1) (ii) Blue:
+Equal sampling from all language pairs (T = 100)
+(iii) Red: Intermediate distribution (T = 5). Best
+viewed in color.
+
+a balanced sampling strategy, and depict our results in Figure 5. Results over different language
+groups by resource size are also summarized in
+Table 2. We notice that the balanced sampling
+strategy improves performance on the high resource languages for both translation directions
+(compared to T = 100), while also retaining high
+transfer performance on low resource languages.
+However, performance on high and medium resource languages still lags behind their bilingual
+baselines by significant margins.
+We unveiled one of the factors responsible for
+interference while training massively multilingual
+NMT models under heavy dataset imbalance, and
+
+While simple data balancing/sampling strategies might reduce the effects of interference without reducing transfer, our experiments also highlight a few research directions worth further exploration. Most notably, Should we be using
+the same learning algorithms for multilingual and
+single language pair models? Can we still rely
+on data-sampling heuristics when the number of
+tasks are excessively large? We highlight a few
+open problems along these lines:
+8
+
+learning strategies refine the ratio of tasks simultaneously with training, based on metrics derived
+from the current state of the learner (Graves et al.,
+2017). In the context of NMT, (Kumar et al.,
+2019) learn a RL agent to schedule between different noise levels in the training data, while (Platanios et al., 2019) combined heuristics into a data
+curriculum. (Kiperwasser and Ballesteros, 2018)
+designed schedules favoring one target language
+and (Jean et al., 2018) learn an adaptive scheduler
+for multilingual NMT. Similar approaches could
+be extended in the context of learning different
+language pairs in massively multilingual settings.
+Optimization for Multitask Learning: While
+task scheduling alters the data distribution or the
+dynamics of the data distribution seen by the
+learner, optimization algorithms, regularization
+and loss formulations determine how these examples effect the learning process. While most literature in multilingual NMT, including our work,
+relies on the same monolithic optimization approach for single and multitask models,8 this
+choice might be far from optimal. There is no
+dearth of literature exploring loss formulations or
+regularization techniques that unravel and exploit
+task relatedness, reformulate loss functions to account for adaptation and exploit meta-learning approaches in multitask models (Vilalta and Drissi,
+2002; Zhang and Yang, 2017). Applying optimization approaches designed specifically for
+multitask models to multilingual NMT might be
+a fruitful avenue for future research.
+
+Figure 6: Effect of increasing the number of languages on the translation performance of multilingual models. From left to right, languages are
+arranged in decreasing order of available training
+data. Results are reported relative to those of the
+bilingual baselines (2). The colors correspond to
+the following groupings of languages: (i) Blue:
+10 languages ↔ En, (ii) Red: 25 languages ↔ En,
+(iii) Yellow: 50 languages ↔ En (yellow), and (iv)
+Green: 102 languages ↔ En. Note that, we only
+plot performance on the 10 languages common
+across all the compared models while keeping the
+x-axis intact for comparison with other plots. Best
+viewed in color.
+
+4.3
+
+Understanding Transfer
+
+From our experiments on data sampling, we notice that multilingual training with shared weights
+helps promote transfer to low-resource languages.
+However, these improvements are imbalanced in
+how they affect languages when translating to or
+from English. To better understand transfer in
+multilingual models we individually inspect three
+different settings: 1) translation from English
+(En→Any), 2) translation to English (Any→En),
+and 3) translation between non-English language
+pairs (Any→Any).
+We compare the performance of our model
+
+Task Scheduling: Scheduling tasks has been
+widely studied in the context of multitask learning
+and meta-learning, but remains relatively underexplored for multilingual NMT (Bengio et al.,
+2009; Pentina et al., 2015). The scheduling of
+the tasks, or the scheduling of the corresponding data associated with the task can be studied
+under two distinct categories, static and dynamic
+(curriculum learning). Temperature based sampling or co-training with related languages to improve adaptation (Zoph et al., 2016; Neubig and
+Hu, 2018) fall within the class of static strategies. On the other hand, dynamic or curriculum
+
+8
+
+One adaptive optimizer e.g. Adam, Adafactor with
+shared accumulators for gradient moments across all tasks.
+
+9
+
+trained on all language pairs against two models: (i) An identical model trained on all En→Any
+tasks, the one-to-many setup, and (ii) An identical model trained on all Any→En tasks, the manyto-one setup. We depict the performance of these
+models in Figure 7 (and summarize in Table 3).
+We notice that the many-to-one Any→En model
+achieves huge improvements over our bilingual
+baselines for all low-resource languages (rightmost portion of Figure 7). On the other hand, for
+the one-to-many En→Any model, we notice lesser
+deterioration in the performance on high resource
+languages, while the performance on low resource
+languages does not improve by much.
+En→Any
+Bilingual
+All→All
+En→Any
+Any→En
+Bilingual
+All→All
+Any→En
+
+High 25
+29.34
+28.03
+28.75
+High 25
+37.61
+33.85
+36.61
+
+Med. 52
+17.50
+16.91
+17.32
+Med. 52
+31.41
+30.25
+33.66
+
+Low 25
+11.72
+12.75
+12.98
+Low 25
+21.63
+26.96
+30.56
+
+Figure 7: Results comparing the performance of
+models trained to translate English to and from
+all languages to two separate from and to English
+models. From left to right, languages are arranged
+in decreasing order of available training data. Results are reported relative to those of the bilingual
+baselines (2). The colors correspond to the following models: (i) Green: dedicated (individual)
+En→Any model for top plot, (ii) Blue: dedicated
+Any→En model for bottom plot, and (iii) Red:
+shared model for both Any→En and En→Any .
+Best viewed in color.
+
+Table 3: Average translation quality (BLEU) of
+multilingual models trained on differing groups of
+languages. High 25 refers to the top 25 languages
+by dataset size, while low 25 refers to the bottom 25. All→All reports the performance of the
+multilingual model trained on all language pairs,
+En→Any was trained on all language pairs with
+English as the source and Any→En was trained
+on all language pairs with English as the target.
+
+seeing much more English source data, there is
+little to no transfer occurring at the task/decoder
+level. On the other hand, it is much easier for
+many-to-one multilingual models to reap the benefits of joint training when the inputs are from different domains: the output distribution remains
+the same, hence learning a much stronger English language model, without any interference
+from the other target languages or tasks. This is
+also reflected in other works on low-resource machine translation where Any→En typically benefits the most (Zoph et al., 2016; Nguyen and Chiang, 2017; Gu et al., 2018a,b).
+Another strong indicator of transfer in multilingual models is the quality on zero-shot trans-
+
+This discrepancy between the transfer for
+Any→En and En→Any can be better understood
+under the characterization of the many-to-one
+Any→En model as a multi-domain model, where
+each source language constitutes a separate domain, and the one-to-many En→Any model as a
+multi-task model, with each target language representing a separate task (Section 2). This formulation of multilingual NMT helps explain the
+aforementioned observations, which suggest that
+multilingual models might be more amenable to
+transfer across input domains than transfer across
+tasks. Simple joint training does not do much
+to benefit one-to-many multilingual NMT; while
+some improvements may arise from the model
+10
+
+10 langs
+102 langs
+
+De → F r
+11.15
+14.24
+
+Be → Ru
+36.28
+50.26
+
+Y i → De
+8.97
+20.00
+
+F r → Zh
+15.07
+11.83
+
+Hi → F i
+2.98
+8.76
+
+Ru → F i
+6.02
+9.06
+
+Table 4: Effect of increasing the number of languages on the zero-shot performance of multilingual
+models.
+creases as we move from the 10 language model
+to the 102 language model, possibly due to the
+regularization effect in the capacity constrained
+setting, similar to what was observed in (Aharoni
+et al., 2019). This also indicates why methods that
+explicitly force languages to share the same representation space (Arivazhagan et al., 2019; Gu
+et al., 2019; Lu et al., 2018) may be key to improving zero-shot translation performance.
+We next delve into pre-processing and vocabulary generation when dealing with hundreds of
+languages.
+
+lation. Multilingual models possess a unique advantage over single task models, in that they are
+capable of translating between any pair of supported input and output languages, even when
+no direct parallel data is available (Firat et al.,
+2016b). However, without supervision from parallel data between non-English language pairs,
+zero-shot translation quality often trails the performance of pivoting/bridging through a common
+language (Johnson et al., 2017). Given the lack
+of transfer across different En→Any translation
+tasks, it isn’t hard to imagine why transferring
+across Yy→En and En→Xx , to learn Yy→Xx , is
+an even more challenging task.
+Enabling direct translation between arbitrary
+languages has been widely studied, and has the
+potential to obviate the need for two-step pivoting
+which suffers from higher latency and accumulated errors. The most effective approach has been
+to simply synthesize parallel data (Firat et al.,
+2016b; Chen et al., 2017, 2018b) and incorporate
+that into the training process. However, this twostage approach becomes intractable when dealing
+with a large number of languages; the amount
+of synthesized data required to enable zero-shot
+translation grows quadratically with the number
+of languages. More recent work has demonstrated that direct translation quality may be improved even in a zero-shot setting, by incorporating more languages (Aharoni et al., 2019), adding
+regularization to promote cross-lingual transfer
+(Arivazhagan et al., 2019; Gu et al., 2019; AlShedivat and Parikh, 2019), and modeling strategies that encourage shared cross-lingual representations (Lu et al., 2018; Escolano et al., 2019).
+We report the zero-shot performance of our 10
+language and 102 language models, discussed in
+Section 4.2, on selected language pairs in Table
+4. We observe that zero-shot performance on similar languages, in this case Be→Ru and Yi→De ,
+is extremely high. We also notice that the zeroshot performance for most language pairs in-
+
+5
+
+Pre-processing and Vocabularies
+
+Pre-processing and vocabulary construction lay
+central to the generalization ability of natural language processing systems.
+To generalize to unseen examples, machine
+learning algorithms must decompose the input
+data into a set of basic units (e.g. pixels, characters, phonemes etc.) or building blocks. For
+text, this set of basic units or building blocks is
+referred to as the vocabulary. Given some text
+and a vocabulary, a segmentation algorithm or a
+pre-processor is applied to fragment the text to its
+building blocks upon which the learner may then
+apply inductive reasoning.
+In essence, a properly defined vocabulary needs
+to (i) maintain a high coverage by being able to
+compose most text and produce minimal number
+of Out-of-Vocabulary (OOV) tokens during segmentation, (ii) have tractable size to limit computational and spatial costs, and (iii) operate at the
+right level of granularity to enable inductive transfer with manageable sequence lengths which increase computational costs.
+Early NMT models operated at the word level
+(Sutskever et al., 2014; Cho et al., 2014; Bahdanau
+et al., 2014). Coverage issues arising from difficulty capturing all words of a language within a
+limited vocabulary budget promoted the development of character level systems (Ling et al., 2015;
+11
+
+Luong and Manning, 2016; Chung et al., 2016;
+Costa-jussà and Fonollosa, 2016; Lee et al., 2017;
+Cherry et al., 2018). These trivially achieve high
+coverage, albeit with the downside of increased
+computational and modeling challenges due to increased sequence lengths. Sub-word level vocabularies (Sennrich et al., 2016) have since found a
+middle ground and are used in most state-of-theart NMT systems.
+Constructing vocabularies that can model hundreds of languages with vast number of character sets, compositional units, and morphological
+variance is critical to developing massively multilingual systems, yet remains challenging. Early
+multilingual NMT models utilized separate vocabularies for each language (Dong et al., 2015;
+Luong et al., 2015; Firat et al., 2016a); later ones
+used shared multilingual vocabularies (Sennrich
+et al., 2016; Ha et al., 2016c; Johnson et al., 2017)
+which are shared across languages. Recently, hybrid (Shared + Separate) multilingual vocabularies and approaches for adding new languages to
+existing vocabularies (Lakew et al., 2018) have
+also been explored.
+In this section we describe the simplistic approach to multilingual vocabulary construction
+used in our setup, inspect implicit characteristics of such vocabularies, and finally evaluate
+the downstream effects on multilingual machine
+translation.
+5.1
+
+Figure 8: Average number of sentence-piece tokens per sentence on random samples drawn from
+the training set. We compare the increase in number of tokens per sentence for different languages,
+when moving from a standard monolingual vocabulary with 32k tokens to a multilingual vocabulary for which we vary the vocabulary size
+(size={32k, 64k, 128k} tokens) and the vocabulary sampling temperature (T = {1, 5, 100}).
+
+Vocabulary Construction and
+Characteristics
+
+ficient coverage over the alphabet from various
+scripts, OOV rates will be low. For SPMs, this is
+tuned using the character_coverage option and we
+to a high value of 1 − (5 ∗ 10−6 ) which yields an
+alphabet size of around 12000, ensuring very low
+unknown rates for all the languages in our study.
+While ensuring low unknown rates, the shift towards a vocabulary which largely consists of characters or short sub-words (in terms of the number
+of characters that they consist of) results in longer
+sequences after tokenization (Chung et al., 2016;
+Costa-jussà and Fonollosa, 2016). Longer sequence lengths, however, increase computational
+complexity and may also introduce optimization
+challenges due to longer range dependencies and
+require the learner to model a more complex mapping function from a finer grained sequence to
+meaning. To avoid exceedingly long sequence
+
+We construct all our vocabularies using Sentence Piece Model (SPM) (Kudo and Richardson, 2018) to remove complexity that may arise
+from language specific pre-processing (e.g. tokenization, special character replacements etc.).
+The large number of languages used in our setup
+makes separate per-language vocabularies infeasible. Therefore, we picked shared sub-word vocabularies. While using a single shared vocabulary across all languages reduces complexity, it introduces other challenges that we discuss below.
+With the large number of scripts introduced in
+a multilingual setting, the chance of a vocabulary producing unknowns (OOV) increases. Note
+that since only unrecognized characters will be
+encoded as OOV, if the vocabulary provides suf12
+
+En→Any
+32k Vocab
+64k Vocab
+Any→En
+32k Vocab
+64k Vocab
+
+High 25
+27.69
+28.03
+High 25
+33.24
+33.85
+
+Med. 52
+16.84
+16.91
+Med. 52
+29.40
+30.25
+
+Low 25
+12.90
+12.75
+Low 25
+26.18
+26.96
+
+En→Any
+TV = 1
+TV = 100
+TV = 5
+Any→En
+TV = 1
+TV = 100
+TV = 5
+
+Table 5: Average translation quality (BLEU) of
+multilingual models using different SPM vocabulary sizes, over different groups of languages.
+High 25 refers to the top 25 languages by dataset
+size, while low 25 refers to the bottom 25.
+
+High 25
+27.81
+27.83
+28.03
+High 25
+33.82
+33.70
+33.85
+
+Med. 52
+16.72
+16.86
+16.91
+Med. 52
+29.78
+30.15
+30.25
+
+Low 25
+12.73
+12.78
+12.75
+Low 25
+26.27
+26.91
+26.96
+
+Table 6: Average translation quality (BLEU) of
+multilingual models using different sampling temperatures for vocabulary generation. High 25
+refers to the top 25 languages by dataset size,
+while low 25 refers to the bottom 25.
+
+lengths we need to increase the vocabulary size so
+that it may include longer tokens (sub-sequence
+that consist of longer number of characters).
+Finally, a shared multilingual vocabulary runs
+the risk of favoring some languages over others,
+due to the imbalance of the dataset size the vocabulary is extracted. To reduce the effect of imbalanced dataset size we apply the same temperature
+sampling strategy discussed in Section 4 to Vocabulary Sampling.
+In Figure 8 we report the effect of varying the
+vocabulary size (size={32k, 64k, 128k} tokens)
+and sampling temperature (T = {1, 5, 100}) on
+the average number of tokens per sentence on 10
+indicative languages. We see that it is important
+to balance different languages by using a higher
+sampling temperature of T = 5 or T = 100, in order to avoid exceedingly long sequence lengths for
+low resource languages. Orthogonally, increasing
+the vocabulary size also helps to reduce sequence
+lengths, especially on low resource languages.
+Here we continue experiments with TV = 5 to
+stay aligned with our sampling approach during
+NMT training.
+We next train and evaluate a few multilingual
+models to study the effect of different vocabulary
+sizes and sampling strategies on overall translation quality. Following the experiments in Section 4, we train single multilingual models on all
+language pairs, using a data sampling temperature
+of T = 5. All our models are Transformer-Big,
+trained with the same set of hyper-parameters, different only in terms of the vocabulary used.
+Table 5 compares the quality of two models
+trained using vocabularies of size 32k and 64k.
+
+We notice that the model with the smaller 32k token vocab does noticeably worse on high resource
+languages when translating in both directions,
+and on Any→En translation in all resource settings. On the other hand, the smaller vocab model
+performs marginally better when translating into
+low resource languages on En→Any . For other
+medium resource languages, increased vocabulary
+size appears to be better on all directions. Our
+results here agree with existing literature (Cherry
+et al., 2018; Kreutzer and Sokolov, 2018) suggesting that using smaller sub-word tokens, as is the
+case for smaller vocabularies, performs better in
+low resource settings due to improved generalization. Notable languages where the smaller vocabulary performs better include Corsican (co) and
+Uzbek (uz), both low resource languages which
+have known similar high resource languages to aid
+with generalization.
+We compare the translation quality of models
+that vary only in their vocabulary sampling temperature in Table 6. While not very pronounced,
+we do notice some differences in quality based on
+the vocabulary sampling temperature. Languages
+that perform better with a higher temperature of
+TV = 5 or TV = 100 include low-medium resource languages like Mongolian (mn), Zulu (zu),
+Corsican (co) and Uzbek (uz). These gains may
+have originated from two potential factors: (i)
+Smaller tokens for high resource languages result
+in better transfer to related low resource languages
+(ii) Better character coverage for languages with
+distinct character sets.
+13
+
+et al., 2018b). More recently, with the increased
+number of languages (Qi et al., 2018; Aharoni
+et al., 2019), there has been work along the lines
+of applying soft sharing for MT, in the form of
+a shared set of meta-learned parameters used to
+generate task level parameters (Platanios et al.,
+2018). All of these sharing strategies come paired
+with their associated set of transfer-interference
+trade-offs, and regardless of the sharing strategy,
+in the absence of a complete and accurate atlas of
+task relatedness, more transferrability also implies
+more interference. This phenomenon is known
+to be a common problem for multitask learning,
+and is also related to the stability vs plasticity
+dilemma (Carpenter and Grossberg, 1987; Grossberg, 1988). See (Parisi et al., 2018) for a categorization of such work.
+Considering the scale of our experimental setup
+and end-goal, combinatorial approaches for parameter sharing do not emerge as plausible solutions. While “learning to share” approaches
+(Kang et al., 2011; Ruder et al., 2017; Platanios
+et al., 2018) are promising alternatives, a more
+straightforward solution could be implicitly increasing the per-task capacity by increasing overall model capacity. Next we look into a bruteforce approach to mitigate interference by enhancing model capacity.
+
+While the effects of vocabulary are much
+smaller than the trends observed for data sampling, failure to ensure careful character coverage
+and fair representation from all languages could
+nonetheless significantly impact translation quality.
+So far in our study, we have presented our analysis and experimentation with data, training and
+vocabulary in multilingual scenarios. We next analyze the effect of several architectural choices on
+the quality of our massively multilingual NMT
+model.
+
+6
+
+Modeling
+
+The quality of any neural network is largely dependent on its architecture and parametrization.
+The choice of the model, and the constraints on
+its parameters determine the extent of the transferinterference trade-off, the learning dynamics and,
+ultimately, the performance limits of the model.
+In this section we analyze how choices regarding
+parameter sharing and model capacity can impact
+translation quality in the setting of massively multilingual NMT.
+6.1
+
+Architecture
+
+In recent years, several revolutionary architectures have been developed to improve MT quality
+(Gehring et al., 2017; Vaswani et al., 2017; Chen
+et al., 2018a; Wu et al., 2019). However, in the
+context of multilingual NMT, the most common
+prior imposed on models is typically in the form of
+(hard or soft) parameter sharing constraints across
+different languages pairs. In designing a multiingual NMT model, we would like to take advantage of the common structures and features
+shared by multiple languages, which imposes constraints on the model architecture. These constraints range from sharing a fixed length representation across all source and target pairs (Luong et al., 2015), sharing small network modules, for example the attention parameters (Firat
+et al., 2016a), and sharing everything except the
+attention parameters (Ha et al., 2016b; Blackwood
+et al., 2018), to sharing all parameters in the model
+across all language pairs (Johnson et al., 2017; Ha
+et al., 2016c). Some studies also explore partial
+parameter sharing strategies tailored for specific
+architectures (Sachan and Neubig, 2018; Wang
+
+6.2
+
+Capacity
+
+Over the last few years, scaling up model capacity has been shown to demonstrate huge improvements on several supervised and transfer learning
+benchmarks, including MT (Brock et al., 2018;
+Devlin et al., 2018; Radford et al.; Shazeer et al.,
+2018). Scale often comes bundled with new hardware, infrastructure, and algorithmic approaches
+meant to optimize accelerator memory utilization
+and benefit faster computation, including methods like gradient checkpointing and low precision training (Courbariaux et al., 2014; Ott et al.,
+2018), memory efficient optimizers (Shazeer and
+Stern, 2018; Gupta et al., 2018) and frameworks
+supporting model parallelism (Shazeer et al.,
+2018; Harlap et al.; Huang et al., 2018).
+While massive models have been shown to improve performance in single task settings (Shazeer
+et al., 2018), we would expect the gains to be even
+larger on a capacity-constrained massively multi14
+
+En→Any
+Bilingual
+400M
+1.3B Wide
+1.3B Deep
+Any→En
+Bilingual
+400M
+1.3B Wide
+1.3B Deep
+
+High 25
+29.34
+28.03
+28.36
+29.46
+High 25
+37.61
+33.85
+37.13
+37.47
+
+Med. 52
+17.50
+16.91
+16.66
+17.67
+Med. 52
+31.41
+30.25
+33.21
+34.63
+
+Low 25
+11.72
+12.75
+11.14
+12.52
+Low 25
+21.63
+26.96
+27.75
+31.21
+
+Table 7: Average translation quality (BLEU)
+of multilingual models with increasing capacity.
+High 25 refers to the top 25 languages by dataset
+size, while low 25 refers to the bottom 25.
+lingual task. We next try to quantify how the performance of our model scales with capacity. Additionally, we also compare two dimensions along
+which model capacity can be increased—depth
+and width—and compare how performance across
+different tasks is affected when scaling along these
+two dimensions.
+We start with our Transformer-Big baseline
+with a 64k vocabulary, trained with a data sampling temperature of T = 5. This model has
+around 400M parameters, including the embeddings and the softmax layers. We compare the
+performance of two scaled up models with around
+1.3B parameters. Our first model is the wide
+model, with 12 layers in both the encoder and the
+decoder (24 layers in total), feed-forward hidden
+dimensions set to 16384, 32 attention heads and an
+attention hidden dimension set to 2048 (Shazeer
+et al., 2018). The deep model has 24 layers in
+the encoder and the decoder (48 layers in total),
+with all other hyper-parameters being equivalent
+to the Transformer-Big. To avoid trainability hurdles, both these models are trained with transparent attention (Bapna et al., 2018). Further, in order
+to enable training these massive models, we utilize
+GPipe (Huang et al., 2018) to incorporate efficient
+model parallelism. Both 1.3B param wide and
+deep models are trained with 128 TPUv3 chips,
+parallelized over 2 and 4 cores respectively.9 We
+use the same 4M token batch size used for all our
+multilingual experiments.
+9
+
+Figure 9: Effect of increasing capacity on the performance of multilingual models. From left to
+right, languages are arranged in decreasing order of available training data. Results are reported relative to those of the bilingual baselines
+(2). The plots correspond to the following models: blue: 400M param ‘Transformer-Big’, green:
+1.3B param, 12 layer wide model and red: 1.3B
+param, 24 layer model. Best viewed in color.
+
+The performance of these two models and the
+baseline Transformer-Big is depicted in Figure 9
+(also summarized in Table 7). We notice that
+both these models improve performance by significant amounts on the high resource languages,
+when compared against the capacity constrained
+massively multilingual baseline (blue curves in
+Figure 9). However, the deep model handily
+beats both, the baseline and the equivalent capacity wide model, by significant margins on most of
+the language pairs. We also notice that, unlike the
+wide model, the deep model does not overfit in
+low resource languages and, in fact, significantly
+enhances transfer to low resource languages on
+the Any→En translation tasks.
+Our results suggest that model capacity might
+
+Note, each TPUv3 chip has 2 cores.
+
+15
+
+both effective and comparable across languages.
+This in and of itself is a hard problem with an
+ever growing list of hundreds of metrics to choose
+from. Oftentimes these metrics vary in their effectiveness across languages; WMT shared tasks (Ma
+et al., 2018b) report that the specific language,
+dataset, and system significantly affect which metric has the strongest correlation with human ratings. When metrics are sufficiently effective
+across languages they are not always comparable.
+N-gram based metrics (Papineni et al., 2002; Doddington, 2002; Wang et al., 2016; Popović, 2015)
+that measure lexical overlap require tokenization
+which is highly affected by language specific factors such as alphabet size and morphological complexity. In fact, even within the same language,
+tokenization discrepancies pose significant challenges to reliable evaluation (Post, 2018). Embedding based approaches (Stanojevic and Sima’an,
+2014) may be language agnostic and help address
+these issues.
+Equally important to choosing a metric is
+choosing an evaluation set. Most existing metrics are not consistent (Banerjee and Lavie, 2005)
+and for the same model vary based on the domain
+or even the specific sentences that they are being
+evaluated on. For example, there are significant
+differences of 3-5 BLEU between the WMT dev
+and test sets for the same language pair. Such
+consistency issues may further exacerbate the difficulty of comparing system quality across languages if we use different test sets for each language. This may be addressed by ensuring that
+evaluation is performed on the same corpora that
+has been translated to all the languages, i.e. multiway parallel data. Even so, attention must be paid
+to the original language (Freitag et al., 2019) and
+domain such data is collected from.
+
+be one of the most important factors determining the extent of the transfer-interference tradeoff. However, naively scaling capacity might
+result in poor transfer performance to low resource languages. For example, our wide Transformer while significantly improving performance
+on the high resource languages, fails to show
+similar gains in the low resource setting. While
+deeper models show great performance improvements, they come bundled with high decoding latency, a significantly larger computational footprint, and trainability concerns including vanishing/exploding gradients, early divergence, illconditioned initial conditions etc. (Hestness et al.,
+2017). Further research into various aspects of
+scalability, trainability and optimization dynamics
+is expected to be a fruitful avenue towards universal NMT.
+We next delve into evaluation challenges posed
+by multilingual models.
+
+7
+
+Evaluation
+
+Metrics for automatic quality evaluation (Papineni et al., 2002) have been critical to the rapid
+progress in machine translation, by making evaluation fast, cheap and reproducible. For multilingual NMT, new concerns arise due to the multiobjective nature of the problem and the inherent
+quality trade-offs between languages.
+Inter-language quality trade-offs arise due to
+various decisions made while constructing, training and selecting a model. When constructing
+the model, the vocabulary may be constructed
+to favor a certain script or group of languages,
+or the language specific parameters may be unevenly distributed across languages. During training, the optimization settings or the rate at which
+training data from different languages are sampled strongly influence the eventual performance
+on different languages. Finally, when selecting a
+checkpoint10 , the model may perform better on
+high resource languages at later checkpoints but
+may have regressed on low resource languages by
+that time due to over-training (or under-training
+for the opposing case). Each of these choices naturally may favor certain languages over others.
+To choose between the aforementioned tradeoffs, we need a translation quality metric that is
+10
+
+8
+
+Open Problems in Massively
+Multilingual NMT
+
+Data and Supervision Whereas we focus solely
+on supervised learning, for many low resource
+languages it becomes essential to learn from
+monolingual data. There has been a lot of
+recent work on incorporating monolingual data
+to improve translation performance in low and
+zero resource settings, including research on
+back-translation (Sennrich et al., 2015; Edunov
+
+Certain snapshot of the model parameters.
+
+16
+
+ters (Ha et al., 2016a; Platanios et al., 2018) and
+models that learn new tasks with high sample efficiency (Finn et al., 2017) without forgetting existing tasks or languages (Rusu et al., 2016; Kirkpatrick et al., 2017; Lakew et al., 2018). When
+scaling to thousands of languages, approaches that
+can automatically learn data sampling, curricula,
+model hyper-parameters and parameters, to train
+models that quickly adapt to new tasks, is again
+expected to become increasingly important.
+
+et al., 2018), language model fusion (Gulcehre
+et al., 2015; Sriram et al., 2017), self-supervised
+pre-training (Dai and Le, 2015; Ramachandran
+et al., 2016; Zhang and Zong, 2016; Song et al.,
+2019) and unsupervised NMT (Lample et al.,
+2017; Artetxe et al., 2017). Languages where
+large swathes of monolingual data are not easily available might require more sample efficient approaches for language modeling, including grounding with visual modalities or sources
+of information (Huang et al., 2016), and learning
+from meta-data or other forms of context. Being able to represent and ground information from
+multiple modalities in the same representational
+space is the next frontier for ML research.
+The scope of our study is limited to 103 languages, a minuscule fraction of the thousands of
+existing languages. The heuristics and approaches
+we develop will be less and less applicable as
+we include more languages and incorporate other
+forms of data. As we scale up model sizes and
+the number of languages learned within a single
+model, approaches that require multi-stage training or inference steps will likely become infeasible. Work towards better integration of selfsupervised learning with the supervised training
+process is more likely to scale well with larger
+model capacities and increasing number of languages.
+
+Increasing Capacity Increasing the model capacity has been demonstrated to be a sure-shot
+approach to improving model quality in the presence of supervised data for several tasks, including Image Generation (Brock et al., 2018), Language Modeling and transfer learning (Radford
+et al.; Devlin et al., 2018) and NMT (Shazeer
+et al., 2018). Validating this trend, one key result from our study is the need for sufficient
+model capacity when training large multitask networks. Other than the systems and engineering
+challenges (Jouppi et al., 2017; Huang et al., 2018;
+Shazeer et al., 2018), training deep and high capacity neural networks poses significant trainability challenges (Montavon et al., 2018). A better theoretical understanding of the generalization
+ability of deep and wide models (Raghu et al.,
+2017; Arora et al., 2018), trainability challenges
+including exploding and vanishing gradients (Glorot and Bengio, 2010; Balduzzi et al., 2017) and
+empirical approaches to counter these challenges
+(Bapna et al., 2018; Zhang et al., 2019) are critical
+to further scaling of model capacity.
+
+Learning Developing learning approaches that
+work well for multitask models is essential to improving the quality of multilingual models. Our
+analysis from Section 4 demonstrates that even
+simple heuristics for data sampling/balancing can
+significantly improve the extent of transfer and
+interference observed by individual tasks. However, our heuristic strategy only takes dataset size
+into account when determining the fraction of
+per-task samples seen by the model. Research
+on exploiting task-relatedness (Lee et al., 2016;
+Neubig and Hu, 2018), curriculum learning on
+noisy data (van der Wees et al., 2017; Wang
+et al., 2018a), and automated curriculum learning from model state (Bengio et al., 2009; Graves
+et al., 2017) have demonstrated success in multitask learning, including for NMT. Other relevant threads of work include research on metalearning to learn model hyper-parameters (Nichol
+et al., 2018; Baydin et al., 2017), model parame-
+
+Architecture and Vocabulary Extending existing approaches for vocabulary construction and
+neural modeling to work better in multitask settings (Ma et al., 2018a; Houlsby et al., 2019) in order to strike the right balance between shared and
+task-specific capacity, or learning network structure in order to maximally exploit task relatedness
+(Li et al., 2019) are exciting avenues for future
+research. As we scale up to thousands of languages, vocabulary handling becomes a significantly harder challenge. Successfully representing thousands of languages might require character (Lee et al., 2017; Cherry et al., 2018), byte
+(Gillick et al., 2015) or even bit level modeling.
+Modeling extremely long sequences of bit/byte17
+
+in zero-shot neural machine translation. arXiv
+preprint arXiv:1903.07091.
+
+level tokens would present its own set of modeling challenges. Finally, while scaling up existing
+approaches is one way to improve model quality,
+some approaches or architectures are more efficient to train (Shazeer et al., 2017; Vaswani et al.,
+2017; Wu et al., 2019), more sample efficient, or
+faster at inference (Gu et al., 2017; Roy et al.,
+2018). As models get larger, improving training
+and inference efficiency become more important
+to keep training and inference times within reasonable limits from both a practical and environmental perspective (Strubell et al., 2019).
+
+9
+
+Sanjeev Arora, Nadav Cohen, and Elad Hazan.
+2018. On the optimization of deep networks:
+Implicit acceleration by overparameterization.
+arXiv preprint arXiv:1802.06509.
+Mikel Artetxe, Gorka Labaka, Eneko Agirre,
+and Kyunghyun Cho. 2017. Unsupervised
+neural machine translation. arXiv preprint
+arXiv:1710.11041.
+Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua
+Bengio. 2014. Neural machine translation by
+jointly learning to align and translate. arXiv
+preprint arXiv:1409.0473.
+
+Conclusion
+
+Although we believe that we have achieved a milestone with the present study, building on five years
+of multilingual NMT research, we still have a long
+way to go towards truly universal machine translation. In the open problems and future directions
+enumerated above, many promising solutions appear to be interdisciplinary, making multilingual
+NMT a plausible general test bed for other machine learning practitioners and theoreticians.
+
+David Balduzzi, Marcus Frean, Lennox Leary,
+JP Lewis, Kurt Wan-Duo Ma, and Brian
+McWilliams. 2017. The shattered gradients
+problem: If resnets are the answer, then what
+is the question? In Proceedings of the 34th International Conference on Machine LearningVolume 70, pages 342–350. JMLR. org.
+
+Acknowledgments
+Satanjeev Banerjee and Alon Lavie. 2005. Meteor: An automatic metric for mt evaluation
+with improved correlation with human judgments. In Proceedings of the acl workshop
+on intrinsic and extrinsic evaluation measures
+for machine translation and/or summarization,
+pages 65–72.
+
+We would like to thank the Google Translate and
+Google Brain teams for their useful input and
+discussion, and the entire Lingvo development
+team for their foundational contributions to this
+project. We would also like to thank Katherine
+Lee, Thang Luong, Colin Raffel, Noam Shazeer,
+and Geoffrey Hinton for their insightful comments.
+
+Ankur Bapna, Mia Xu Chen, Orhan Firat,
+Yuan Cao, and Yonghui Wu. 2018. Training deeper neural machine translation models with transparent attention. arXiv preprint
+arXiv:1808.07561.
+
+References
+Roee Aharoni, Melvin Johnson, and Orhan Firat.
+2019. Massively multilingual neural machine
+translation. CoRR, abs/1903.00089.
+
+Atilim Gunes Baydin,
+Robert Cornish,
+David Martinez Rubio, Mark Schmidt,
+and Frank Wood. 2017. Online learning rate
+adaptation with hypergradient descent. arXiv
+preprint arXiv:1703.04782.
+
+Maruan Al-Shedivat and Ankur P Parikh. 2019.
+Consistency by agreement in zero-shot neural machine translation.
+arXiv preprint
+arXiv:1904.02338.
+
+Yoshua Bengio, Jérôme Louradour, Ronan Collobert, and Jason Weston. 2009. Curriculum
+learning. In Proceedings of the 26th annual
+international conference on machine learning,
+pages 41–48. ACM.
+
+Naveen Arivazhagan, Ankur Bapna, Orhan Firat, Roee Aharoni, Melvin Johnson, and Wolfgang Macherey. 2019. The missing ingredient
+18
+
+Graeme Blackwood, Miguel Ballesteros, and
+Todd Ward. 2018. Multilingual neural machine
+translation with task-specific attention. arXiv
+preprint arXiv:1806.03280.
+
+Mauro Cettolo, C Girardi, and M Federico. 2012.
+Wit3: Web inventory of transcribed and translated talks. Proceedings of EAMT, pages 261–
+268.
+
+Ondrej Bojar, Rajen Chatterjee, Christian Federmann, et al. 2018a. Proceedings of the third
+conference on machine translation: Research
+papers. Belgium, Brussels. Association for
+Computational Linguistics.
+
+Mia Xu Chen, Orhan Firat, Ankur Bapna, et al.
+2018a. The best of both worlds: Combining recent advances in neural machine translation. In Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 76–86,
+Melbourne, Australia. Association for Computational Linguistics.
+
+Ondřej Bojar, Rajen Chatterjee, Christian Federmann, et al. 2017. Findings of the 2017 conference on machine translation (wmt17). In Proceedings of the Second Conference on Machine
+Translation, pages 169–214.
+
+Yun Chen, Yang Liu, Yong Cheng, and Victor OK Li. 2017. A teacher-student framework for zero-resource neural machine translation. arXiv preprint arXiv:1705.00753.
+
+Ondřej Bojar, Rajen Chatterjee, Christian Federmann, et al. 2016a. Findings of the 2016 conference on machine translation. In ACL 2016
+FIRST CONFERENCE ON MACHINE TRANSLATION (WMT16), pages 131–198. The Association for Computational Linguistics.
+
+Yun Chen, Yang Liu, and Victor OK Li. 2018b.
+Zero-resource neural machine translation with
+multi-agent communication game. In ThirtySecond AAAI Conference on Artificial Intelligence.
+
+Ondřej Bojar, Christian Federmann, Mark Fishel,
+Yvette Graham, Barry Haddow, Philipp Koehn,
+and Christof Monz. 2018b.
+Findings of
+the 2018 conference on machine translation
+(wmt18). In Proceedings of the Third Conference on Machine Translation: Shared Task Papers, pages 272–303, Belgium, Brussels. Association for Computational Linguistics.
+
+Zhiyuan Chen and Bing Liu. 2016. Lifelong machine learning. Synthesis Lectures on Artificial
+Intelligence and Machine Learning, 10(3):1–
+145.
+Colin Cherry, George Foster, Ankur Bapna, Orhan
+Firat, and Wolfgang Macherey. 2018. Revisiting character-based neural machine translation
+with capacity and compression. In Proceedings
+of the 2018 Conference on Empirical Methods
+in Natural Language Processing, pages 4295–
+4305, Brussels, Belgium. Association for Computational Linguistics.
+
+Ondrej Bojar, Christian Federmann, Barry Haddow, Philipp Koehn, Matt Post, and Lucia Specia. 2016b. Ten years of wmt evaluation campaigns: Lessons learnt. In Proceedings of the
+LREC 2016 Workshop âĂIJTranslation Evaluation âĂŞ From Fragmented Tools and Data Sets
+to an Integrated EcosystemâĂİ, pages 27–34.
+
+Gail A Carpenter and Stephen Grossberg. 1987.
+Art 2: Self-organization of stable category
+recognition codes for analog input patterns. Applied optics, 26(23):4919–4930.
+
+Kyunghyun Cho, Bart van Merrienboer, Caglar
+Gulcehre, Dzmitry Bahdanau, Fethi Bougares,
+Holger Schwenk, and Yoshua Bengio. 2014.
+Learning phrase representations using rnn
+encoder–decoder for statistical machine translation. In Proceedings of the 2014 Conference
+on Empirical Methods in Natural Language
+Processing (EMNLP), pages 1724–1734, Doha,
+Qatar. Association for Computational Linguistics.
+
+Rich Caruana. 1997. Multitask learning. Machine
+Learning, 28(1):41–75.
+
+Junyoung Chung, Kyunghyun Cho, and Yoshua
+Bengio. 2016. A character-level decoder with-
+
+Andrew Brock, Jeff Donahue, and Karen Simonyan. 2018. Large scale gan training for
+high fidelity natural image synthesis. arXiv
+preprint arXiv:1809.11096.
+
+19
+
+out explicit segmentation for neural machine
+translation. arXiv preprint arXiv:1603.06147.
+
+for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing (Volume 1: Long Papers),
+volume 1, pages 1723–1732.
+
+Ronan Collobert and Jason Weston. 2008. A unified architecture for natural language processing: Deep neural networks with multitask learning. In Proceedings of the 25th International
+Conference on Machine Learning, pages 160–
+167.
+
+Mark Dredze, Alex Kulesza, and Koby Crammer.
+2010. Multi-domain learning by confidenceweighted parameter combination.
+Mach.
+Learn., 79(1-2):123–149.
+Sergey Edunov, Myle Ott,
+and David Grangier. 2018.
+back-translation at scale.
+arXiv:1808.09381.
+
+Marta R. Costa-jussà and José A. R. Fonollosa.
+2016. Character-based neural machine translation. CoRR, abs/1603.00810.
+Matthieu Courbariaux, Yoshua Bengio, and JeanPierre David. 2014. Training deep neural
+networks with low precision multiplications.
+arXiv preprint arXiv:1412.7024.
+
+Michael Auli,
+Understanding
+arXiv preprint
+
+Carlos Escolano, Marta R Costa-jussà, and
+José AR Fonollosa. 2019. Towards interlingua neural machine translation. arXiv preprint
+arXiv:1905.06831.
+
+Josep Maria Crego, Jungi Kim, Guillaume Klein,
+et al. 2016. Systran’s pure neural machine
+translation systems. CoRR, abs/1610.05540.
+
+Chelsea Finn, Pieter Abbeel, and Sergey Levine.
+2017. Model-agnostic meta-learning for fast
+adaptation of deep networks. In Proceedings of
+the 34th International Conference on Machine
+Learning-Volume 70, pages 1126–1135. JMLR.
+org.
+
+Andrew M Dai and Quoc V Le. 2015. Semisupervised sequence learning. In Advances in
+neural information processing systems, pages
+3079–3087.
+
+Orhan Firat, Kyunghyun Cho, and Yoshua Bengio. 2016a. Multi-way, multilingual neural machine translation with a shared attention mechanism. arXiv preprint arXiv:1601.01073.
+
+L. Deng, G. Hinton, and B. Kingsbury. 2013.
+New types of deep neural network learning for
+speech recognition and related applications: an
+overview. In 2013 IEEE International Conference on Acoustics, Speech and Signal Processing, pages 8599–8603.
+
+Orhan Firat, Kyunghyun Cho, Baskaran
+Sankaran, Fatos T. Yarman Vural, and
+Yoshua Bengio. 2017. Multi-way, multilingual
+neural machine translation. Computer Speech
+& Language, 45:236 – 252.
+
+Jacob Devlin, Ming-Wei Chang, Kenton Lee,
+and Kristina Toutanova. 2018. Bert: Pretraining of deep bidirectional transformers
+for language understanding. arXiv preprint
+arXiv:1810.04805.
+
+Orhan Firat, Baskaran Sankaran, Yaser AlOnaizan, Fatos T Yarman Vural, and
+Kyunghyun Cho. 2016b.
+Zero-resource
+translation with multi-lingual neural machine
+translation.
+In Proceedings of the 2016
+Conference on Empirical Methods in Natural
+Language Processing, pages 268–277.
+
+George Doddington. 2002. Automatic evaluation
+of machine translation quality using n-gram cooccurrence statistics. In Proceedings of the second international conference on Human Language Technology Research, pages 138–145.
+Morgan Kaufmann Publishers Inc.
+
+Markus Freitag, Isaac Caswell, and Scott Roy.
+2019. Text repair model for neural machine
+translation. arXiv preprint arXiv:1904.04790.
+
+Daxiang Dong, Hua Wu, Wei He, Dianhai Yu, and
+Haifeng Wang. 2015. Multi-task learning for
+multiple language translation. In Proceedings
+of the 53rd Annual Meeting of the Association
+
+Jonas Gehring, Michael Auli, David Grangier,
+Denis Yarats, and Yann N. Dauphin. 2017.
+20
+
+Jiatao Gu, Yong Wang, Kyunghyun Cho, and Victor OK Li. 2019. Improved zero-shot neural
+machine translation via ignoring spurious correlations. arXiv preprint arXiv:1906.01181.
+
+Convolutional sequence to sequence learning.
+CoRR, abs/1705.03122.
+Dan Gillick, Cliff Brunk, Oriol Vinyals, and
+Amarnag Subramanya. 2015. Multilingual language processing from bytes. arXiv preprint
+arXiv:1512.00103.
+
+Caglar Gulcehre, Orhan Firat, Kelvin Xu,
+Kyunghyun Cho, Loic Barrault, Huei-Chi Lin,
+Fethi Bougares, Holger Schwenk, and Yoshua
+Bengio. 2015. On using monolingual corpora
+in neural machine translation. arXiv preprint
+arXiv:1503.03535.
+
+Xavier Glorot and Yoshua Bengio. 2010. Understanding the difficulty of training deep feedforward neural networks. In Proceedings of the
+thirteenth international conference on artificial
+intelligence and statistics, pages 249–256.
+
+Vineet Gupta, Tomer Koren, and Yoram Singer.
+2018.
+Shampoo: Preconditioned stochastic tensor optimization.
+arXiv preprint
+arXiv:1802.09568.
+
+Siavash Golkar, Michael Kagan, and Kyunghyun
+Cho. 2019. Continual learning via neural pruning. CoRR, abs/1903.04476.
+
+David Ha, Andrew Dai, and Quoc V Le.
+2016a.
+Hypernetworks.
+arXiv preprint
+arXiv:1609.09106.
+
+Ian Goodfellow, Yoshua Bengio, and Aaron
+Courville. 2016. Deep Learning. The MIT
+Press.
+
+Thanh-Le Ha, Jan Niehues, and Alexander
+Waibel. 2016b. Toward multilingual neural machine translation with universal encoder and decoder. arXiv preprint arXiv:1611.04798.
+
+Alex Graves, Marc G Bellemare, Jacob Menick,
+Remi Munos, and Koray Kavukcuoglu. 2017.
+Automated curriculum learning for neural networks. In Proceedings of the 34th International
+Conference on Machine Learning-Volume 70,
+pages 1311–1320. JMLR. org.
+
+Thanh-Le Ha, Jan Niehues, and Alexander H.
+Waibel. 2016c. Toward multilingual neural machine translation with universal encoder and decoder. CoRR, abs/1611.04798.
+
+Stephen Grossberg. 1988.
+Neurocomputing:
+Foundations of research. chapter How Does the
+Brain Build a Cognitive Code?, pages 347–399.
+MIT Press, Cambridge, MA, USA.
+
+Aaron Harlap, Deepak Narayanan, Amar Phanishayee, Vivek Seshadri, Gregory R Ganger,
+and Phillip B Gibbons. Pipedream: Pipeline
+parallelism for dnn training.
+
+Jiatao Gu, James Bradbury, Caiming Xiong,
+Victor OK Li, and Richard Socher. 2017.
+Non-autoregressive neural machine translation.
+arXiv preprint arXiv:1711.02281.
+
+Hany Hassan, Anthony Aue, Chang Chen, et al.
+2018. Achieving human parity on automatic
+chinese to english news translation. arXiv
+preprint arXiv:1803.05567.
+
+Jiatao Gu, Hany Hassan, Jacob Devlin, and Victor O.K. Li. 2018a. Universal neural machine
+translation for extremely low resource languages. In Proceedings of the 2018 Conference
+of the North American Chapter of the Association for Computational Linguistics: Human
+Language Technologies, Volume 1 (Long Papers), pages 344–354, New Orleans, Louisiana.
+Association for Computational Linguistics.
+
+Joel Hestness, Sharan Narang, Newsha Ardalani,
+Gregory Diamos, Heewoo Jun, Hassan Kianinejad, Md. Mostofa Ali Patwary, Yang Yang,
+and Yanqi Zhou. 2017. Deep learning scaling is predictable, empirically. arXiv preprint
+arXiv:1712.00409.
+Chris Hokamp, John Glover, and Demian
+Gholipour. 2019.
+Evaluating the supervised and zero-shot performance of multilingual translation models. arXiv preprint
+arXiv:1906.09675.
+
+Jiatao Gu, Yong Wang, Yun Chen, Kyunghyun
+Cho, and Victor OK Li. 2018b. Meta-learning
+for low-resource neural machine translation.
+arXiv preprint arXiv:1808.08437.
+21
+
+Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski, Bruna Morrone, Quentin de Laroussilhe, Andrea Gesmundo, Mona Attariyan,
+and Sylvain Gelly. 2019. Parameter-efficient
+transfer learning for nlp.
+arXiv preprint
+arXiv:1902.00751.
+
+ceedings of the 2013 Conference on Empirical Methods in Natural Language Processing,
+pages 1700–1709, Seattle, Washington, USA.
+Association for Computational Linguistics.
+Zhuoliang Kang, Kristen Grauman, and Fei Sha.
+2011. Learning with whom to share in multitask feature learning. In Proceedings of the
+28th International Conference on International
+Conference on Machine Learning, ICML’11,
+pages 521–528, USA. Omnipress.
+
+Po-Yao Huang, Frederick Liu, Sz-Rung Shiang,
+Jean Oh, and Chris Dyer. 2016. Attentionbased multimodal neural machine translation.
+In Proceedings of the First Conference on Machine Translation: Volume 2, Shared Task Papers, volume 2, pages 639–645.
+
+Eliyahu Kiperwasser and Miguel Ballesteros.
+2018. Scheduled multi-task learning: From
+syntax to translation. Transactions of the Association for Computational Linguistics, 6:225–
+240.
+
+Yanping Huang, Yonglong Cheng, Dehao Chen,
+HyoukJoong Lee, Jiquan Ngiam, Quoc V Le,
+and Zhifeng Chen. 2018. Gpipe: Efficient
+training of giant neural networks using pipeline
+parallelism. arXiv preprint arXiv:1811.06965.
+
+James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, et al. 2017. Overcoming catastrophic forgetting in neural networks. Proceedings of the national academy of sciences,
+114(13):3521–3526.
+
+Sébastien Jean, Orhan Firat, and Melvin Johnson. 2018. Adaptive scheduling for multi-task
+learning. In Advances in Neural Information
+Processing Systems, Workshop on Continual
+Learning, Montreal, Canada.
+
+Philipp Koehn. 2005. Europarl: A Parallel Corpus
+for Statistical Machine Translation. In Conference Proceedings: the tenth Machine Translation Summit, pages 79–86, Phuket, Thailand.
+AAMT, AAMT.
+
+Melvin Johnson, Mike Schuster, Quoc V Le, et al.
+2017. Google’s multilingual neural machine
+translation system: Enabling zero-shot translation. Transactions of the Association of Computational Linguistics, 5(1):339–351.
+
+Julia Kreutzer and Artem Sokolov. 2018.
+Learning to segment inputs for NMT favors character-level processing.
+CoRR,
+abs/1810.01480.
+
+Mahesh Joshi, Mark Dredze, William W. Cohen,
+and Carolyn Rose. 2012. Multi-domain learning: When do domains matter? In Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing
+and Computational Natural Language Learning, pages 1302–1312, Jeju Island, Korea. Association for Computational Linguistics.
+
+Taku Kudo and John Richardson. 2018. SentencePiece: A simple and language independent
+subword tokenizer and detokenizer for neural
+text processing. In Proceedings of the 2018
+Conference on Empirical Methods in Natural
+Language Processing: System Demonstrations,
+pages 66–71, Brussels, Belgium. Association
+for Computational Linguistics.
+
+Norman P. Jouppi, Cliff Young, Nishant Patil,
+et al. 2017. In-datacenter performance analysis of a tensor processing unit.
+
+Gaurav Kumar, George Foster, Colin Cherry, and
+Maxim Krikun. 2019. Reinforcement learning
+based curriculum optimization for neural machine translation. CoRR, abs/1903.00041.
+
+Lukasz Kaiser, Aidan N. Gomez, Noam Shazeer,
+Ashish Vaswani, Niki Parmar, Llion Jones, and
+Jakob Uszkoreit. 2017. One model to learn
+them all. CoRR, abs/1706.05137.
+
+Brenden M. Lake, Ruslan R. Salakhutdinov, Jason Gross, and Joshua B. Tenenbaum. 2011.
+One shot learning of simple visual concepts. In
+CogSci.
+
+Nal Kalchbrenner and Phil Blunsom. 2013. Recurrent continuous translation models. In Pro22
+
+Jiaqi Ma, Zhe Zhao, Xinyang Yi, Jilin Chen,
+Lichan Hong, and Ed H. Chi. 2018a. Modeling
+task relationships in multi-task learning with
+multi-gate mixture-of-experts. In Proceedings
+of the 24th ACM SIGKDD International Conference on Knowledge Discovery &#38; Data
+Mining, KDD ’18, pages 1930–1939, New
+York, NY, USA. ACM.
+
+Surafel Melaku Lakew, Aliia Erofeeva, Matteo
+Negri, Marcello Federico, and Marco Turchi.
+2018. Transfer learning in multilingual neural
+machine translation with dynamic vocabulary.
+CoRR, abs/1811.01137.
+Guillaume Lample, Ludovic Denoyer, and
+Marc’Aurelio Ranzato. 2017. Unsupervised
+machine translation using monolingual corpora
+only. arXiv preprint arXiv:1711.00043.
+
+Qingsong Ma, Ondřej Bojar, and Yvette Graham.
+2018b. Results of the wmt18 metrics shared
+task: Both characters and embeddings achieve
+good performance. In Proceedings of the Third
+Conference on Machine Translation: Shared
+Task Papers, pages 671–688.
+
+Giwoong Lee, Eunho Yang, and Sung Hwang.
+2016. Asymmetric multi-task learning based
+on task relatedness and loss. In International
+Conference on Machine Learning, pages 230–
+238.
+Jason Lee, Kyunghyun Cho, and Thomas Hofmann. 2017. Fully character-level neural machine translation without explicit segmentation.
+Transactions of the Association for Computational Linguistics, 5:365–378.
+
+Andreas Maurer, Massimiliano Pontil, and
+Bernardino Romera-Paredes. 2016. The benefit
+of multitask representation learning. Journal of
+Machine Learning Research, 17:81:1–81:32.
+Tom M. Mitchell. 1997. Machine learning. McGraw Hill series in computer science. McGrawHill.
+
+Xilai Li, Yingbo Zhou, Tianfu Wu, Richard
+Socher, and Caiming Xiong. 2019. Learn to
+grow: A continual structure learning framework for overcoming catastrophic forgetting.
+
+Grégoire Montavon, Wojciech Samek, and KlausRobert Müller. 2018. Methods for interpreting
+and understanding deep neural networks. Digital Signal Processing, 73:1–15.
+
+Wang Ling, Isabel Trancoso, Chris Dyer, and
+Alan W Black. 2015. Character-based neural machine translation.
+arXiv preprint
+arXiv:1511.04586.
+
+Hyeonseob Nam and Bohyung Han. 2015.
+Learning multi-domain convolutional neural networks for visual tracking.
+CoRR,
+abs/1510.07945.
+
+David Lopez-Paz et al. 2017. Gradient episodic
+memory for continual learning. In Advances in
+Neural Information Processing Systems, pages
+6467–6476.
+
+Graham Neubig and Junjie Hu. 2018. Rapid adaptation of neural machine translation to new languages. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 875–880. Association
+for Computational Linguistics.
+
+Yichao Lu, Phillip Keung, Faisal Ladhak, Vikas
+Bhardwaj, Shaonan Zhang, and Jason Sun.
+2018.
+A neural interlingua for multilingual machine translation.
+arXiv preprint
+arXiv:1804.08198.
+Minh-Thang Luong, Quoc V Le, Ilya Sutskever,
+Oriol Vinyals, and Lukasz Kaiser. 2015. Multitask sequence to sequence learning. arXiv
+preprint arXiv:1511.06114.
+
+Toan Q. Nguyen and David Chiang. 2017. Transfer learning across low-resource, related languages for neural machine translation. In Proc.
+IJCNLP, volume 2, pages 296–301.
+
+Minh-Thang Luong and Christopher D Manning.
+2016. Achieving open vocabulary neural machine translation with hybrid word-character
+models. arXiv preprint arXiv:1604.00788.
+
+Alex Nichol, Joshua Achiam, and John Schulman.
+2018. On first-order meta-learning algorithms.
+arXiv preprint arXiv:1803.02999.
+23
+
+Myle Ott, Sergey Edunov, David Grangier, and
+Michael Auli. 2018. Scaling neural machine
+translation. arXiv preprint arXiv:1806.00187.
+
+When and why are pre-trained word embeddings useful for neural machine translation. In
+HLT-NAACL.
+
+S. J. Pan and Q. Yang. 2010. A survey on transfer learning. IEEE Transactions on Knowledge
+and Data Engineering, 22(10):1345–1359.
+
+Alec Radford, Karthik Narasimhan, Tim Salimans, and Ilya Sutskever. Improving language
+understanding by generative pre-training.
+
+Kishore Papineni, Salim Roukos, Todd Ward,
+and Wei-Jing Zhu. 2002. Bleu: a method
+for automatic evaluation of machine translation. In Proceedings of 40th Annual Meeting
+of the Association for Computational Linguistics, pages 311–318, Philadelphia, Pennsylvania, USA. Association for Computational Linguistics.
+
+Maithra Raghu, Ben Poole, Jon Kleinberg, Surya
+Ganguli, and Jascha Sohl Dickstein. 2017. On
+the expressive power of deep neural networks.
+In Proceedings of the 34th International Conference on Machine Learning-Volume 70, pages
+2847–2854. JMLR. org.
+Prajit Ramachandran, Peter J Liu, and Quoc V
+Le. 2016. Unsupervised pretraining for sequence to sequence learning. arXiv preprint
+arXiv:1611.02683.
+
+German Ignacio Parisi, Ronald Kemker, Jose L.
+Part, Christopher Kann, and Stefan Wermter.
+2018. Continual lifelong learning with neural
+networks: A review. CoRR, abs/1802.07569.
+
+Bharath Ramsundar, Steven Kearnes, Patrick Riley, Dale Webster, David Konerding, and Vijay
+Pande. 2015. Massively multitask networks for
+drug discovery. arXiv:1502.02072.
+
+Anastasia Pentina, Viktoriia Sharmanska, and
+Christoph H. Lampert. 2015. Curriculum learning of multiple tasks. In The IEEE Conference
+on Computer Vision and Pattern Recognition
+(CVPR).
+
+Bernardino Romera-Paredes and Philip H. S. Torr.
+2015. An embarrassingly simple approach to
+zero-shot learning. In ICML.
+
+A. Phillips and M Davis. 2009. Tags for Identifying Languages. RFC 5646, RFC Editor.
+
+Michael T Rosenstein, Zvika Marx, Leslie Pack
+Kaelbling, and Thomas G Dietterich. 2005. To
+transfer or not to transfer. In NIPS 2005 workshop on transfer learning, volume 898, pages
+1–4.
+
+Emmanouil Antonios Platanios, Mrinmaya
+Sachan, Graham Neubig, and Tom Mitchell.
+2018. Contextual parameter generation for
+universal neural machine translation. arXiv
+preprint arXiv:1808.08493.
+
+Aurko Roy, Ashish Vaswani, Arvind Neelakantan, and Niki Parmar. 2018. Theory and experiments on vector quantized autoencoders. arXiv
+preprint arXiv:1805.11063.
+
+Emmanouil Antonios Platanios, Otilia Stretcu,
+Graham Neubig, Barnabás Póczos, and Tom M.
+Mitchell. 2019. Competence-based curriculum
+learning for neural machine translation. CoRR,
+abs/1903.09848.
+
+Sebastian Ruder. 2017. An overview of multitask learning in deep neural networks. CoRR,
+abs/1706.05098.
+
+Maja Popović. 2015. chrf: character n-gram fscore for automatic mt evaluation. In Proceedings of the Tenth Workshop on Statistical Machine Translation, pages 392–395.
+
+Sebastian Ruder, Joachim Bingel, Isabelle Augenstein, and Anders Søgaard. 2017. Learning what to share between loosely related tasks.
+arXiv preprint arXiv:1705.08142.
+
+Matt Post. 2018. A call for clarity in reporting
+bleu scores. arXiv preprint arXiv:1804.08771.
+
+Andrei A Rusu, Neil C Rabinowitz, Guillaume
+Desjardins, Hubert Soyer, James Kirkpatrick,
+Koray Kavukcuoglu, Razvan Pascanu, and Raia
+Hadsell. 2016. Progressive neural networks.
+arXiv preprint arXiv:1606.04671.
+
+Ye Qi, Sachan Devendra, Felix Matthieu, Padmanabhan Sarguna, and Neubig Graham. 2018.
+24
+
+sequence pre-training for language generation.
+arXiv preprint arXiv:1905.02450.
+
+Devendra Singh Sachan and Graham Neubig.
+2018. Parameter sharing methods for multilingual self-attentional translation models. Proceedings of the Third Conference on Machine
+Translation.
+
+Anuroop Sriram, Heewoo Jun, Sanjeev Satheesh,
+and Adam Coates. 2017. Cold fusion: Training
+seq2seq models together with language models.
+arXiv preprint arXiv:1708.06426.
+
+Rico Sennrich, Barry Haddow, and Alexandra
+Birch. 2015. Improving neural machine translation models with monolingual data. arXiv
+preprint arXiv:1511.06709.
+
+Nitish Srivastava, Geoffrey Hinton, Alex
+Krizhevsky, Ilya Sutskever, and Ruslan
+Salakhutdinov. 2014. Dropout: a simple way
+to prevent neural networks from overfitting.
+The Journal of Machine Learning Research,
+15(1):1929–1958.
+
+Rico Sennrich, Barry Haddow, and Alexandra
+Birch. 2016. Neural machine translation of
+rare words with subword units. In Proceedings
+of the 54th Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long
+Papers), volume 1, pages 1715–1725.
+
+Milos Stanojevic and Khalil Sima’an. 2014.
+BEER: BEtter evaluation as ranking. In Proceedings of the Ninth Workshop on Statistical Machine Translation, pages 414–419, Baltimore, Maryland, USA. Association for Computational Linguistics.
+
+Noam Shazeer, Youlong Cheng, Niki Parmar,
+et al. 2018. Mesh-tensorflow: Deep learning
+for supercomputers. In Advances in Neural Information Processing Systems, pages 10414–
+10423.
+
+Emma Strubell, Ananya Ganesh, and Andrew McCallum. 2019. Energy and policy considerations for deep learning in nlp.
+
+Noam Shazeer, Azalia Mirhoseini, Krzysztof
+Maziarz, Andy Davis, Quoc Le, Geoffrey
+Hinton, and Jeff Dean. 2017. Outrageously
+large neural networks: The sparsely-gated
+mixture-of-experts layer.
+arXiv preprint
+arXiv:1701.06538.
+
+Ilya Sutskever, Oriol Vinyals, and Quoc V Le.
+2014. Sequence to sequence learning with neural networks. In Advances in neural information processing systems, pages 3104–3112.
+
+Noam Shazeer and Mitchell Stern. 2018.
+Adafactor:
+Adaptive learning rates with
+sublinear memory cost.
+arXiv preprint
+arXiv:1804.04235.
+
+Xu Tan, Yi Ren, Di He, Tao Qin, Zhou Zhao, and
+Tie-Yan Liu. 2019. Multilingual neural machine translation with knowledge distillation.
+arXiv preprint arXiv:1902.10461.
+
+Jonathan Shen, Patrick Nguyen, Yonghui Wu,
+et al. 2019. Lingvo: a modular and scalable
+framework for sequence-to-sequence modeling.
+arXiv preprint arXiv:1902.08295.
+
+Sebastian Thrun and Tom M. Mitchell. 1995.
+Lifelong robot learning. Robotics and Autonomous Systems, 15(1):25 – 46. The Biology and Technology of Intelligent Autonomous
+Agents.
+
+Daniel L. Silver, Qiang Yang, and Lianghao Li.
+2013. Lifelong machine learning systems: Beyond learning algorithms. In AAAI Spring Symposium: Lifelong Machine Learning.
+
+Sebastian Thrun and Lorien Pratt, editors. 1998.
+Learning to Learn. Kluwer Academic Publishers, Norwell, MA, USA.
+
+Shagun Sodhani, Sarath Chandar, and Yoshua
+Bengio. 2018. On training recurrent neural networks for lifelong learning. CoRR,
+abs/1811.07017.
+
+Jörg Tiedemann. 2012. Parallel data, tools and
+interfaces in OPUS. In Proceedings of the
+Eighth International Conference on Language
+Resources and Evaluation (LREC-2012), pages
+2214–2218, Istanbul, Turkey. European Language Resources Association (ELRA).
+
+Kaitao Song, Xu Tan, Tao Qin, Jianfeng Lu, and
+Tie-Yan Liu. 2019. Mass: Masked sequence to
+25
+
+Marlies van der Wees, Arianna Bisazza, and
+Christof Monz. 2017. Dynamic data selection
+for neural machine translation. arXiv preprint
+arXiv:1708.00712.
+
+Jörg Tiedemann. 2018.
+Emerging language
+spaces learned from massively multilingual corpora. arXiv preprint arXiv:1802.00273.
+Jakob Uszkoreit, Jay M Ponte, Ashok C Popat,
+and Moshe Dubiner. 2010. Large scale parallel document mining for machine translation. In Proceedings of the 23rd International Conference on Computational Linguistics, pages 1101–1109. Association for Computational Linguistics.
+
+Felix Wu, Angela Fan, Alexei Baevski, Yann N
+Dauphin, and Michael Auli. 2019. Pay less attention with lightweight and dynamic convolutions. arXiv preprint arXiv:1901.10430.
+Yonghui Wu, Mike Schuster, Zhifeng Chen,
+et al. 2016. Google’s neural machine translation system: Bridging the gap between human and machine translation. arXiv preprint
+arXiv:1609.08144.
+
+Ashish Vaswani, Noam Shazeer, Niki Parmar,
+Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
+Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. In Advances in Neural
+Information Processing Systems, pages 5998–
+6008.
+
+Hongyi Zhang, Yann N Dauphin, and Tengyu
+Ma. 2019. Fixup initialization: Residual learning without normalization. arXiv preprint
+arXiv:1901.09321.
+
+Ricardo Vilalta and Youssef Drissi. 2002. A perspective view and survey of meta-learning. Artificial intelligence review, 18(2):77–95.
+
+Jiajun Zhang and Chengqing Zong. 2016. Exploiting source-side monolingual data in neural machine translation. In Proceedings of the
+2016 Conference on Empirical Methods in Natural Language Processing, pages 1535–1545.
+
+Oriol Vinyals, Charles Blundell, Timothy Lillicrap, Koray Kavukcuoglu, and Daan Wierstra.
+2016. Matching networks for one shot learning.
+In Proceedings of the 30th International Conference on Neural Information Processing Systems, NIPS’16, pages 3637–3645, USA. Curran
+Associates Inc.
+
+Yu Zhang and Qiang Yang. 2017.
+A survey on multi-task learning. arXiv preprint
+arXiv:1707.08114.
+
+Wei Wang, Taro Watanabe, Macduff Hughes, Tetsuji Nakagawa, and Ciprian Chelba. 2018a.
+Denoising neural machine translation training
+with trusted data and online data selection.
+arXiv preprint arXiv:1809.00068.
+
+Jie Zhou, Ying Cao, Xuguang Wang, Peng Li,
+and Wei Xu. 2016. Deep recurrent models
+with fast-forward connections for neural machine translation. Transactions of the Association for Computational Linguistics, 4:371–383.
+
+Weiyue Wang, Jan-Thorsten Peter, Hendrik
+Rosendahl, and Hermann Ney. 2016. Character: Translation edit rate on character level.
+In Proceedings of the First Conference on Machine Translation: Volume 2, Shared Task Papers, volume 2, pages 505–510.
+
+MichaÅĆ Ziemski, Marcin Junczys-Dowmunt,
+and Bruno Pouliquen. 2016. The united nations parallel corpus v1.0. In Proceedings of the
+Tenth International Conference on Language
+Resources and Evaluation (LREC 2016), Paris,
+France. European Language Resources Association (ELRA).
+
+Yining Wang, Jiajun Zhang, Feifei Zhai, Jingfang Xu, and Chengqing Zong. 2018b. Three
+strategies to improve one-to-many multilingual
+translation. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2955–2960, Brussels,
+Belgium. Association for Computational Linguistics.
+
+Barret Zoph, Deniz Yuret, Jonathan May, and
+Kevin Knight. 2016. Transfer learning for lowresource neural machine translation. In Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing,
+pages 1568–1575.
+
+26
+
+Language
+Afrikaans
+Albanian
+Amharic
+Arabic
+Armenian
+Azerbaijani
+Basque
+Belarusian
+Bengali
+Bosnian
+Bulgarian
+Burmese
+Catalan
+Cebuano
+Chinese
+Corsican
+Croatian
+Czech
+Danish
+Dutch
+Esperanto
+Estonian
+Filipino/Tagalog
+Finnish
+French
+Frisian
+Galician
+Georgian
+German
+Greek
+Gujarati
+Haitian_Creole
+Hausa
+Hawaiian
+
+Id
+af
+sq
+am
+ar
+hy
+az
+eu
+be
+bn
+bs
+bg
+my
+ca
+ceb
+zh
+co
+hr
+cs
+da
+nl
+eo
+et
+tl
+fi
+fr
+fy
+gl
+ka
+de
+el
+gu
+ht
+ha
+haw
+
+Language
+Hebrew
+Hindi
+Hmong
+Hungarian
+Icelandic
+Igbo
+Indonesian
+Irish
+Italian
+Japanese
+Javanese
+Kannada
+Kazakh
+Khmer
+Korean
+Kurdish
+Kyrgyz
+Lao
+Latvian
+Lithuanian
+Luxembourgish
+Macedonian
+Malagasy
+Malay
+Malayalam
+Maltese
+Maori
+Marathi
+Mongolian
+Nepali
+Norwegian
+Nyanja
+Pashto
+Persian
+
+Id
+iw
+hi
+hmn
+hu
+is
+ig
+id
+ga
+it
+ja
+jw
+kn
+kk
+km
+ko
+ku
+ky
+lo
+lv
+lt
+lb
+mk
+mg
+ms
+ml
+mt
+mi
+mr
+mn
+ne
+no
+ny
+ps
+fa
+
+Language
+Polish
+Portuguese
+Punjabi
+Romanian
+Russian
+Samoan
+Scots_Gaelic
+Serbian
+Sesotho
+Shona
+Sindhi
+Sinhalese
+Slovak
+Slovenian
+Somali
+Spanish
+Sundanese
+Swahili
+Swedish
+Tajik
+Tamil
+Telugu
+Thai
+Turkish
+Ukrainian
+Urdu
+Uzbek
+Vietnamese
+Welsh
+Xhosa
+Yiddish
+Yoruba
+Zulu
+
+Id
+pl
+pt
+pa
+ro
+ru
+sm
+gd
+sr
+st
+sn
+sd
+si
+sk
+sl
+so
+es
+su
+sw
+sv
+tg
+ta
+te
+th
+tr
+uk
+ur
+uz
+vi
+cy
+xh
+yi
+yo
+zu
+
+Table 8: List of BCP-47 language codes used throughout this paper (Phillips and Davis, 2009).
+.
+
+27
+
+

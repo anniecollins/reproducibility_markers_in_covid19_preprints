@@ -1,0 +1,3203 @@
+Shrinking the Upper Confidence Bound: A Dynamic
+Product Selection Problem for Urban Warehouses
+Rong Jin
+
+arXiv:1903.07844v2 [math.OC] 2 May 2019
+
+Alibaba Group, San Mateo, CA 94402, jinrong.jr@alibaba-inc.com
+
+David Simchi-Levi
+Institute for Data, Systems, and Society, Department of Civil and Environmental Engineering, and Operations Research
+Center, Massachusetts Institute of Technology, Cambridge, MA 02139, dslevi@mit.edu
+
+Li Wang
+Operations Research Center, Massachusetts Institute of Technology, Cambridge, MA 02139, li w@mit.edu
+
+Xinshang Wang
+Institute for Data, Systems, and Society, Massachusetts Institute of Technology, Cambridge, MA 02139, xinshang@mit.edu
+
+Sen Yang
+Alibaba Group, San Mateo, CA 94402, senyang.sy@alibaba-inc.com
+
+The recent rising popularity of ultra-fast delivery services on retail platforms fuels the increasing use of
+urban warehouses, whose proximity to customers makes fast deliveries viable. The space limit in urban
+warehouses poses a problem for such online retailers: the number of products (SKUs) they carry is no longer
+“the more, the better”, yet it can still be significantly large, reaching hundreds or thousands in a product
+category. In this paper, we study algorithms for dynamically identifying a large number of products (i.e.,
+SKUs) with top customer purchase probabilities on the fly, from an ocean of potential products to offer on
+retailers’ ultra-fast delivery platforms.
+We distill the product selection problem into a semi-bandit model with linear generalization. There are in
+total N arms, each with a feature vector of dimension d. The player pulls K arms in each period and observes
+the bandit feedback from each of the pulled arms. We focus on the setting where K is much greater than the
+number of total time periods T or the dimension of product features d. We first analyze a standard UCB
+algorithm and show its regret bound can be expressed as the sum of a T -independent part Õ(Kd3/2 ) and a
+√
+T -dependent part Õ(d KT ), which we refer to as “fixed cost” and “variable cost” respectively. To reduce
+the fixed cost for large K values, we propose a novel online learning algorithm, which iteratively shrinks the
+√
+upper confidence bounds within each period, and show its fixed cost is reduced by a factor of d to Õ(K d).
+Moreover, we test the algorithms on an industrial dataset from Alibaba Group. Experimental results show
+that our new algorithm reduces the total regret of the standard UCB algorithm by at least 10%.
+Key words : sequential decision making, product selection, online learning, online retailing, stochastic
+optimization, regret analysis
+
+1.
+
+Introduction
+
+In this paper, we study a large-scale product selection problem, motivated by the rising popularity
+of ultra-fast delivery on retail platforms. With ultra-fast delivery services such as same-day or
+1
+
+2
+
+Jin et al.: Large Scale Product Selection
+
+instant delivery, customers receive parcels within hours after placing online orders, whereas traditional deferred delivery usually takes one to five days. The demand for ultra-fast delivery is strong:
+a survey conducted in 2016 shows that 25% of customers are willing to pay significant premiums
+for the service (Joerss et al. 2016). On the supply side, many online retailers’ “spin-off” platforms
+that offer ultra-fast delivery have emerged in the market, for example, Amazon Prime Now, Walmart Jet.com, Ocado, and Alibaba Hema. As a result, the retail market for ultra-fast delivery has
+enjoyed exponential growth over the past few years. In the United States, the total order value of
+same-day delivery merchandise reached 4.03 billion dollars in 2018, up from 0.1 billion dollars in
+2014 (eMarketer 2018).
+The rapid growth in the ultra-fast delivery retail market is accompanied by the increasing use of
+urban warehouses (JLL 2018). Their proximity to customers is the key in making ultra-fast delivery
+viable for retailing models, especially in high-traffic cities like New York City and San Francisco.
+Online retailers typically integrate the urban warehouses for their fast-delivery “spin-off” platforms
+into their existing supply chains, by having them replenished by large suburban distribution centers
+that originally support their “traditional” online retail platforms only. However, due to the limited
+space in urban warehouses, the retail platforms offering ultra-fast delivery carry fewer products
+than the traditional online platforms that are directly fulfilled by distribution centers. Hence,
+retailers often face the challenge of selecting a good subset of different products (i.e., SKUs) to
+offer on the ultra-fast delivery platforms, from an ocean of potential products that are carried in
+the distribution centers.
+Thanks to modern inventory-management technologies, such as Kiva robots, the cost of maintaining a diversified inventory is no more than that of managing an inventory with only a few types
+of products (Bhattacharya 2016). Thus, online retailers offering ultra-fast delivery are disposed to
+carry more SKUs than the set of most popular items such as the market-leader or mainstream
+products with major market shares. By increasing product breadth, they gain an edge over local
+grocery stores or supermarkets, in terms of satisfying customers’ sporadic demands for products
+with medium-to-low popularities.
+For example, as of October 2018, Prime Now, Amazon’s two-hour delivery retail platform, offers
+around 1,500 different products in the toys category at zip code 02141 (Cambridge, MA). Meanwhile, a local CVS store at the same zip code only carries around 100 popular toys, whereas the
+traditional online retail platform Amazon.com includes more than 90,000 SKUs related to toys.
+Table 1 summarizes product coverages of different retailers, where products are partitioned into
+two types: 1) market-leader, and 2) medium/low-demand. The focus in this paper is on selecting an
+optimal set of products with medium-to-low demands for online retailers with urban warehouses.
+
+3
+
+Jin et al.: Large Scale Product Selection
+
+Brick and mortar
+Market-leader products
+Medium/low-demand products
+Table 1
+
+Most/All
+None/Few
+
+Online retail platforms
+Urban warehouse
+Distribution center
+All
+All
+Some (paper focus)
+Most
+
+Table of product assortment coverages of different retailers
+
+For urban warehouse retailers, the most popular items can be readily identified from their sales
+volumes. However, with their total number of SKUs in each category reaching hundreds, if not
+thousands, it is a more difficult task to accurately estimate the popularities of a large number of
+relatively low-demand products. Fortunately, online retailers are capable of adjusting the product
+sets in their urban warehouses, by exchanging a part of the inventory with their distribution centers
+during regular replenishments. This enables the retailers to learn each product’s probability of
+being sold through dynamic product offering, which in turn makes the problem a more complicated
+task of sequential decision-making than a pure demand estimation problem.
+In this paper, we study different algorithms for dynamically selecting an optimal set of products
+for online retailers that use urban warehouses to support their ultra-fast delivery services. The
+algorithms learn the demand levels of all products on the fly, and give retailers the ability to have
+their product sets tailored to every city, or even every zip code, better catering to customers’
+geodemographic preferences. We distill the product selection problem into a semi-bandit model
+with linear generalization. For this model, we first provide an alternative analysis of a popular
+existing algorithm, which we call SemiUCB, that is adapted from the algorithm OFUL proposed
+by Abbasi-Yadkori et al. (2011). Then, we propose a novel algorithm called ConsUCB, and show
+it is superior in both theoretical and numerical performances, especially when the retailer selects
+products and observes their sales in large batches.
+1.1.
+
+Model Overview
+
+We consider an online retailer who wants to find an optimal set of products (SKUs) in each category
+to be offered on her ultra-fast delivery retail platform in a certain city area. In the rest of the
+paper, we use “product” and “SKU” interchangeably.
+Due to the use of urban warehouses, the storage space, after including the market-leader products
+identified from past sales data, is limited. In each product category, assuming products take similar
+storage space, the retailer would like to select additional K SKUs from a catalog of N products that
+have medium-to-low customer demands. Because of their relatively low popularities, there is a very
+limited amount of available sales data related to the candidate products in that city. Therefore, the
+retailer is interested in learning the optimal set of products through experimentation. Specifically,
+in each period over a T -period sales time horizon, she selects K products to offer and observes
+
+4
+
+Jin et al.: Large Scale Product Selection
+
+whether customers purchase those products, which helps her learn the product demands more
+accurately and then adjust the product set accordingly in the next periods.
+By only considering products with relatively low demands in this problem (see the discussion of
+product coverage summarized in Table 1), we assume their sales are independent. The reason is that
+the demands for the N candidate products are typically direct demands, in the sense that customers
+specifically search for these products for some particular reasons. In the case where some products
+are not included in the offered product set, their demands, if not lost, are often captured by the
+market-leader products. Therefore, the probability of shifting from one low-popularity product to
+another is very low.
+We assume the candidate products’ probabilities of realizing positive sales in each period are an
+unknown linear function of their d-dimensional feature vectors that are known a priori and fixed
+over time. Specifically, for any product with feature vector x ∈ Rd , its positive-sales probability in
+
+percentage of SKUs with positive sales
+
+any period is x> θ∗ , where θ∗ is unknown.
+
+average score of each group
+Figure 1
+
+Sales data from Alibaba Tmall suggest a near-linear relationship between products’ probabilities of
+positive sales and their scores, which are linear in product features.
+
+We examine the linear model assumption between products’ features and their probabilities of
+positive sales on industrial data from Alibaba Tmall, the largest business-to-consumer online retail
+platform in China. We select around N ≈ 20, 000 products in the toys category with medium-tolow popularities in a city region. Each product is associated with a 50-dimensional feature vector,
+which is derived from the product’s intrinsic features as well as product-related user activities,
+like clicks, additions to cart, and purchases, by Alibaba’s deep learning team using representation
+learning (Bengio et al. 2013). Two consecutive weeks of the region’s unit sales data are translated
+into binary sales data indicating whether a product had positive sales in each week.
+
+Jin et al.: Large Scale Product Selection
+
+5
+
+To test the validity of the linear assumption, we first fit a linear model for the first-week binary
+sales with the product features as covariates. Then, for all products, we compute their scores based
+on the feature vectors using the fitted model, and divide the products into groups of size around
+1,000 according to their scores in ascending order. The positive-sales probabilities are estimated
+by the arithmetic averages of the products’ second-week binary sales for all groups. In Figure 1,
+the estimated positive-sales probabilities are plotted against the average scores for all 20 groups,
+and a near-linear relationship is clearly identified. Since the scores are linear in the features, this
+suggests that a linear relationship between the products’ features and probabilities of positive sales
+can be reasonably assumed.
+Since fast-delivery retailing is a rapid-growing business, such retailers’ objective in the early
+stages after launching the platforms is typically focused on user growth and retention, by providing
+customers with good shopping experiences. Therefore, in this problem, we assume the retailer’s
+goal is to maximize the number of products with positive sales, which represent successes in matching customers’ demands. Then, the expected reward in each period is the sum of positive-sales
+probabilities of the offered products. We measure an algorithm’s performance by its regret, the loss
+in total expected reward compared to the optimal expected reward.
+Such a model is usually referred to as semi-bandits with linear generalization. In the literature,
+more general models like contextual combinatorial semi-bandits have been studied mainly for different applications such as personalized movie recommendations or online advertising (Yue and
+Guestrin 2011, Qin et al. 2014, Wen et al. 2015). In those applications, the number of recommendations K is typically very small compared to the number of periods T . Indeed, Yue and Guestrin
+(2011) explicitly make the assumption that K ≤ d (recall that d is the dimension of the feature
+vector space).
+In the task of choosing optimal product sets for urban-warehouse retailers, however, the number
+of products selected in every period is usually very large (K ≥ 1000 products), whereas the learning
+process typically needs to be within a quarter (T ≤ 26, for semiweekly updates), to reduce operations cost and potential long-term consumer confusion. Motivated by this problem setting, we focus
+on a different regime of problem parameters in the semi-bandit model with linear generalization,
+where the number of selections K is large but the number of periods T is small.
+Directly applying existing algorithms and analyses in this setting results in regret bounds that
+grow rapidly in K (see the discussion of regret bounds of different algorithms summarized in Table
+2). Therefore, this raises the following research question that we aim to address in this work:
+How can a retailer optimize the exploration-exploitation tradeoff in selecting optimal product
+sets from a pool of N ≥ 20000 products, when there are only a few time periods (T ≤ 26)
+available for experimentation, but she is able to observe sales information for a large number
+of products (K ≥ 1000) in each period?
+
+6
+
+Jin et al.: Large Scale Product Selection
+
+Regarding whether this task is achievable, we point out that, even though the number of periods T
+is small, a good algorithm can still effectively learn the true model parameter θ∗ on the fly, because
+there are a significant number KT of sales observations after all.
+Since the time horizon we consider is no more than three months, we assume the set of candidate
+products remain unchanged. Moreover, products’ intrinsic characteristics and their related user
+behaviors are in general unlikely to have major changes during the relatively short time horizon.
+Hence, we assume that the product features are fixed over time in our problem setting. It is worth
+noting that, such assumptions can be removed once the time horizon is over, given θ∗ is accurately
+estimated in the end.
+For the purpose of presenting a clean model, we defer more discussions of the model’s connection
+to practice to later sections. For instance, in Section 5, we provide a numerical study on the
+consequence of not considering any shipping constraints when adjusting the product sets in the
+model. In Section 6, we explain other possible variants of the model.
+1.2.
+
+Main Contributions
+
+In addition to numerically testing algorithm performances on an online retailer’s data in Section 5,
+we make two main technical contributions in this paper:
+1. We provide an alternative analysis of a common Upper Confidence Bound algorithm, which
+we call SemiUCB, in our model setting (Section 3). The main idea behind SemiUCB is to use an
+ellipsoid to construct the confidence region for θ∗ . This technique has been studied in various semibandit models (c.f. Yue and Guestrin (2011), Qin et al. (2014)). We contribute to the literature by
+proving an alternative regret bound for this algorithm when K is large.
+Our new regret bound of SemiUCB can be expressed as a combination of two parts: (i) The first
+√
+part is Õ(d KT ), which is sub-linear in both K and T (Õ(·) hides logarithmic factors). We call
+this part the “variable cost”, as it increases with the length of time horizon T . The variable cost is
+a standard regret term in linear contextual bandit problems after playing KT arms (selecting KT
+products). (ii) The second part is Õ(Kd3/2 ), which is linear in K and independent of T . We call it
+the “fixed cost”, since it is independent of the length of the time horizon. The fixed cost is due to
+the unobservable feedback within selecting K products in each period.
+We also show that the fixed cost of SemiUCB is at least Ω(K min(d, T )). From the business
+point of view, this lower bound is discouraging, because over the T ≤ 26 periods, the total regret
+Ω(K min(d, T )) of the algorithm could be of the same order as the total reward O(KT ). In other
+words, the standard UCB technique and its immediate extensions could lead to arbitrarily bad
+performance over the entire season. This motivates us to devise new exploration-exploitation techniques to beat this lower bound on the fixed cost.
+
+7
+
+Jin et al.: Large Scale Product Selection
+
+2. In order to improve on the fixed cost of SemiUCB, we propose a novel “conservative” confidence
+bound that shrinks within each period, and propose a new algorithm ConsUCB (Section 4). Using
+the conservative confidence bound and selecting K products sequentially within each period, the
+new algorithm intelligently takes advantage of the abundance of sales observations in each period
+and enjoys an improved fixed cost.
+The regret bounds proved in this paper are summarized and compared with existing results in
+Table 2. Although the models in Yue and Guestrin (2011), Wen et al. (2015), Qin et al. (2014) are
+√
+more general than ours, their regret bounds often involve terms such as K dT and are thus not
+suitable when K is large. By contrast, in the regret bound of ConsUCB, the fixed cost that is linear
+√
+in K is only Õ(K d).
+√
+It is also worth noting that the d factor in the fixed cost of ConsUCB is due to linear gen√
+eralization. In practice, this d factor and other logarithmic factors are replaced by a parameter
+that is tuned to achieve good empirical performance (see Section 5). Despite these factors related
+to linear generalization, the fixed cost of ConsUCB is only O(K). For online retailers, it implies
+that the fixed cost of ConsUCB is no more than the optimal reward over only a few periods. On
+the other hand, there is a simple Ω(K) lower bound on the fixed cost of any algorithm, since an
+Ω(K) regret in the first time period is unavoidable. Therefore, the fixed cost of ConsUCB is optimal
+√
+except for a Õ( d) factor caused by linear generalization.
+Paper
+
+Algorithm technique
+
+Yue and Guestrin (2011)
+Wen et al. (2015)
+Wen et al. (2015)
+Qin et al. (2014)
+
+UCB
+Thompson sampling
+UCB
+UCB
+UCB
+(standard algorithm SemiUCB)
+UCB with conservative exploration
+(new algorithm ConsUCB)
+
+this paper (Section 3)
+this paper (Section 4)
+Table 2
+
+“Fixed cost”
+regret
+Õ(Kd3/2 )
+√
+Õ(K d)
+
+“Variable cost”
+√regret√
+Õ(K
+p dT + d KT )
+Õ(K dT min(ln
+√ N, d))
+Õ(Kd
+T√)
+√
+Õ(K dT + d KT )
+√
+Õ(d KT )
+√
+Õ(d KT )
+
+Regret bounds of algorithms adapted to our model setting where K is much larger than T or d.
+
+In the final part of the paper, we use Alibaba’s data to test and compare the performances of
+SemiUCB and ConsUCB. Numerically, we show that ConsUCB reduces about 10% of the regret of
+SemiUCB in the first ten periods.
+1.3.
+
+Related Literature
+
+Our model is a type of multi-armed bandit problem, if we view the N products as N distinct
+arms. In classic problems of multi-armed bandit, a player sequentially pulls arms without initially
+knowing which arm returns the highest reward in expectation. The player needs to update the
+
+8
+
+Jin et al.: Large Scale Product Selection
+
+strategy of pulling arms based on the bandit feedbak of the pulled arm in each round, in order
+to minimize the total regret over time. For a broader review on multi-armed bandit problems, we
+refer the reader to Bubeck and Cesa-Bianchi (2012), Slivkins (2017).
+There are two special characteristics of our model. First, we assume the reward of pulling an
+arm is a linear function of an embedding feature vector of the arm. Second, in each step the player
+is able to pull a very large number of different arms and then observe the bandit feedback for each
+of the pulled arms.
+In the literature, multi-armed bandit models assuming linear reward/payoff functions are often
+referred to as linear contextual bandits. Auer (2002), Dani et al. (2008), Rusmevichientong and
+Tsitsiklis (2010), Chu et al. (2011), Abbasi-Yadkori et al. (2011), Bubeck et al. (2012), Agrawal
+and Goyal (2012) propose and analyze different algorithms for linear models in which the player
+is able to pull only one arm in each period. The sampling algorithm in Russo and Van Roy (2014)
+also applies to this linear setting. Notably, the SemiUCB algorithm that we analyze in Section 3 is
+a direct extension of the OFUL algorithm in Abbasi-Yadkori et al. (2011). We are able to provide
+a new type of analysis of SemiUCB for our special model (see Section 3), in which the player can
+pull a large number of different arms (each arm is associated with a feature vector) in each period.
+When the reward of each arm is a linear function of covariates that are drawn i.i.d. from a
+diverse distribution, Goldenshluger and Zeevi (2013), Bastani and Bayati (2015), Wang et al. (2018)
+propose online learning algorithms whose regret bounds are proved to be poly-log in T . However,
+their regret bounds scale at least linearly with the total number of arms N . By contrast, the regret
+bounds of our algorithms are independent of N .
+When the player can pull multiple arms in each period and observe the bandit feedback from
+each of the pulled arms, the model is often referred to as semi-bandits (Audibert et al. 2014). In
+the literature, most semi-bandit models view the player’s action as a vector in {0, 1}N (c.f. CesaBianchi and Lugosi (2012), Gai et al. (2012), Chen et al. (2013)); they do not further assume the
+reward of each arm i ∈ [N ] to be a linear function.
+To our knowledge, only Yue and Guestrin (2011), Gabillon and Eriksson (2014), Qin et al. (2014),
+Wen et al. (2015) study semi-bandit models in which the reward of each arm is generalized to a linear
+function. The models in these papers are more general than ours, as they allow for combinatorial
+constraints or submodular reward functions. However, their research focuses on applications in
+which K is much smaller than T . Thus, their regret bounds grow rapidly in K. The regret bounds in
+√
+Yue and Guestrin (2011), Qin et al. (2014), Wen et al. (2015) contain O(K dT ). The regret bound
+P
+in Gabillon and Eriksson (2014) contains O(K i ∆1i ), where ∆i are gaps between sub-optimal and
+√
+√
+optimal arms. By contrast, the regret bound of our ConsUCB algorithm is Õ(K d + d KT ), in
+√
+which the term that is linear in K is only Õ(K d).
+
+9
+
+Jin et al.: Large Scale Product Selection
+
+2.
+
+Model Formulation
+
+Throughout the paper, we use [k] to denote the set {1, 2, . . . , k } for any positive integer k.
+There are N distinct products with low-to-medium customer demands. There are T periods, and
+in each period t ∈ [T ], the retailer selects a set of K products, denoted as St , from [N ] to offer on
+her retail platform.
+Each product i ∈ [N ] has a feature vector xi ∈ Rd that is known to the retailer in advance and
+stays fixed over time. The probability of positive sales of product i in any period is denoted as
+∗
+∗
+d
+µ(i), which is linear in its feature vector xi , i.e., µ(i) = x>
+i θ for some unknown vector θ ∈ R . We
+
+assume kθ∗ k ≤ 1 and µ(i) ∈ [0, 1], kxi k ≤ 1 for each product i ∈ [N ].
+In each period t, the binary random variable rt,i ∈ {0, 1} denotes whether the realized sales of
+product i in period t are positive, for each product i in the selected product set St . We assume rt,i is
+∗
+independent across products and across time periods, and its expected value E[rt,i ] = µ(i) = x>
+i θ .
+
+The expected reward in each period is the sum of positive sales probabilities of the offered
+PT P
+products, and the T -period total expected reward is
+t=1
+i∈St µ(i). The optimal product set
+P
+S ∗ ∈ arg max
+i∈S µ(i) is a set of K products with the highest probabilities of positive sales.
+S⊂[N ],|S|=K
+
+The performance of any online algorithm is measured by its regret, which is defined as
+R(T ) =
+
+T X
+X
+
+µ(i) −
+
+t=1 i∈S ∗
+
+T X
+X
+
+µ(i).
+
+t=1 i∈St
+
+In each period t ∈ [T ], the retailer makes the decision St based on all the past information
+including {rt0 ,i }t0 =1,2,...,t−1;i∈St0 . The goal is to minimize the total regret over the T time periods.
+
+3.
+
+Alternative Analysis of a Standard UCB Algorithm
+
+In this section, we focus on a popular existing UCB algorithm, which we call SemiUCB, that has
+been widely used in practice and analyzed in theory.
+We provide an alternative analysis of SemiUCB and prove a new regret bound, which consists
+√
+of a T -independent “fixed cost” Õ(Kd3/2 ) and a T -dependent “variable cost” Õ(d KT ). This
+alternative analysis allows us to more accurately evaluate the regret terms for SemiUCB, especially
+in our model where K is significantly larger than T .
+We also give an example to show an Ω(K min(d, T )) lower bound on the regret of SemiUCB,
+which illustrates the algorithm’s potential weakness in some cases. This lower bound implies that,
+in the regret bound of SemiUCB, the fixed cost is at least Ω(Kd), which is much more significant
+√
+than the variable cost Õ(d KT ) in our problem setting. Hence, the idea of modifying SemiUCB
+to reduce the fixed cost leads to the development of the new algorithm ConsUCB in Section 4.
+
+10
+
+Jin et al.: Large Scale Product Selection
+
+3.1.
+
+A Standard UCB Algorithm for Semi-Bandits with Linear Generalization
+
+SemiUCB is adapted from the standard UCB algorithm OFUL designed for linear contextual bandits
+(Abbasi-Yadkori et al. 2011). The difference is that, for SemiUCB, the model is updated once K
+products (arms) are offered (pulled) in each period, whereas, for OFUL, the model is updated every
+time one product (arm) is offered (pulled) in each period. If K is set to 1, the two algorithms
+become the same. SemiUCB is presented step by step in the following part.
+SemiUCB algorithm for semi-bandits with linear generalization (with input parameters α, ω):
+1. Initialize A0 = ωId×d and b0 = 0d .
+2. Repeat for t = 1, 2, 3, . . . , T
+(a) Set θt = A−1
+t−1 bt−1 .
+q
+
+−1
+x>
+i At−1 xi , for all i = 1, 2, 3, . . . , N .
+P
+(c) Offer product set St ∈ arg max
+i∈S pt (i) . Observe outcomes rt,i ∈ {0, 1} for i ∈ St .
+PS⊂N ,|S|=K
+P
+(d) Update At = At−1 + i∈St xi x>
+i and bt = bt−1 +
+i∈St rt,i xi .
+
+(b) Calculate pt (i) = x>
+i θt + α
+
+The algorithm SemiUCB we present above is an extension of OFUL (Abbasi-Yadkori et al. 2011),
+2
+and it can also be considered as a special case of its combinatorial version
+(Qin et al. 2014).
+r C UCB
+
+ √
+From Qin et al. (2014), we know that if SemiUCB is run with α = d log 1+TδN/K + K and
+√
+√
+ω = K, then the regret of the algorithm is Õ(K dT + d KT ) with probability at least 1 − δ.
+
+3.2.
+
+New Regret Bound for a Standard UCB Algorithm
+
+In this section, we provide an alternative analysis of the regret of SemiUCB, when applied to
+semi-bandit models with linear generalization.
+
+√
+We prove the regret of SemiUCB is Õ(Kd3/2 + d KT ), which is a sum of two parts. The first part
+
+Õ(Kd3/2 ) is largely due to the model’s inability to observe product sales feedback within selecting
+K products in each period, and is shown to be independent of the number of time periods, T .
+√
+The second part Õ(d KT ) is a common regret term for UCB-type algorithms in linear contextual
+bandit problems.
+If we consider the regret terms as “costs” that an algorithm has to pay in the learning process,
+the first part of the regret resembles an “fixed cost”, as it does not increase with T , while the
+second part is similar to a “variable cost”, as it increases with T .
+3.2.1.
+
+Existing results related to linear contextual bandits. We first introduce some
+
+existing results in the literature that we will use later on. For any positive definite matrix A ∈ Rd×d ,
+we define the weighted 2-norm of any vector x ∈ Rd as
+kxkA =
+
+√
+
+x> Ax.
+
+11
+
+Jin et al.: Large Scale Product Selection
+
+∗
+>
+Recall that, for each product i ∈ [N ], µ(i) is x>
+i θ and pt (i) is defined as xi θt + α
+
+q
+
+−1
+x>
+i At−1 xi for
+
+each period t ∈ [T ] in OFUL.
+Lemma 1 (Qin et al. (2014), Lemma 4.1). If we run SemiUCB with α =
+
+q
+
+d log
+
+1+T N
+δ
+
+
+
++1
+
+and ω = 1, then we have, with probability at least 1 − δ, for all periods t ∈ [T ] and all products
+i ∈ [N ],
+0 ≤ pt (i) − µ(i) ≤ 2αkxi kA−1 .
+t−1
+
+For each period t ∈ [T ], let x(t,1) , x(t,2) , . . . , x(t,K) denote an arbitrary permutation of the K feature
+vectors {xi : i ∈ St }.
+Define
+At,k = At−1 +
+
+k
+X
+
+x(t,i) x>
+(t,i) ,
+
+i=1
+
+for each period t ∈ [T ] and each k ∈ [K] ∪ {0}. The following lemma is a direct result of Lemma 3
+in Chu et al. (2011), by assuming the KT product selections are made in a model where only one
+product needs to be selected in each period for a total of KT periods.
+Lemma 2 (Chu et al. (2011), Lemma 3). If we run SemiUCB with ω = 1, then
+T X
+K
+X
+kx(t,k) kA−1
+
+p
+≤ 5 dKT log(KT ).
+
+t,k−1
+
+t=1 k=1
+
+3.2.2.
+
+New analysis for SemiUCB. The next lemma is the key lemma of our analysis for
+
+SemiUCB. It upper-bounds the difference between two norms of the same vector x weighted by two
+PL
+matrices, A and A + k=1 uk u>
+k . The additional sum of L outer products corresponds to updating
+matrix A using L feature vectors selected by SemiUCB. We defer its proof to the appendix.
+Lemma 3. Let A ∈ Rd×d be any symmetric positive definite matrix, and u1 , u2 , ..., uL ∈ Rd be
+any vectors. Let λ1 , λ2 , . . . , λd be the eigenvalues of A, and ν1 , ν2 , . . . , νd be the eigenvalues of A +
+PL
+>
+d
+k=1 uk uk . We have, for any x ∈ R such that kxk2 = 1,
+v
+u
+L
+d
+d
+u
+X
+X
+X
+√
+2
+2
+t
+> −1
+>
+−1
+>
+√ −
+x A x − x (A +
+uk uk ) x ≤
+√ .
+λi i=1 νi
+i=1
+k=1
+Our new regret bound for SemiUCB is presented in the following theorem.
+Theorem 1. If SemiUCB is run with
+s
+α=
+
+
+
+1+TN
+d log
+δ
+
+
++ 1,
+
+ω = 1,
+
+then with probability at least 1 − δ, the regret of the algorithm is
+√
+Õ(Kd3/2 + d KT ).
+
+12
+
+Jin et al.: Large Scale Product Selection
+
+Proof.
+
+By Lemma 1 and the property that SemiUCB picks products with the largest UCB values
+
+p(i), we have, with probability at least 1 − δ,
+R(T ) =
+
+≤
+
+T X
+X
+
+µ(i) −
+
+T X
+X
+t=1 i∈St
+
+T X
+X
+
+T X
+X
+
+pt (i) −
+
+t=1 i∈S ∗
+
+≤
+
+T X
+X
+
+T X
+X
+
+µ(i)
+
+t=1 i∈St
+
+pt (i) −
+
+T X
+X
+
+t=1 i∈St
+
+≤
+
+µ(i)
+
+t=1 i∈S ∗
+
+µ(i)
+
+t=1 i∈St
+
+2αkxi kA−1
+
+t−1
+
+t=1 i∈St
+
+= 2α
+
+T X
+X
+
+kxi kA−1 .
+t−1
+
+t=1 i∈St
+
+Recall that x(t,1) , . . . , x(t,K) is a sequence of feature vectors of products in St . Moreover, At,k =
+Pk
+At−1 + i=1 x(t,i) x>
+(t,i) , for each period t ∈ [T ] and each k ∈ [K] ∪ {0}. Then, we can continue to
+obtain
+R(T ) ≤ 2α
+
+T X
+X
+
+kxi kA−1
+
+t−1
+
+t=1 i∈St
+
+= 2α
+
+T
+X
+X
+
+= 2α
+= 2α
+
+kxi kA−1
+
+t−1
+
+t=1
+
+K
+X
+−
+kx(t,k) kA−1
+
+t,k−1
+
+i∈St
+
+K
+X
++
+kx(t,k) kA−1
+
+t,k−1
+
+k=1
+
+k=1
+
+!
+
+T
+K
+K
+X
+X
+X
+kx(t,k) kA−1 −
+kx(t,k) kA−1
+t−1
+
+t=1
+k=1
+T X
+K 
+X
+
+!
+
++ 2α
+
+t,k−1
+
+k=1
+
+kx(t,k) kA−1 − kx(t,k) kA−1
+t−1
+
+
+
++ 2α
+
+T X
+K
+X
+kx(t,k) kA−1
+
+t,k−1
+
+t=1 k=1
+T X
+K
+X
+
+kx(t,k) kA−1 .
+
+t,k−1
+
+(1)
+
+t,k−1
+
+t=1 k=1
+
+t=1 i=1
+
+For the second term in (1), we have by Lemma 2,
+s
+!
+
+
+T X
+K
+X
+p
+1+TN
+2α
+kx(t,k) kA−1 ≤ 2
+d log
++ 1 · 5 dKT log(KT )
+t,k−1
+δ
+t=1 k=1
+s
+
+
+p
+1 + KT
+= 10d KT log
+log(KT ) + 10 dKT log(KT ).
+δ
+
+(2)
+
+Let λt,1 , λt,2 , . . . , λt,d be the eigenvalues of At for all t ∈ [T ] ∪ {0}. For the first term in (1), by
+Lemma 3 and the fact that kx(t,k) kA−1 ≤ kx(t,k) kA−1
+t
+
+T X
+K 
+X
+
+kx(t,k) kA−1 − kx(t,k) kA−1
+t−1
+
+t=1 k=1
+
+for all t ∈ [T ] and k ∈ [K], we obtain
+
+t,k−1
+
+
+
+≤
+
+T X
+K 
+X
+
+kx(t,k) kA−1 − kx(t,k) kA−1
+t−1
+
+t,k−1
+
+t=1 i=1
+
+t
+
+
+
+13
+
+Jin et al.: Large Scale Product Selection
+
+!
+d
+X
+2
+2
+p
+p
+−
+≤
+λt−1,j j=1 λt,j
+t=1 i=1
+j=1
+!
+T
+d
+d
+X
+X
+X
+2
+2
+p
+p
+=K
+−
+λ
+λt,j
+t−1,j
+t=1
+j=1
+j=1
+!
+d
+d
+X 2
+X 2
+p
+p
+=K
+−
+λ0,j j=1 λT,j
+j=1
+T X
+K
+d
+X
+X
+
+≤K
+
+d
+X
+
+p
+j=1
+
+2
+.
+λ0,j
+
+Since A0 = Id×d , we have λ0,j = 1 for all j ∈ [d]. Hence, we have
+2α
+
+T X
+K 
+X
+
+kx(t,k) kA−1 − kx(t,k) kA−1
+t−1
+
+t=1 i=1
+d
+X
+
+≤2α · K
+
+p
+j=1
+
+
+
+t,k−1
+
+2
+λ0,j
+
+=2α · 2Kd
+s
+!
+
+
+1+TN
+=2
+d log
++ 1 · 2Kd
+δ
+s 
+
+1+TN
+3
+2
++ 4Kd.
+=4d K log
+δ
+Combining (2) and (3), we complete the proof.
+
+(3)
+
+
+
+√
+As shown by Abbasi-Yadkori et al. (2011), OFUL has a regret of Õ(d T ) in linear contextual
+
+bandit models, in which there is only one bandit observation in each period. Hence, the variable cost
+√
+of SemiUCB, Õ(d KT ), matches the same regret, since there are in total KT bandit observations.
+3.3.
+
+Lower Bound on the Fixed Cost of SemiUCB
+
+In this section, we show a lower bound on the fixed cost of SemiUCB by analyzing its regret in a
+simple example.
+Theorem 2. The regret of SemiUCB is Ω(K min(d, T )).
+Suppose there are Kd products and they are split into d groups, (G1 , G2 , · · · , Gd ). For
+
+each i ∈ [d], Gi has K products with the same feature vector 21 + 2di ei , where ei denotes the unit
+Proof.
+
+vector with the i-th element being one.
+Suppose θ∗ = e1 . Then the optimal solution is to offer G1 in all T periods, and the expected
+
+1
+reward in every period is K 21 + 2d
+.
+
+Initially, for each i ∈ [d], the UCB value used by SemiUCB for products in group Gi is α 12 + 2di ,
+which is increasing in i ∈ [d].
+
+14
+
+Jin et al.: Large Scale Product Selection
+
+Since the feature vectors of products in different groups are mutually perpendicular, the UCB
+value of a product will not be affected by products selected from other groups. Therefore, the initial
+
+UCB value α 12 + 2di for group Gi will not change until one of the products in Gi is picked by
+SemiUCB.
+Given that SemiUCB always picks products with the highest UCB values, and the initial UCB
+values increase in the group index i ∈ [d], SemiUCB will not select any product in G1 in the first
+d − 1 periods.
+Therefore, the total reward of SemiUCB in the first min(T, d − 1) periods must be zero. It follows
+that the regret of SemiUCB is at least
+
+min(T, d − 1) · K
+
+1
+1
++
+2 2d
+
+
+= Ω(K min(T, d)).
+
+
+We make two remarks regarding this lower bound result:
+1. When the retailer selects K products in the first period, she has no prior information for the
+estimation of θ∗ . Thus, regardless of the value of T , the regret of any non-anticipating algorithm
+is at least Ω(K). Compared to this, the lower bound Ω(K min(T, d)) for SemiUCB has an extra
+factor of min(T, d). Therefore, in order to achieve a fixed cost close to Ω(K), we have to design a
+new algorithm, which is our goal in the next section.
+2. When T = d, the lower bound on the regret for SemiUCB is Ω(Kd), and there is only a Õ(d1/2 )
+gap compared to the fixed cost Õ(Kd3/2 ) that we have proved in Theorem 1. This Õ(d1/2 ) factor
+q
+
+originates from the parameter α = d log 1+Tδ N + 1 that scales the lengths of confidence intervals.
+
+4.
+
+Online Learning with Conservative Exploration
+
+In this section, we present a new algorithm ConsUCB for the semi-bandit model with linear generalization. The new algorithm is based on a novel construction of exploration steps that are more
+conservative than standard UCB procedures. Our analysis of ConsUCB shows its regret bound is
+√
+√
+Õ(K d + d KT ), which improves on SemiUCB’s fixed cost by a factor of d.
+4.1.
+
+ConsUCB Algorithm for Semi-Bandits with Linear Generalization
+
+As illustrated in the lower bound proof in Section 3.3, SemiUCB’s potential weakness lies in its
+tendency to select products with feature vectors that have the same or similar directions. In other
+words, the set of selected products in each period is sometimes not diversified enough. This is
+because, in any period t, the K products in St are selected independently based on the UCB values
+pt (i), which are calculated at the start of the period and sometimes form clusters for product
+groups with similar feature vector directions.
+
+15
+
+Jin et al.: Large Scale Product Selection
+
+The new algorithm ConsUCB solves SemiUCB’s potential problem by offering more diversified
+product sets. This is achieved through a sequential selection mechanism in each period, based on
+an adaptive product score pt,k (i), which shrinks per selection to make dissimilar products more
+likely to be chosen in subsequent selections.
+More precisely, in ConsUCB, the K products in St are selected sequentially, in a fashion that
+the k-th selection (for all k ∈ [K]) is based on scores pt,k (i) that are updated using the feature
+vectors of the k − 1 previously selected products in the period. If product i is the k-th selection in
+period t, then the scores pt,k+1 (j), . . . , pt,K (j) for all products j that share similar feature vectors
+with product i are decreased. This encourages more diversified product selections in each period.
+Because of the way pt,k (i) is defined in ConsUCB, it is always less than or equal to the standard
+UCB value pt (i). This makes the new algorithm a variant of SemiUCB with more conservative
+exploration steps – hence the name ConsUCB.
+
+ConsUCB algorithm for semi-bandits with linear generalization (with input parameter α):
+1. Initialize A0 = Id×d and b0 = 0d .
+2. Repeat for t = 1, 2, 3, . . . , T
+(a) Set θt = A−1
+t−1 bt−1 and At,0 = At−1 . Initialize St = {}.
+(b) Repeat for k = 1, 2, 3, . . . , K
+i. Calculate pt,k (i) = x>
+i θt − α
+
+q
+
+−1
+x>
+i At−1 xi + 2α
+
+q
+
+−1
+x>
+i At,k−1 xi , for all i ∈ [N ].
+
+ii. Add a product j ∈ arg max {pt,k (i)} to St . Update At,k = At,k−1 + xj x>
+j .
+i∈N \St
+
+(c) Offer product set St . Observe outcomes rt,i ∈ {0, 1} for i ∈ St .
+P
+P
+(d) Update At = At−1 + i∈St xi x>
+i and bt = bt−1 +
+i∈St rt,i xi .
+ConsUCB shares a similar framework with SemiUCB, but it differs from SemiUCB in Step 2(b),
+in which a different product score, pt,k (i), is maintained and the K products in St are chosen in
+a sequential manner. We stress that the construction of product scores pt,k (i), i.e., Step 2(b)i., is
+novel.
+Figure 2 further illustrates the conservative exploration technique. In the figure, the sets of products selected by ConsUCB and SemiUCB in a given time period are compared. In this example, we
+have d = 2, K = 8, and N = 16 products are clustered
+into
+
+ two groups
+  along the feature dimensions.
+1.5 0
+0
+At the beginning of the period, suppose At−1 =
+and θt =
+in both algorithms. This set0 1
+0
+ting slightly favors exploration in feature dimension 2. The upper graphs illustrate that SemiUCB
+selects K products all in one group, reducing the uncertainty related to θ∗ almost only in one
+dimension (shown by the shrinkages from the larger ellipses to the smaller ones), whereas ConsUCB
+selects a more diversified product set, significantly reducing θ∗ uncertainty in both dimensions.
+
+16
+
+1.00
+
+0.75
+
+0.75
+
+0.50
+
+0.50
+
+feature dimension 2
+
+1.00
+
+0.25
+0.00
+0.25
+0.50
+0.75
+
+products selected by SemiUCB
+unselected products
+
+1.00
+
+SemiUCB score
+
+1.0
+
+0.5
+0.0
+0.5
+feature dimension 1
+
+0.0
+
+Figure 2
+
+selected by SemiUCB
+0
+
+2
+4
+SemiUCB iterations
+
+0.00
+0.25
+0.50
+0.75
+
+6
+
+products selected by ConsUCB
+unselected products
+
+1.00
+
+1.0
+
+1.0
+0.5
+
+0.25
+
+1.0
+ConsUCB score
+
+feature dimension 2
+
+Jin et al.: Large Scale Product Selection
+
+0.5
+0.0
+0.5
+feature dimension 1
+
+1.0
+
+1.0
+
+selected by ConsUCB
+
+0.5
+0.0
+
+0
+
+2
+4
+ConsUCB iterations
+
+6
+
+In the upper graphs, each dot represents a product in the two-dimensional feature space. We show
+
+that the products selected by ConsUCB are more diversified than those selected by SemiUCB in a given time
+period. In the lower plots, we demonstrate that the scores of products used by ConsUCB shrink every time a
+product is selected, while the scores used by SemiUCB are constant within each period.
+
+The lower two graphs demonstrate that SemiUCB calculates the product scores pt (·) only once at
+the beginning and chooses the top K products, while the scores pt,k (·) in ConsUCB are updated
+every time a product is selected.
+4.2.
+
+Regret Bound Analysis for ConsUCB
+
+√
+√
+In this section, we prove that the regret of ConsUCB is Õ(K d + d KT ).
+
+Proposition 1 demonstrates the key benefit of using conservative exploration. It shows that,
+under ConsUCB, the regret per product selection can be upper-bounded by the sum of a standard
+confidence interval term and the increase in the lower confidence bound of a product in the optimal product set. The rest of the regret analysis follows from Proposition 1 and is completed in
+Theorem 3.
+For convenience, let ∆t,k (i) denote
+
+q
+−1
+x>
+i At,k xi , for all i ∈ [N ], k ∈ [K] and t ∈ [T + 1]. For
+
+each product i ∈ [N ] and each period t ∈ [T + 1], define LCBt (i) = x>
+i θt − α∆t,0 (i) and UCBt (i) =
+> ∗
+x>
+i θt +α∆t,0 (i) as the lower and upper confidence bounds for µ(i) = xi θ , respectively. Let it,k ∈ [N ]
+
+denote the k-th product selected in period t by ConsUCB.
+
+17
+
+Jin et al.: Large Scale Product Selection
+
+Proposition 1. If ConsUCB is run with α =
+
+q
+
+d ln
+
+1+N +T N
+δ
+
+
+
++ 1, then with probability at least
+
+1 − δ, the following conditions hold for all t ∈ [T ] and k ∈ [K]:
+(1) If it,k ∈
+/ S ∗ , then for all i∗ ∈ S ∗ \St ,
+µ(i∗ ) − µ(it,k ) ≤ LCBt+1 (i∗ ) − LCBt (i∗ ) + 2α∆t,k−1 (it,k ).
+(2) If it,k ∈ S ∗ , then
+0 ≤ LCBt+1 (it,k ) − LCBt (it,k ) + 2α∆t,k−1 (it,k ).
+Proof.
+
+By Lemma 1, with probability at least 1 − δ, we have
+>
+LCBt (i) = x>
+i θt − α∆t,0 (i) ≤ µ(i) ≤ xi θt + α∆t,0 (i) = UCBt (i),
+
+(4)
+
+for all i ∈ [N ] and t ∈ [T + 1].
+Consider any product it,k , which is selected in the k-th step in period t by ConsUCB. Conditioned
+on (4), we want to show, for all it,k ∈ St ,
+1. If it,k ∈
+/ S ∗ , then for all i∗ ∈ S ∗ \St ,
+µ(i∗ ) − µ(it,k ) ≤ LCBt+1 (i∗ ) − LCBt (i∗ ) + 2α∆t,k−1 (it,k ).
+
+(5)
+
+0 ≤ LCBt+1 (it,k ) − LCBt (it,k ) + 2α∆t,k−1 (it,k ).
+
+(6)
+
+2. If it,k ∈ S ∗ , then
+
+Consider the first case where it,k ∈
+/ S ∗ . We have
+¬
+
+µ(i∗ ) − µ(it,k ) ≤ UCBt+1 (i∗ ) − LCBt (it,k )
+­
+
+= UCBt+1 (i∗ ) − pt,k (it,k ) + 2α∆t,k−1 (it,k )
+®
+
+≤ UCBt+1 (i∗ ) − pt,k (i∗ ) + 2α∆t,k−1 (it,k )
+¯
+
+= (LCBt+1 (i∗ ) + 2α∆t+1,0 (i∗ )) − (LCBt (i∗ ) + 2α∆t,k−1 (i∗ )) + 2α∆t,k−1 (it,k )
+°
+
+≤ LCBt+1 (i∗ ) − LCBt (i∗ ) + 2α∆t,k−1 (it,k ).
+
+Above, inequality ¬ follows from condition (4); equalities ­ and ¯ are by definition of pt,k (i),
+UCBt (i) and LCBt (i); inequality ® is because product it,k is selected, instead of i∗ , by ConsUCB in
+the k-th step in period t; inequality ° is because
+∆t+1,0 (i) =
+
+q
+
+x> A−1
+t xi =
+
+q
+
+x> A−1
+t,K xi ≤
+
+Now consider the second case where it,k ∈ S ∗ .
+
+q
+
+−1
+x>
+i At,k−1 xi = ∆t,k−1 (i)
+
+for all i ∈ [N ].
+
+18
+
+Jin et al.: Large Scale Product Selection
+
+Given condition (4) and ∆t+1,0 (it,k ) ≤ ∆t,k−1 (it,k ), we have
+0 ≤ UCBt+1 (it,k ) − LCBt (it,k ) = LCBt+1 (it,k ) − LCBt (it,k ) + 2α∆t+1,0 (it,k )
+≤ LCBt+1 (it,k ) − LCBt (it,k ) + 2α∆t,k−1 (it,k ).
+
+Since (4) holds with probability at least 1 − δ, the probability that either (5) or (6) holds is also
+at least 1 − δ.
+
+
+
+Now we complete the regret analysis for ConsUCB, using the results from Proposition 1.
+q
+
+Theorem 3. If ConsUCB is run with α = d ln 1+Nδ+T N + 1, then with probability at least
+√
+√
+1 − δ, the regret of the algorithm is Õ(K d + d KT ).
+Proof.
+
+Notice that the regret in period t can written as
+
+ 
+
+X
+X
+X
+X
+X
+X
+µ(i) +
+µ(i) +
+µ(i) −
+µ(i) = 
+µ(i) − 
+µ(i)
+i∈S ∗
+
+i∈S ∗ ∩St
+
+i∈St
+
+=
+
+X
+
+i∈St ∩S ∗
+
+i∈S ∗ \St
+
+X
+
+µ(i) −
+
+i∈S ∗ \St
+
+i∈St \S ∗
+
+µ(i).
+
+i∈St \S ∗
+
+Since St \S ∗ and S ∗ \St have the same number of products, let ft : St \S ∗ → S ∗ \St be an arbitrary
+one-to-one function that maps from St \S ∗ to S ∗ \St . As a result, summing over S ∗ \St is the same
+as summing over {ft (i) : i ∈ St \S ∗ }. Hence, the T -period total expected regret can be written as
+
+
+T
+X
+X
+X
+
+R(T ) =
+µ(i) −
+µ(i)
+t=1
+
+=
+
+i∈S ∗ \St
+
+T
+X
+X
+
+i∈St \S ∗
+
+(µ(ft (i)) − µ(i))
+
+t=1 i∈St \S ∗
+
+=
+
+T X
+K
+X
+
+1{it,k 6∈S ∗ } (µ(ft (it,k )) − µ(it,k )) ,
+
+t=1 k=1
+
+where 1{·} is the indicator function.
+Then, we use Proposition 1 to obtain
+R(T ) =
+=
+≤
+
+T X
+K
+X
+t=1 k=1
+T X
+K
+X
+t=1 k=1
+T X
+K
+X
+
+1{it,k 6∈S ∗ } (µ(ft (it,k )) − µ(it,k ))
+
+
+
+1{it,k 6∈S ∗ } · (µ(ft (it,k )) − µ(it,k )) + 1{it,k ∈S ∗ } · 0
+
+
+1{it,k 6∈S ∗ } · (LCBt+1 (ft (it,k )) − LCBt (ft (it,k )) + 2α∆t,k−1 (it,k ))
+
+t=1 k=1
+
+
++ 1{it,k ∈S ∗ } · (LCBt+1 (it,k ) − LCBt (it,k ) + 2α∆t,k−1 (it,k ))
+"
+#
+T
+K
+X
+X
+X
+=
+2α∆t,k−1 (it,k )
+(LCBt+1 (i) − LCBt (i)) +
+t=1
+
+i∈S ∗
+
+k=1
+
+19
+
+Jin et al.: Large Scale Product Selection
+
+=
+
+X
+
+(LCBT +1 (i) − LCB1 (i)) +
+
+i∈S ∗
+
+T X
+K
+X
+
+2α∆t,k−1 (it,k ).
+
+t=1 k=1
+
+Conditioned on (4), we have LCBT +1 (i) ≤ µ(i) for all i ∈ [N ]. Since we assume µ(i) ≤ 1 for all
+products i ∈ [N ], we have LCBT +1 (i) ≤ 1 for all i ∈ S ∗ . Thus,
+X
+
+LCBT +1 (i) ≤ |S ∗ | = K.
+
+i∈S ∗
+
+Moreover, by definition of LCB1 (i), we have
+q
+q
+> −1
+LCB1 (i) = −α xi A0 xi = −α x>
+i Id×d xi ≥ −α.
+Thus,
+X
+
+−LCB1 (i) ≤ α|S ∗ | = αK.
+
+i∈S ∗
+
+Finally, by Lemma 2, we have
+2α
+
+T X
+K
+X
+
+∆t,k−1 (it,k ) ≤ 10α
+
+p
+
+dKT log(KT ).
+
+t=1 k=1
+
+Altogether, the total regret of ConsUCB can be bounded by
+R(T ) ≤
+
+X
+
+(LCBT +1 (i) − LCB1 (i)) +
+
+i∈S ∗
+
+T X
+K
+X
+
+2α∆t,k−1 (it,k )
+
+t=1 k=1
+
+p
+
+≤ K + αK + 10α dKT log(KT )
+s
+!
+
+
+
+
+p
+1+N +TN
+=K+
+d ln
++1
+K + 10 dKT log(KT )
+δ
+√
+√
+= Õ(K d + d KT ).
+
+
+
+5.
+
+Numerical Experiments
+
+In this section, we test the algorithms SemiUCB and ConsUCB using industrial data from Alibaba
+Group.
+We select around N ≈ 20, 000 different products in the toys category that were sold on Alibaba
+Tmall, the largest business-to-consumer online retail platform in China, during the month of April
+2018. Since our model is only concerned with products with medium to low demands, the set of
+N ≈ 20, 000 products excludes any products that on average sold more than 20 units per day in
+China during that month.
+The feature vectors of the products are generated by Alibaba’s deep learning team using representation learning (Bengio et al. 2013), based on both product’s intrinsic features as well as
+
+20
+
+Jin et al.: Large Scale Product Selection
+
+historical product-related user activities. Thus, each feature vector is essentially compressed from
+high-dimensional sparse data to a d = 50 dimensional vector. As we have shown in Section 1,
+there is a near-linear relationship between the products’ features and their probabilities of being
+purchased.
+For an arbitrarily chosen city in China, we estimate the parameter θ∗ of a linear predictor based
+on the city’s local sales data in April 2018. Then, assuming θ∗ is unknown at the beginning, we
+test the performances of SemiUCB and ConsUCB on the product selection problem, by computing
+their cumulative regrets, the algorithms’ compromises in performance compared to the case where
+θ∗ is known from the beginning.
+
+K=2000, T=26, d=50, N=20000
+
+600
+
+cumulative regret
+
+500
+400
+300
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+200
+100
+0
+
+Figure 3
+
+0
+
+5
+
+10
+
+15
+time period
+
+20
+
+=0.02
+=0.1
+=0.5
+=1
+=0.5
+25
+
+Cumulative regret of SemiUCB (with ω = 1) and ConsUCB in the first T = 26 periods, when K = 2000.
+
+Figures 3 and 4 summarize our simulation results, for K = 2000, K = 1000 and K = 200
+respectively. For each K ∈ {2000, 1000, 200}, we run both SemiUCB and ConsUCB for 26 time
+periods, and in each period t ∈ {1, . . . , 26}, we calculate the algorithms’ per-period regrets,
+regrett (SemiUCB) and regrett (ConsUCB), and then compute the algorithms’ cumulative regrets,
+Pt
+Pt
+s=1 regrets (SemiUCB) and
+s=1 regrets (ConsUCB). Averaged over ten simulation replicates,
+the two algorithms’ cumulative regrets are plotted in Figures 3 and 4. In Table 3, we list ConsUCB’s
+improvements in cumulative regret over SemiUCB at the end of the 26-period time horizon.
+It is clear that ConsUCB’s cumulative regret is consistently lower than that of SemiUCB over a
+set of α values, for all values of K that we include in the test. Moreover, from all plots, we can see
+that, compared to SemiUCB, ConsUCB’s most reductions in regret happen in the first ten periods,
+and their differences stabilize starting around the 15th period. This is mainly because ConsUCB is
+specially designed to mitigate the fixed cost part of the regret, which is introduced right at the
+beginning, independent of T . While T increases as the algorithms progress, the estimation of θ∗ in
+
+21
+
+Jin et al.: Large Scale Product Selection
+
+K=1000, T=26, d=50, N=20000
+500
+
+cumulative regret
+
+400
+
+K=200, T=26, d=50, N=20000
+
+=0.02
+=0.1
+=0.5
+=1
+=0.02
+
+300
+200
+
+150
+
+=0.02
+=0.1
+=0.5
+=1
+=0.02
+
+100
+50
+
+100
+0
+
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+200
+cumulative regret
+
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+0
+
+Figure 4
+
+5
+
+10
+
+15
+time period
+
+20
+
+25
+
+0
+
+0
+
+5
+
+10
+
+15
+time period
+
+20
+
+25
+
+Cumulative regret of SemiUCB (with ω = 1) and ConsUCB in the first T = 26 periods, when K = 1000
+and K = 200.
+
+both SemiUCB and ConsUCB becomes more accurate, and the variable cost part of the regret takes
+over. Since both algorithms have the same order of regret for the variable cost, their differences
+eventually become stable.
+SemiUCB
+ConsUCB
+Regret improvement
+α = 0.02 571.80
+15.89%
+α = 0.10 552.56
+12.96%
+K = 2000
+α = 0.50 480.96
+α = 0.50 551.01
+12.71%
+α = 1.00 577.77
+16.76%
+α = 0.02 512.91
+21.26%
+α = 0.10 509.25
+20.69%
+K = 1000
+α = 0.02 403.88
+α = 0.50 482.78
+16.34%
+α = 1.00 501.52
+19.47%
+α = 0.02 235.6
+20.53%
+α = 0.10 227.58
+17.70%
+K = 200
+α = 0.02 187.28
+α = 0.50 209.69
+10.69%
+α = 1.00 216.25
+13.39%
+Table 3
+
+Table of cumulative regrets of SemiUCB and ConsUCB at the end of the 26-period time horizon and
+ConsUCB’s relative improvements over SemiUCB in cumulative regrets.
+
+Table 3 shows that ConsUCB improves SemiUCB’s best performance over a set of α values by
+12.71%, 16.34% and 10.69%, for K = 2000, K = 1000 and K = 200 respectively. It is interesting to
+note that the best improvement comes from the experiment with K = 1000, rather than the one
+with the largest value K = 2000. One main reason is that, for a fixed N number of products, if K
+is increased above a certain threshold, then SemiUCB is forced to select a diversified product set,
+and thus closes its gap with ConsUCB. Indeed, in the most extreme cases, where K = N or K = 1,
+SemiUCB and ConsUCB perform exactly the same. However, when K is much smaller than N , we
+expect ConsUCB’s improvement over SemiUCB to grow in a monotone fashion as K increases.
+
+22
+
+Jin et al.: Large Scale Product Selection
+
+The problem instance in this numerical study is clearly not the worst case for SemiUCB, as the
+algorithm’s regret per period is much smaller than the worst bound Ω(K) proved in Theorem 2.
+However, since the feature vectors are generated by a deep learning method, which is almost a
+black box to the online algorithms, there is no guarantee that, if the problem instance is repeated
+in other sessions or in other cities, the set of feature vectors is always in SemiUCB’s favor to avoid
+the worst-case type of regret of Ω(Kd).
+Regarding the practicality of the online learning algorithm solutions, we measure the number
+of SKU replacements in the offered product sets over the time periods. A high number means a
+large portion of the product sets need to be replaced in a period, while a low number suggests
+the product set only needs minimal adjustments. The plots in Figure 5 summarize the numbers
+of SKUs replaced between subsequent periods for both SemiUCB and ConsUCB. For all cases of
+K ∈ [2000, 1000, 200], the number of per-period replacements for both algorithms drops quickly in
+the first ten periods, and it converges to around 10% of the size of product set near the end of
+the first 50 periods. Hence, we numerically show that both algorithms SemiUCB and ConsUCB do
+not replace large portions of the product sets indefinitely often. Moreover, the simulation results
+further suggest that, compared to SemiUCB (with the best α parameter), ConsUCB reduces the
+total number of SKU replacements in the first 50 periods by 4.86%, 10.73% and 16.84%, for
+
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+1500
+1000
+
+=0.02
+=0.1
+=0.5
+=1
+=0.5
+
+500
+0
+
+0
+
+Figure 5
+
+10
+
+20
+30
+time period
+
+40
+
+50
+
+K=1000, T=49, d=50, N=20000
+
+1000
+
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+800
+600
+
+=0.02
+=0.1
+=0.5
+=1
+=0.02
+
+400
+200
+0
+
+0
+
+10
+
+20
+30
+time period
+
+40
+
+50
+
+per-period product replacements
+
+K=2000, T=49, d=50, N=20000
+
+2000
+
+per-period product replacements
+
+per-period product replacements
+
+K = 2000, 1000 and 200 respectively.
+K=200, T=49, d=50, N=20000
+
+200
+
+SemiUCB
+SemiUCB
+SemiUCB
+SemiUCB
+ConsUCB
+
+150
+100
+
+=0.02
+=0.1
+=0.5
+=1
+=0.02
+
+50
+0
+
+0
+
+10
+
+20
+30
+time period
+
+40
+
+50
+
+Per-period number of SKU replacements in the offered product sets by SemiUCB (with ω = 1) and
+ConsUCB in the first T = 50 periods, when K = 2000, K = 1000 and K = 200.
+
+Therefore, given the simulation results on the improvement of cumulative regret and reduction
+of product set replacements, ConsUCB is the better option than SemiUCB, both theoretically and
+experimentally, for this e-commerce problem setting.
+
+6.
+
+Conclusion and Insights for Supply Chain Managers
+
+In this paper, we study a product selection problem inspired by the crucial use of urban warehouses
+by online retailers for ultra-fast delivery services. We formulate the problem in a semi-bandit model
+
+Jin et al.: Large Scale Product Selection
+
+23
+
+with linear generalization in product features. Our alternative analysis of an existing standard
+UCB algorithm suggests the regret can be interpreted as the sum of two parts, i.e. a T -dependent
+“variable cost” part and a T -independent “fixed cost” part. We propose a novel online learning
+algorithm called ConsUCB, and show it improves the fixed-cost part of the regret, while keeping the
+variable cost in the same order. In the specific model setting of the product selection problem in
+this paper, where K is much larger than T or d, the improvement in regret is even more significant,
+both in theory and in a numerical study on an online retailer’s data.
+One extension of the model is to incorporate the actual number of sales of each product, although
+the model in this paper is concerned only with products’ probabilities of positive sales. In many ecommerce businesses, multiple days of on-hand safety stock are always maintained in the inventory,
+regardless of inventory holding costs, to keep stock-out probabilities at a very low level, for the
+sake of customer experience. As a result, retailers can most often directly observe the exact level
+of customer demand for each product offered on the fast-delivery platform (in other words, the
+observation of demand is not censored due to the limited inventory). To incorporate the number
+of sales into our model, we can re-define xTi θ∗ as the expected number of sales of product i,
+and replace the 0-1 bandit feedback with a random non-negative demand for the product. The
+corresponding confidence bounds can be adapted following standard UCB techniques in the work
+by Abbasi-Yadkori et al. (2011).
+In the problem setting, we implicitly assume the positive-sales probabilities are the same across
+all periods. Nevertheless, we can easily extend the model to capture demand changes due to dayof-the-week (or week-of-the-month) effects in the problem. For example, in each period t, the
+∗
+probability of positive-sales for any product i can be assumed to be γt x>
+i θ , where γt can take
+
+seven different values scaling the demand for each day of the week. As the scaling factors γt can
+be easily estimated from aggregate sales data, the regret bound of any algorithm can be readily
+updated by rescaling its regret terms in all periods using the same factors.
+For the purpose of presenting a clean model, we leave the previous potential extensions out
+of the model, since the main insights and techniques in our algorithms and analyses remain the
+same. However, in reality, the challenges that urban-warehouse retailers face in optimizing their
+products/inventory are not merely selecting the top products; it is more complicated than the
+model even with the above extensions. There may be shipping capacities into and out of urban
+warehouses. There may be costs associated with retrieving unsold products from urban warehouses.
+There may be city regions that can be simultaneously supplied by multiple urban warehouses, each
+with different product offer sets.
+In the model, we assume the retailers have the ability to freely adjust the offered product set
+in each period according to the online learning algorithm. It is clear that our model does not rule
+
+24
+
+Jin et al.: Large Scale Product Selection
+
+out the possibility of regularly replacing the entire offered product set in an urban warehouse on a
+weekly basis. This is not only financially unviable, but practically irrational for retailers to do so
+on a regular basis, considering the shipping cost and other related costs. Hence, in Section 5, we
+numerically show that our online learning algorithms limit the total number of products replaced
+out of urban warehouses within a reasonable range, compared to the total number of the products
+offered. This further indicates that the costs related to product replacement is contained and
+converges as the learning becomes more accurate. In simpler words, when using our online learning
+algorithms, replacing the a large portion of the offered product set on a regular basis is unlikely;
+even when it happens, it tends to happen in the early periods, which is more justifiable given the
+business objective on optimizing customer experience and user growth.
+Moreover, it is also reasonable for one to suggest other business objectives in the model, for
+example, to maximize revenue. This is indeed a different objective than that we define in the model,
+because additional factors like pricing may need to be considered. Specifically, the objective defined
+in this paper is to identify products with top probabilities of meeting customer’s demands, rather
+than products with top expected revenues, among the less popular products. Nonetheless, we point
+out that, as the most popular products capture most of the revenue, the less popular products
+are offered to increase the retail platforms’ product breadth and improve customer experience and
+retention. In this case, revenue optimization may not be the top priority in our product selection
+problem, and, after all, revenue is just one of the performance indicators, that retailers consider in
+making business decisions, among market share, number of users, profit, and others.
+Indeed, this research proposes and analyzes only an abstraction of the actual product/inventory
+optimization problem. Nonetheless, the insights provided by the ConsUCB algorithm go beyond
+product selection: (a) from a high level, we can view ConsUCB as an algorithm for generating a
+ranking of products, as products are chosen by the algorithm sequentially without replacement in
+each period. Analyses in this paper show that, compared to the standard UCB algorithm, ConsUCB
+encourages exploration with a guaranteed smaller fixed-cost regret, potentially outperforming other
+general machine learning algorithms producing rankings of products as well. (b) In many inventory
+problem solvers, the demand forecast of every product is given as part of the input. With ConsUCB,
+we can use its conservative score value pt,k (·) as a proxy for demand forecast. This is another quick
+way of directly applying our conservative exploration technique to real business decisions.
+
+25
+
+Jin et al.: Large Scale Product Selection
+
+Appendix. Proof of Lemma 3
+Before proving Lemma 3, we first prove the following results:
+Lemma 4. Let u ∈ Rd be any vector. Let x ∈ Rd be any unit vector such that kxk2 = 1. For any positive
+definite diagonal matrix Λ ∈ Rd×d , we have
+(x> Λu)2
+√
+≤ u> Λ1.5 u.
+x> Λx
+Proof.
+
+We have
+
+
+
+
+(x> Λu)2
+Λxx> Λ
+Λ0.25 xx> Λ0.25
+√
+= u> Λ1.5 − √
+u = u> Λ0.75 I −
+Λ0.75 u.
+u> Λ1.5 u − √
+x> Λx
+x> Λx
+x> Λx
+
+Thus, it suffices to verify that I −
+
+> 0.25
+Λ0.25
+√xx Λ
+x> Λx
+
+is positive semi-definite. This is equivalent to showing all
+
+of its principal minors are nonnegative.
+For any subset J of the row (column) index set [d], let ΛJ,J be a principal submatrix of any matrix Λ
+with rows and columns whose indices are in J. Similarly, let xj be a subvector of any vector x with elements
+whose indices are in J. The principal minor of I − Λ
+
+> 0.25
+√xx Λ
+x> Λx
+
+0.25
+
+.25
+xJ x> Λ0.25
+Λ0J,J
+√ J J,J
+det IJ,J −
+x> Λx
+
+
+
+
+
+with respect to index set J is
+
+0.5
+x>
+J ΛJ,J xJ
+.
+=1− √
+x> Λx
+
+Since Λ is a diagonal matrix,
+0.5
+x>
+J ΛJ,J xJ =
+
+Xp
+
+Λi,i x2i ≤
+
+0.5
+x>
+J ΛJ,J xJ
+√
+x> Λ x
+
+Λi,i x2i = x> Λ0.5 x
+
+√
+and
+
+v
+u d
+uX
+>
+x Λx = t
+Λi,i x2i = kΛ0.5 xk2 .
+
+i=1
+
+i∈J
+
+Hence, 1 −
+
+d
+X
+p
+
+i=1
+
+0.5
+
+x
+≥ 1 − x> kΛΛ0.5 xk
+. Since Λ is positive definite and x is a unit vector,
+2
+0.5
+
+x
+vector, and, therefore, 1 − x> kΛΛ0.5 xk
+≥ 0.
+2
+
+Λ0.5 x
+kΛ0.5 xk2
+
+is also a unit
+
+
+
+The following lemma in Auer (2002) is also needed for proving our Lemma 3.
+Lemma 5 (Auer (2002), Lemma 19). Let λ1 ≥ · · · ≥ λd ≥ 0. The eigenvalues ν1 , . . . , νd of a matrix
+∆(λ1 , . . . , λd )+zz > with kzk2 ≤ 1 can be arranged such that there are yh,j ≥ 0, 1 ≤ h < j ≤ d, and the following
+holds:
+νj ≥ λj ,
+νj = λj + zj2 −
+
+j−1
+X
+
+yh,j +
+
+h=1
+j−1
+X
+
+yh,j ≤ zj2
+
+h=1
+d
+X
+
+yj,h ≤ νj − λj ,
+
+h=j +1
+d
+X
+j =1
+
+νj =
+
+d
+X
+j =1
+
+λj + kzk22 .
+
+d
+X
+h=j +1
+
+yj,h
+
+26
+
+Jin et al.: Large Scale Product Selection
+
+Lemma 6. Let A ∈ Rd×d be any symmetric positive definite matrix, and u ∈ Rd be any vector. Let
+λ1 , λ2 , . . . , λd be the eigenvalues of A, and ν1 , ν2 , . . . , νd be the eigenvalues of A + uu> . We must have for any
+x ∈ Rd such that kxk2 = 1,
+√
+
+>
+
+x A
+
+−1
+
+x−
+
+p
+
+> −1
+
+>
+
+x (A + uu )
+
+d
+d
+X
+X
+2
+2
+√
+x≤
+−
+√ .
+νi
+λ
+i
+i=1
+i=1
+
+(s)
+
+(s)
+
+(s)
+
+Define matrix A(s) = A+s·uu> for all s ∈ [0, 1]. Let λ1 , λ2 , ..., λd be the eigenvalues of A(s), for
+p
+(s)
+(s)
+(s)
+all s ∈ [0, 1]. Without loss of generality, suppose λ1 ≥ λ2 ≥ · · · ≥ λd . Define function f (s) = x> A(s)−1 x
+Proof.
+
+for all s ∈ [0, 1]. The theorem can be equivalently written as
+Z 1
+d
+d
+X
+X
+2
+2
+q
+q
+f 0 (s)ds ≤
+−
+,
+f (0) − f (1) = −
+(0)
+(1)
+0
+i=1
+i=1
+λi
+λi
+where f 0 (s) is the derivative of f (s). It suffices to prove that, for all s ∈ [0, 1],
+d
+X
+
+2
+q
+
+i=1
+
+≤ f 0 (s) ≤ 0.
+(s)
+
+λi
+
+We have
+dp >
+x A(s)−1 x
+ds
+
+0.5
+d  >
+=p
+·
+x A(s)−1 x
+x> A(s)−1 x ds
+
+f 0 (s) =
+
+−1
+
+x> (A(s) + δ · uu> ) x − x> A(s)−1 x
+>
+−
+1
+δ
+x A(s) x δ→0
+
+
+δA
+(
+s
+)−1 uu> A(s)−1
+>
+−1
+x − x> A(s)−1 x
+x
+A(s)
+−
+>
+−1
+1+
+δu
+A
+(
+s
+)
+u
+0.5
+=p
+· lim
+δ
+x> A(s)−1 x δ→0
+(by the Sherman-Morrison formula)
+>
+−1
+2
+0.5
+(x A(s) u)
+=− p
+· lim
+x> A(s)−1 x δ→0 1 + δu> A(s)−1 u
+=p
+
+0.5
+
+· lim
+
+(x> A(s)−1 u)2
+= − 0.5 p
+.
+x> A(s)−1 x
+Thus, f 0 (s) ≤ 0.
+Let A(s)−1 = U (s)Λ(s)−1 U (s)> be the eigendecomposition of A(s)−1 . Let x̃ = U > x and ũ = U > u. Using
+Lemma 4, we obtain
+(x> A(s)−1 u)2
+f 0 (s) = −0.5 p
+x> A(s)−1 x
+(x̃> Λ(s)−1 ũ)2
+= −0.5 p
+x̃> Λ(s)−1 x̃
+d
+X
+(s)
+≥ −0.5
+ũ2i (λi )−1.5 .
+i=1
+
+For small δ > 0, we can write
+A(s + δ) = A(s) + δuu> = U (s)(Λ(s) + δ ũũ> )U (s)> .
+We use Lemma 5 to obtain the following properties
+
+(7)
+
+27
+
+Jin et al.: Large Scale Product Selection
+
+• There are non-negative numbers yh,i (s, δ), for i = 1, 2, ..., d, h = 1, 2, ..., d and h 6= i, such that
+(s+δ )
+
+λi
+
+(s)
+
+2
+
+= λi + δ ũi −
+
+i−1
+X
+
+d
+X
+
+yh,i (s, δ) +
+
+h=1
+
+(s)
+
+yi,h (s, δ).
+
+(8)
+
+h=i+1
+
+(s)
+
+• For any λh > λi + δkũk22 ,
+yh,i (s, δ) ≤
+
+δ 2 ũ2i ũ2h
+(s)
+
+.
+
+(9)
+
+− λi .
+
+(10)
+
+(s)
+
+λh − λi − δkũk22
+
+• For all i = 1, 2, ..., d,
+d
+X
+
+(s+δ )
+
+(s)
+
+yi,h (s, δ) ≤ λi
+
+h=i+1
+
+Suppose δ is small enough so that δkũk22 ≤
+
+(s)
+
+(s)
+
+√
+
+(s)
+
+(s)
+
+(s)
+
+δλd . For any λh > λi +
+
+δ 2 ũ2i ũ2h
+
+yh,i (s, δ) ≤
+For λh ≤ λi +
+
+√
+
+(s)
+
+(s)
+
+λh − λi − δkũk22
+
+≤√
+
+√
+
+(s)
+
+δλd , (9) further gives
+
+δ 2 ũ2i ũ2h
+(s)
+
+δλd − δkũk22
+
+.
+
+(11)
+
+(s)
+
+δλd ,
+d
+X
+i=1
+
+=
+
+X
+
+(s)
+
+(λi )−1.5
+(s)
+
+yh,i (s, δ)
+
+(s)
+
+h<i:λh ≤λi
+
+d
+X
+
+√
+
+(s)
+
++ δλd
+
+(s)
+
+X
+
+yh,i (s, δ)
+
+i=1 h<i:λ(s) ≤λ(s) +√δλ(s)
+i
+d
+h
+
+≤
+
+d
+X
+
+X
+
+(λh )1.5
+(s)
+(λ )1.5
+i
+
+√ (s) !1.5
+(s)
+λi + δλd
+
+yh,i (s, δ)
+
+(s)
+
+λi
+
+i=1 h<i:λ(s) ≤λ(s) +√δλ(s)
+i
+h
+d
+
+≤
+
+d
+X
+
+(s)
+
+(λh )−1.5
+
+(s)
+
+(λh )−1.5
+
+
+√ 1.5 (s) −1.5
+yh,i (s, δ) 1 + δ
+(λh )
+
+X
+
+i=1 h<i:λ(s) ≤λ(s) +√δλ(s)
+i
+d
+h
+d
+d
+
+X
+√ 1.5 X
+(s)
+≤ 1+ δ
+yh,i (s, δ)(λh )−1.5
+h=1 i=h+1
+d
+√ 1.5 X
+(s+δ )
+(s)
+(s)
+(λh
+− λh )(λh )−1.5 .
+≤ 1+ δ
+
+
+
+(12)
+
+h=1
+
+The last inequality follows from (10).
+We use (11) and (12) to obtain
+d
+i−1
+1 X (s) −1.5 X
+(λi )
+yh,i (s, δ)
+δ→0 δ
+i=1
+h=1
+
+d
+X
+X
+1
+
+(s)
+(λi )−1.5 
+= lim
+δ→0 δ
+(s)
+(s)
+i=1
+
+lim
+
+h<i:λh >λi
+
+
+X
+
+yh,i (s, δ) +
+√
+
+(s)
+
+(s)
+
++ δλd
+
+(s)
+
+h<i:λh ≤λi
+
+√
+
+
+yh,i (s, δ)
+(s)
+
++ δλd
+
+
+
+
+
+d
+
+1 X (s) −1.5 
+(λi )
+
+δ→0 δ
+i=1
+
+X
+
+≤ lim
+
+√
+
+(s)
+(s) √
+(s)
+h<i:λh >λi + δλd
+
+δ 2 ũ2i ũ2h
+(s)
+
+δλd
+
+d
+
+1 X (s) −1.5
+(λi )
+δ→0 δ
+i=1
+
+X
+
+= lim
+
+(s)
+
+(s)
+
+h<i:λh ≤λi
+
+yh,i (s, δ)
+√
+
+(s)
+
++ δλd
+
+− δkũk22
+
+X
+
++
+(s)
+
+(s)
+
+h<i:λh ≤λi
+
+√
+
+
+yh,i (s, δ)
+(s)
+
++ δλd
+
+28
+
+Jin et al.: Large Scale Product Selection
+
+d
+
+√ 1.5 X (s+δ)
+1
+(s)
+(s)
+1+ δ
+(λh
+− λh )(λh )−1.5
+δ→0 δ
+h=1
+
+≤ lim
+=
+
+d
+X
+d (s)
+(s)
+(λh )−1.5 λh
+ds
+h=1
+
+=−2
+
+d
+X
+1
+d
+q
+.
+ds
+(s)
+h=1
+λh
+
+(13)
+
+Hence,
+d
+
+d X 1
+q
+ds i=1
+(s)
+λi
+= − 0.5
+
+d
+X
+
+(s)
+
+(λi )−1.5
+
+i=1
+
+= − 0.5
+
+d
+X
+
+d (s)
+λ
+ds i
+(s+δ )
+
+(s)
+
+(λi )−1.5 lim
+
+λi
+
+δ→0
+
+i=1
+
+(s)
+
+− λi
+δ
+
+(s)
+
+Pd
+(s)
+yh,i (s, δ) + h=i+1 yi,h (s, δ) − λi
+= − 0.5
+(λi )
+lim
+δ→0
+δ
+i=1
+!
+P
+Pd
+i−1
+d
+X
+− h=1 yh,i (s, δ) + h=i+1 yi,h (s, δ)
+(s) −1.5
+2
+= − 0.5
+(λi )
+ũi + lim
+δ→0
+δ
+i=1
+!
+P
+d
+i−
+1
+X (s)
+− h=1 yh,i (s, δ)
+≤ − 0.5
+(λi )−1.5 ũ2i + lim
+δ→0
+δ
+i=1
+P
+Pi−1
+d
+(s)
+d
+X
+(λi )−1.5 h=1 yh,i (s, δ)
+(s) −1.5
+2
+i=1
+= − 0.5
+ũi (λi )
++ 0.5 lim
+δ→0
+δ
+i=1
+
+
+d
+d
+X
+X
+d
+1
+(s)
+,
+q
+≤ − 0.5
+ũ2i (λi )−1.5 + 0.5 · −2
+ds
+(s)
+i=1
+i=1
+λi
+d
+X
+
+(s) −1.5
+
+λi + δ ũ2i −
+
+Pi−1
+
+h=1
+
+where the last inequality follows from (13). The above result leads to
+d
+
+d
+
+d X 1
+1 X 2 (s) −1.5
+q
+≤−
+ũ (λ )
+.
+ds i=1
+4 i=1 i i
+(s)
+λi
+Combining this with (7), we obtain
+f 0 (s) ≥ −0.5
+
+d
+X
+i=1
+
+which proves the lemma.
+
+d
+
+(s)
+
+ũ2i (λi )−1.5 ≥
+
+d X 2
+q
+,
+ds i=1
+(s)
+λi
+
+
+
+Now we present the proof of Lemma 3.
+Proof of Lemma 3.
+Proof.
+
+Define Ak = A +
+
+Pk
+
+k0 =1
+
+(k)
+
+(k)
+
+(k)
+
+uk0 u>
+be the eigenvalues of Ak ,
+k0 for all k = 0, 1, 2, ..., l. Let λ1 , λ2 , ..., λd
+
+for all k q
+= 0, 1, 2, ..., l.
+p
+1
+1
+Since x> A−
+x > A−
+k x for all k = 1, 2, ..., l, we can use Lemma 6 to obtain
+k−1 x ≥
+v
+u
+l
+u
+X
+√
+>
+−
+1
+−1 x
+x A x − tx> (A +
+uk u>
+k)
+k=1
+
+29
+
+Jin et al.: Large Scale Product Selection
+
+=
+
+l q
+X
+
+1
+x > A−
+k−1 x −
+
+q
+
+1
+x > A−
+k x
+
+
+
+k=1
+
+
+
+d
+l
+d
+X
+X
+X
+1 
+1
+
+q
+q
+−
+≤
+(k−1)
+(k)
+i=1
+k=1
+i=1
+λi
+λi
+=
+
+d
+X
+
+2
+q
+
+i=1
+
+=
+
+−
+(0)
+
+λi
+
+d
+X
+
+2
+q
+
+i=1
+
+(k)
+
+λi
+
+d
+d
+X
+X
+2
+2
+√ −
+√ .
+νi
+λ
+i
+i=1
+i=1
+
+
+
+References
+Abbasi-Yadkori, Yasin, Dávid Pál, Csaba Szepesvári. 2011. Improved algorithms for linear stochastic bandits.
+Advances in Neural Information Processing Systems 24 . Curran Associates, Inc., 2312–2320.
+Agrawal, Shipra, Navin Goyal. 2012. Analysis of Thompson Sampling for the Multi-armed Bandit Problem.
+Proceedings of the 25th Annual Conference on Learning Theory, vol. 23. PMLR, 39.1–39.26.
+Audibert, Jean-Yves, Sébastien Bubeck, Gábor Lugosi. 2014. Regret in online combinatorial optimization.
+Mathematics of Operations Research 39(1) 31–45.
+Auer, Peter. 2002. Using confidence bounds for exploitation-exploration trade-offs. Journal of Machine
+Learning Research 3(Nov) 397–422.
+Bastani, Hamsa, Mohsen Bayati. 2015. Online decision-making with high-dimensional covariates. Preprint
+on SSRN at https://ssrn.com/abstract=2661896.
+Bengio, Yoshua, Aaron Courville, Pascal Vincent. 2013. Representation learning: A review and new perspectives. IEEE Transactions on Pattern Analysis and Machine Intelligence 35(8) 1798–1828.
+Bhattacharya, Ananya. 2016. Amazon is just beginning to use robots in its warehouses and they’re already
+making a huge difference. https://qz.com/709541. Quartz.
+Bubeck, Sébastien, Nicolò Cesa-Bianchi. 2012. Regret analysis of stochastic and nonstochastic multi-armed
+bandit problems. Foundations and Trends in Machine Learning 5(1) 1–122.
+Bubeck, Sébastien, Nicolò Cesa-Bianchi, Sham M. Kakade. 2012. Towards minimax policies for online linear
+optimization with bandit feedback. Proceedings of the 25th Annual Conference on Learning Theory,
+vol. 23. PMLR, 41.1–41.14.
+Cesa-Bianchi, Nicolò, Gábor Lugosi. 2012. Combinatorial bandits. Journal of Computer and System Sciences
+78(5) 1404–1422.
+Chen, Wei, Yajun Wang, Yang Yuan. 2013. Combinatorial Multi-Armed Bandit: General Framework and
+Applications. Proceedings of the 30th International Conference on Machine Learning, vol. 28. PMLR,
+151–159.
+
+30
+
+Jin et al.: Large Scale Product Selection
+
+Chu, Wei, Lihong Li, Lev Reyzin, Robert Schapire. 2011. Contextual bandits with linear payoff functions.
+Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics, vol. 15.
+PMLR, 208–214.
+Dani, Varsha, Thomas P Hayes, Sham M Kakade. 2008. Stochastic linear optimization under bandit feedback.
+Proceedings of the 2008 Conference on Learning Theory. 355–366.
+eMarketer. 2018. Same-day delivery merchandise value and shipping fees generated in the United States
+from 2013 to 2018 (in billion U.S. dollars). https://www.statista.com/statistics/272496.
+Gabillon, Victor, Brian Eriksson. 2014. Large-Scale Optimistic Adaptive Submodularity. Twenty-Eighth
+AAAI Conference on Artificial Intelligence 1816–1823.
+Gai, Yi, Bhaskar Krishnamachari, Rahul Jain. 2012. Combinatorial network optimization with unknown variables: Multi-armed bandits with linear rewards and individual observations. IEEE/ACM Transactions
+on Networking 20(5) 1466–1478.
+Goldenshluger, Alexander, Assaf Zeevi. 2013. A linear response bandit problem. Stochastic Systems 3(1)
+230–261.
+JLL. 2018.
+
+Why multi-story warehouses are coming to America.
+
+https://www.us.jll.com/en/
+
+trends-and-insights/investor/Why-multi-story-warehouses-are-coming-to-America.
+Joerss, Martin, Florian Neuhaus, Jürgen Schröder. 2016.
+last-mile delivery.
+
+How customer demands are reshaping
+
+https://www.mckinsey.com/industries/travel-transport-and-logistics/
+
+our-insights/how-customer-demands-are-reshaping-last-mile-delivery. McKinsey & Company.
+Qin, Lijing, Shouyuan Chen, Xiaoyan Zhu. 2014. Contextual combinatorial bandit and its application on
+diversified online recommendation. Proceedings of the 2014 SIAM International Conference on Data
+Mining. 461–469.
+Rusmevichientong, Paat, John N Tsitsiklis. 2010. Linearly Parameterized Bandits. Mathematics of Operations Research 35(2) 395–411.
+Russo, Daniel, Benjamin Van Roy. 2014. Learning to Optimize via Posterior Sampling. Mathematics of
+Operations Research 39(4) 1221–1243.
+Slivkins, Aleksandrs. 2017.
+
+Introduction to Multi-Armed Bandits.
+
+URL http://slivkins.com/work/
+
+MAB-book.pdf.
+Wang, Xue, Mike Mingcheng Wei, Tao Yao. 2018. Online learning and decision-making under generalized
+linear model with high-dimensional data. Preprint on SSRN at https://ssrn.com/abstract=3294832.
+Wen, Zheng, Branislav Kveton, Azin Ashkan. 2015. Efficient learning in large-scale combinatorial semibandits. Proceedings of the 32nd International Conference on Machine Learning, vol. 37. 1113–1122.
+Yue, Yisong, Carlos Guestrin. 2011. Linear submodular bandits and their application to diversified retrieval.
+Advances in Neural Information Processing Systems 24 . Curran Associates, Inc., 2483–2491.
+
+

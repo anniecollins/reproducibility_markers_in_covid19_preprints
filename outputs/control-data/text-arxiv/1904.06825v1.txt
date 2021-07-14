@@ -1,0 +1,4916 @@
+Performance Models for Data Transfers: A Case
+Study with Molecular Chemistry Kernels
+Suraj Kumar1 , Lionel Eyraud-Dubois2 , and Sriram Krishnamoorthy1
+
+arXiv:1904.06825v1 [cs.PF] 15 Apr 2019
+
+1
+
+Pacific Northwest National Laboratory, Richland, Washington, USA
+{suraj.kumar, sriram}@pnnl.gov
+2
+Inria Bordeaux – Sud-Ouest, Université de Bordeaux, France
+lionel.eyraud-dubois@inria.fr
+
+Abstract. With increasing complexity of hardwares, systems with different memory nodes are ubiquitous in High Performance Computing
+(HPC). It is paramount to develop strategies to overlap the data transfers between memory nodes with computations in order to exploit the
+full potential of these systems. In this article, we consider the problem of
+deciding the order of data transfers between two memory nodes for a set
+of independent tasks with the objective to minimize the makespan. We
+prove that with limited memory capacity, obtaining the optimal order of
+data transfers is a NP-complete problem. We propose several heuristics
+for this problem and provide details about their favorable situations. We
+present an analysis of our heuristics on traces, obtained by running 2
+molecular chemistry kernels, namely, Hartree–Fock (HF) and Coupled
+Cluster Single Double (CCSD) on 10 nodes of an HPC system. Our
+results show that some of our heuristics achieve significant overlap for
+moderate memory capacities and are very close to the lower bound of
+makespan.
+Keywords: Communication Scheduling · Memory Nodes · Runtime Systems · Communication-Computation Overlap · Molecular Chemistry.
+
+1
+
+Introduction
+
+With the advent of multicore, and the use of accelerators, it is notoriously cumbersome to exploit the full capability of a machine. Indeed, there are several
+challenges that come into picture. First, every architecture provides its own efficacy and interface. Therefore, a steep learning curve is required for programmers
+to take good utilization of all resources. Second, scheduling is a well known NPComplete optimization problem, and hybrid and distributed resources make this
+problem harder (we refer [1] for a survey on the complexity of scheduling problems and [2] for a recent survey in the case of hybrid nodes). Third, due to shared
+buses and parallel resources, it is challenging to obtain a precise model based
+on prediction of computation and communication times. Fourth, the number of
+architectures has increased drastically in recent years, therefore it is almost impossible to develop hand tuned optimized code for all these architectures. All
+
+2
+
+Kumar and Eyraud-Dubois, et al.
+
+these observations led to the development of different task based runtime systems. Among several runtimes, we may cite QUARK [3] and PaRSEC [4] from
+from ICL, Univ. of Tennessee Knoxville (USA), StarPU [5] form Inria Bordeaux
+(France), Legion [6] from Stanford Univ. (USA), StarSs [7] from Barcelona Supercomputing Center (Spain), KAAPI [8] from Inria Grenoble (France). All these
+runtime systems allow programmers to express their algorithms at the abstract
+level in the form of direct acyclic graphs (DAG), where vertices represent computations and edges represent dependencies among them. Sometimes some static
+information is also provided along with the DAG, such as distance to exit (last)
+node as a priority or affinity of computation towards resources. The runtime is
+then responsible for managing scheduling of computations and communications,
+data transfers among different memories, computation-communication overlap,
+and load balance.
+In the last few decades, we have witnessed a drastic improvement in the
+hardware to provide higher rate of computation, but comparatively smaller improvement has been achieved for the rate of data movement. With extreme scale
+computing, supercomputers face bottlenecks due to the need of large amount of
+data [9,10]. Therefore, the HPC community is now focusing on avoiding, hiding
+and minimizing communication costs.
+Certain applications such as dense linear algebra kernels have regular structure. Therefore, it is possible to associate priorities to computations, based on
+the task graph structure, and to use them at runtime to make the execution
+efficient. In irregular applications, programmers do not know the precise structure of the task graphs in advance: tasks are added recursively based on certain
+sentinel constraints. For such applications, the runtime system sees a set of independent tasks and schedules them on different processing units. It is extremely
+important for runtimes to decide the order of data transfers for these scheduled computations so as to maximize the overlap between computations and
+communications. This is the main topic of this article. We prove that the order
+of communications on two memory nodes with the objective of minimizing the
+makespan is a NP-Complete problem if the memory of the target node is limited.
+Our proof is inspired from work by [11], which applies a similar technique for 2machine flowshop problem with bounded capacity. The main difference between
+both approaches is that they consider all tasks have the same occupation on the
+second machine and the memory occupation starts when the processing finishes
+on the first machine. On the contrary, our approach is designed for tasks appearing in scientific workloads whose memory requirements are highly irregular
+and we consider that memory is acquired before starting the data transfer on
+the communication resource. We propose different runtime strategies in order
+to maximize the overlap of computations and communications. We evaluate our
+strategies on the context of a cluster of homogeneous nodes. However, our approach is generic and easily adaptable to any system which operates on different
+memory spaces. Here are the important contributions of this article:
+• NP-Completeness proof for the general data-transfer problem
+
+Performance Models for Data Transfers
+
+3
+
+• Proposed different scheduling strategies with the objective to minimize the
+makespan
+• Linear programming formulation of the problem
+• Numerous experiments to assess the effectiveness of our strategies on molecular chemistry kernels
+The outline of the article is the following. Section 2 describes past work on
+the computations with limited memory and similar problems in the literature.
+In section 3, we present an algorithm to obtain the order of data transfers when
+there is not any memory capacity restriction. Then, we also prove that in general data transfer problem is NP-complete. In Section 4, we propose several
+heuristics and describe their favorable scenarios. We mainly consider three categories of heuristics: static heuristics, dynamic heuristics and static heuristics
+with dynamic corrections. Sections 5 describes our experimental setup and we
+evaluate our proposed strategies on two molecular chemistry kernels in Section 6.
+Our results show that static heuristics with dynamic corrections achieve good
+performance in most cases. We finally propose conclusions and perspectives in
+Section 7.
+
+2
+
+Related Work
+
+Historically there has been a great emphasis on the development of parallel
+algorithms and minimizing the complexity of computations. As the number of
+computation cores has increased drastically in recent years, supercomputers face
+bottleneck due to communication required by an application. Hence, in recent
+years the focus has changed towards developing communication avoiding algorithms, strategies to hiding communications and minimizing the data accessed
+by applications [10].
+The problem of scheduling tasks has been highly studied in the literature and
+many formulations are known to be NP-Complete [12]. Many static and dynamic
+strategies have been proposed and analyzed for scheduling tasks on heterogeneous resources [13,14,15]. There is also a number of studies in the direction
+of task scheduling with the emphasis on improving locality and minimizing the
+communication cost [5,13]. Stanisic et. al [16] proposed a heuristic to schedule
+tasks on a computational resource where most of its data is available. A similar
+approach has been adopted by Agullo et. al for the scheduling of sparse linear
+algebra kernels [17]. Predari et. al proposed heuristics to partition the task graph
+across a number of processors such that inter-processor communication can be
+minimized [18].
+The problem considered in this article also can be viewed as a flow shop
+problem: the communication link can be seen as a processing resource, and each
+task needs to first be handled by the communication link and then by the computational resource. Communication and computation times of a task can thus
+be considered as processing times on different machines. Johnson has provided
+scheduling strategies for 2 and 3-machine flow shop problems with infinite memory capacity [19]. 2-machine flow shop problem with finite buffer has been proven
+
+4
+
+Kumar and Eyraud-Dubois, et al.
+
+NP-Complete by Papadimitriou et. al [11], in which a constraint is imposed on
+the number of tasks that can await execution on the second machine.
+A number of other studies have focused on scheduling with limited memory
+and storage, starting with the work of register allocation for arithmetic expressions by Sethi and Ulman [20]. Sarkar et. al worked on the scheduling of graphs
+of smaller-grain tasks with limited memory, where each task requires homogeneous data size [21]. The same work has been extended by Marchal et. al for
+task graphs where memory requirement of each task is highly irregular [22].
+
+3
+
+Data Transfer Problem Formulation
+
+To exploit the full potential of a system it may be necessary to execute tasks on
+processing units where all of their data does not reside. A task may require all of
+its input data in local memory before starting the computation. There may be
+multiple tasks scheduled on a processing unit, which require to transfer data from
+the same memory node. Ordering data transfers for such tasks is very crucial
+for the communication-computation overlap, thus for the overall performance.
+In general, order of task execution with input and output data transfers can
+be viewed as a 3-machine flowshop problem, where processing time on the first
+machine is input data transfer time, processing time on the second machine is
+task computation time, and processing time on the third machine is output data
+transfer time; and the objective is to minimize the total makespan. This is a well
+known NP-complete problem [23].
+In many cases, output data that needs to be retrieved after task execution is
+much smaller than the input data. It is often the case that future tasks running
+on the same memory node require output data of the past tasks. Therefore, most
+runtime systems transfer data to other memory nodes based on the demand –
+not immediately after they were produced. It is also possible that all output data
+can be stored in a preallocated separate buffer on a memory node. Hence, we do
+not consider output data explicitely in our analysis and assume that output data
+is negligible or stored in a separate buffer for each task. Thus problem considered
+here is more similar to a 2-machine flowshop problem. We prove that ordering the
+execution of such tasks with finite memory capacity is a NP-complete problem:
+Problem DT : A set of tasks ST = {T1 , · · · , Tn } is scheduled on a processing
+unit P with memory unit M of capacity C. Input data for tasks of ST reside
+on another memory unit M 0 . CMi is the communication time to transfer input
+data from M 0 to M for task i and CPi is the computation time of task i on P .
+We assume that these tasks do not produce any output data. There can be only
+one communication at a time, and P can only process one task at a time. A task
+uses an amount of memory in M from the start of its communication to the end
+of its computation.
+Given L, is there a feasible schedule S for ST such that makespan of S, µ(S) ≤ L?
+Given a schedule, SCOMM (i) and SCOMP (i) represent the start times of
+task i on communication and computation resources. A schedule is feasible
+if for every time t, the amount of memory required by all tasks such that
+
+Performance Models for Data Transfers
+
+5
+
+SCOMM (i) ≤ t ≤ SCOMP (i) + CPi is not more than the memory capacity C.
+For simplicity, we assume throughout the article that tasks require memory only
+to store their input data, and thus that the amount of memory required by a
+task is proportional to its communication time. Without loss of generality, we
+consider in all examples of Sections 3 and 4 that the memory requirement of a
+task is equal to its communication time.
+We call a task i compute intensive if CPi ≥ CMi , and communication intensive otherwise.
+
+3.1
+
+Special case: Infinite Memory
+
+When the computational resource has a very large memory, our problem becomes
+a classic 2-machine flowshop problem: communication time is the processing
+time on the first machine and computation time is the processing time on the
+second machine. Johnson’s algorithm [19] is known to provide an ordering for
+the tasks which results in an optimal makespan. This algorithm is rewritten in
+Algorithm 1.
+
+Algorithm 1: Johnson’s [19] algorithm (infinite memory case).
+1: Divide ready tasks in two sets S1 and S2 . If computation time of a task T is not
+less than its communication time, then T is in S1 otherwise in S2 .
+2: Sort S1 in queue Q by non-decreasing communication times
+3: Sort S2 in queue Q0 by non-increasing computation times
+4: Append Q0 to Q
+5: τCOMM ← 0
+{Available time of communication resource}
+6: τCOMP ← 0
+{Available time of computation resource}
+7: while Q 6= ∅ do
+8:
+Remove a task T from beginning of Q for processing
+9:
+SCOMM (T ) ← τCOMM
+10:
+SCOMP (T ) ← max(SCOMM (T ) + CMT , τCOMP )
+11:
+τCOMM ← SCOMM (T ) + CMT
+12:
+τCOMP ← SCOMP (T ) + CPT
+13: end while
+
+We prove optimality of Algorithm 1 differently. Our proof rely on the following lemma.
+Lemma 1. Swapping two contiguous tasks A and B in a schedule does not
+improve the makespan if one of the conditions is true.
+i) CPA ≥ CMA , CPB ≥ CMB , CMA ≤ CMB
+ii) CPA < CMA , CPB < CMB , CPA ≥ CPB
+iii) CPA ≥ CMA , CPB < CMB
+
+6
+
+Kumar and Eyraud-Dubois, et al.
+
+CM A
+
+Communication
+Resource
+
+CM B
+
+A
+
+B
+
+Computation
+Resource
+
+A
+
+B
+CP B
+
+CP A
+
+t1
+
+t2
+
+SCOMP (B)
+
+SCOMP (A)
+
+Original Schedule
+
+CM B
+
+Communication
+Resource
+
+CM A
+
+B
+
+A
+
+Computation
+Resource
+
+B
+
+A
+CP A
+
+CP B
+
+t1
+
+t2
+
+SCOMP (B)
+
+SCOMP (A)
+
+Swapped Schedule
+
+Fig. 1: Original and Swapped Schedules.
+
+Proof. Let t1 and t2 be the early start time on communication and computation
+resources just before the task A starts.
+We write the following constraints based on the two schedules of the Fig 1.
+SCOMP (A) = max(t1 + CMA , t2 )
+SCOMP (B) = max(SCOMP (A) + CPA , t1 + CMA + CMB )
+Completion time of B in original Schedule = SCOMM (B) + CPB
+0
+Completion time of B in swapped Schedule, SCOMP
+(B) = max(t1 + CMB , t2 )
+0
+Completion time of A in swapped Schedule, SCOMP (A)
+0
+= max(SCOMP
+(B) + CPB , t1 + CMB + CMA )
+In both schedules, early available time on communication resource after scheduling A and B is same. If we show that early available time on computation resource in swapped schedule after scheduling both tasks is not less than the time
+of original schedule, then the proof is complete. Hence our goal is to prove that,
+0
+SCOMP (B) + CPB ≤ SCOMP
+(A) + CPA
+
+Performance Models for Data Transfers
+
+SCOMP (B) + CPB =
+
+max(SCOMP (A) + CPA + CPB , t1 + CMA + CMB + CPB )
+
+=
+
+max(t1 + CMA + CPA + CPB , t2 + CPA + CPB , t1 + CMA
+
+7
+
++CMB + CPB )
+Case I: CPA ≥ CMA , CPB ≥ CMB , CMA ≤ CMB
+SCOMP (B) + CPB = max(t1 + CMA + CPA + CPB , t2 + CPA + CPB , t1 + CMA
++CMB + CPB )
+≤ max(t1 + CMA + CPB , t2 + CPB , t1 + CMB + CPB ) + CPA
+= max(t1 + CMB + CPB , t2 + CPB ) + CPA
+= max(max(t1 + CMB , t2 ) + CPB , t1 + CMA + CMB ) + CPA
+0
+= max(SCOMP
+(B) + CPB , t1 + CMA + CMB ) + CPA
+0
+= SCOMP
+(A) + CPA
+
+Case II: CPA < CMA , CPB < CMB , CPA ≥ CPB
+SCOMP (B) + CPB = max(t1 + CMA + CPA + CPB , t2 + CPA + CPB , t1 + CMA
++CMB + CPB )
+≤ max(t1 + CMA + CPB , t2 + CPB , t1 + CMA + CMB ) + CPA
+= max(t1 + CMA + CMB , t2 + CPB ) + CPA
+= max(t1 + CMB + CPB , t2 + CPB , t1 + CM (A) + CMB ) + CPA
+= max(max(t1 + CMB , t2 ) + CPB , t1 + CMA + CMB ) + CPA
+0
+= max(SCOMP
+(B) + CPB , t1 + CMA + CMB ) + CPA
+0
+= SCOMP
+(A) + CPA
+
+Case III: CPA ≥ CMA , CPB < CMB
+SCOMP (B) + CPB = max(t1 + CMA + CPA + CPB , t2 + CPA + CPB , t1 + CMA
++CMB + CPB )
+≤ max(t1 + CMA + CPB , t2 + CPB , t1 + CMB + CPB ) + CPA
+≤ max(t1 + CMA + CMB , t2 + CPB , t1 + CMB + CPB ) + CPA
+= max(max(t1 + CMB , t2 ) + CPB , t1 + CMA + CMB ) + CPA
+0
+= max(SCOMP
+(B) + CPB , t1 + CMA + CMB ) + CPA
+0
+= SCOMP
+(A) + CPA
+
+Theorem 1. Scheduled constructed by Algorithm 1 achieves optimal makespan.
+Proof. Let O be an optimal schedule. We assume that O is a permuation schedule, If it is not the case, we make the order of computations same as the order of
+communications without increasing the makespan. Suppose two tasks have opposite order on both resources then we position the second task just before the first
+task on the computation resource. It is evident that this change does not alter
+
+8
+
+Kumar and Eyraud-Dubois, et al.
+
+the optimal makespan, we repeat this procedure until order of communications
+and computations is same in O.
+Let S be the schedule obtained from Algorithm 1. We prove the theorem
+by converting S to O and showing that at each step makespan of intermediate
+schedule is not less than the original makespan. We rely on Lemma 1 to convert
+S to O.
+We traverse schedule O from left to right and for each ith task in sequence,
+we apply Lemma 1 repetitively until order of task in the swapped schedule is
+same. It is obvious that after moving the ith task at the beginning remaining
+schedule (schedule after ith task) still satisfies one of the conditions of Lemma 1.
+Let the final swapped schedule is Sf inal . From Lemma 1, makespan(Sf inal )
+≥ makesapn(S). From the construction, makespan(Sf inal ) ≤ makesapn(O). As
+O is an optimal schedule, hence makespan(S) = makesapn(O). This completes
+our proof.
+3.2
+
+Finite Memory
+
+We now consider the general case, in which the memory limit is a constraint
+for the schedule. This is related to previous work by Papadimitriou et. al [11],
+in which the second machine can only handle a bounded number of tasks. Our
+problem generalizes this work to heterogeneous memory consumption among
+tasks, with an additional difference: memory usage starts at the beginning of
+the first part of a task (instead of at the end of the first part). This requires to
+provide a slightly different NP-completeness proof, as given below.
+Theorem 2. Problem DT is NP-complete.
+Proof. It is easy to see that the DT belongs in NP: given a schedule, one can
+check in linear time that at each start of a communication, the memory constraint is satisfied, and that task starts computation only after its input data is
+transferred to M .
+In order to prove NP-hardness, we use a reduction from the well-known NPcomplete problem 3 Partition [12]:
+Three Partition Problem (3Par): Given a set of 3m integers A = {a1 , · · · , a3m },
+is there a partition of A into mP
+triplets T Ri = {ai1 , ai2 , ai3 }, such that ∀i, ai1 +
+ai2 + ai3 = b, where b = (1/m) ai ?
+Let us first show that 3Par problem reduces in polynomial time to problem
+DT . Suppose that we are given an instance A = {a1 , · · · , a3m } of 3Par. It
+is immediately obvious that ai > 1, since we can always add sufficiently large
+integers to the ai values and scale the problem accordingly. This scaling will not
+affect in any way the existence of a solution for the instance of 3Par problem.
+From such an instance, we define x = max{ai : 1 ≤ i ≤ 3m}, and we construct an instance I of the problem DT with 4m + 1 tasks, whose characteristics
+are given in Table 1.
+As mentioned previously, we consider memory requirement of a task is equal
+to its communication time. If it is not the case, we can adjust C such that at
+any point in a schedule at max one Ki and three Ai tasks can be active.
+
+Performance Models for Data Transfers
+
+9
+
+Task
+Communication time Computation time
+K0
+0
+3
+K1 , · · · , Km−1
+b0 = b + 6x
+3
+Km
+b0 = b + 6x
+0
+1 ≤ i ≤ 3m, Ai
+1
+a0i = ai + 2x
+Memory capacity: C = b0 + 3
+Target makespan: L = m(b0 + 3)
+
+Table 1: Definition of tasks in the reduction from 3Par.
+
+We show that I has a schedule S with makespan at most L if and only if the
+original 3Par instance has a solution. Notice that the sum of communication
+times and the sum of computation times are both equal to L, therefore a valid
+schedule of makespan at most L has makespan exactly L, with no idle time on
+both resources. It indicates that the first task is K0 and the last task is Km .
+
+Comm. A1,1 A1,2 A1,3
+Comp.
+
+K0
+3
+
+A2,1 A2,2 A2,3
+
+K1
+A1,1
+
+A1,2
+b
+
+A1,3
+
+K1
+
+0
+
+3
+
+t
+
+Fig. 2: Pattern of feasible schedule S.
+
+If the 3Par instance has a solution, A can be partitioned into m triplets
+T Ri = {ai1 , ai2 , ai3 } such that ∀i, ai1 + ai2 + ai3 = b, then we can construct a
+feasible schedule S without idle times by the pattern depicted in Figure 2. The
+communications of tasks in T Ri take place during the computation of task Ki−1 ,
+and the computations of tasks in T Ri take place during the communication of
+task Ki . Since the memory capacity is C = b0 + 3, all tasks from a triplet
+can fit in memory with a task Ki , and their durations are exactly equal to the
+communication time of Ki . This schedule is thus feasible, and has length exactly
+L.
+We now prove that any feasible schedule of I corresponds to a valid decomposition of A for 3Par. Indeed, we argue that every feasible schedule has to
+consist of m segments like the one shown in Figure 2. Each segment provides a
+triplet {ai1 , ai2 , ai3 } such that ai1 + ai2 + ai3 = b.
+Any schedule S of I having no idle time must start with K0 . We first show
+that no other Ki task can be active with K0 , otherwise we would get idle time
+on computation resource. Indeed, the communication of such a task Ki would
+end at time at least b0 > 3 + 6x, but at most two Ai tasks can be computed, and
+they end at time at most 3 + 2max{a0i : 1 ≤ i ≤ 3m} = 3 + 6x
+Hence three Ai tasks must follow K0 . The memory requirement of other Ki
+tasks is b0 and 2b0 > C, therefore at any point in the schedule at most one Ki task
+
+10
+
+Kumar and Eyraud-Dubois, et al.
+
+can be active. Since the total duration of all Ki tasks is 3 + (m − 1)(b0 + 3) + b0 =
+m(b0 + 3) = L, at each point in S exactly one Ki task is active.
+With these Ki tasks in place, the schedule on the computation resource
+contains m slots of length exactly b0 , in which all Ai tasks must fit without
+preemption. We can thus define triplet T Ri as the set of tasks which execute
+during the communication phase of task Ki . Since at each point in S, exactly one
+Ki task is active, and since S has no idle time on the computation resource, the
+total computation time of tasks in T Ri is exactly b0 , and thus ai1 + ai2 + ai3 = b.
+This partition is thus a valid solution for the 3Par instance A.
+This theorem shows that adding a memory constraint to our problem makes
+it more difficult. One additional difficulty compared to infinite memory capacity
+2-machine flowshop [19] is that it may not be optimal to consider the same
+ordering on both machines:
+Proposition 1. There exists an instance of DT for which in all optimal schedules, the communication order of tasks is different from their computation order.
+
+Memory Req
+Comm Time Comp Time
+=Comm Volume
+A
+0
+0
+5
+B
+4
+4
+3
+C
+1
+1
+6
+D
+3
+3
+7
+E
+6
+6
+0.5
+F
+7
+7
+0.5
+
+Task
+
+Table 2: Example instance where ordering on both resources has to be different.
+
+Proof. Consider the instance described on Table 2, in which memory capacity
+is C = 10. Figure 3a shows the best possible schedule when tasks are scheduled
+in the same order on both resources (obtained by exhaustive search). On the
+other hand, Figure 3b shows another schedule with lower makespan, in which
+the order is different.
+In the infinite memory case, the standard proof that an optimal schedule
+exists with the same order on both resources claims that it is possible to swap two
+tasks which do not satisfy this property. On Figure 3, this would mean swapping
+tasks D and E. But the communication of task E can not start earlier because
+it would not fit in memory with tasks B and C, and delaying the computation of
+task E after task D would delay task F because E and F do not fit in memory
+together. We can see that this claim does not hold in the constrained memory
+case.
+
+Performance Models for Data Transfers
+B
+
+D
+
+A
+0
+
+E
+B
+
+5
+
+C
+
+D
+8
+
+11
+
+F
+C
+21.523 t
+
+15
+
+(a) Optimal schedule with common ordering on both resources
+B
+
+C
+
+A
+0
+
+5
+
+D
+
+E
+
+F
+
+B
+
+C
+
+D
+
+8
+
+14
+
+22
+
+t
+
+(b) Schedule with different ordering on both resources
+
+Fig. 3: Schedules for the instance of Table 2 with a memory capacity of 10.
+
+4
+
+Data Transfer Order heuristics
+
+Algorithm 1 presented in Section 3 achieves an optimal makespan when there
+is no memory constraint. This optimal value indicates a lower bound on the
+makespan of the constrained case. We denote this value with optimal makespan
+infinite memory (OM IM ). In the present Section, we propose different heuristics
+for the limited memory case, and we assess their efficiency with respect to this
+lower bound in Section 6.
+We classify our heuristics into mainly three categories. In the first category,
+the order of all computations and communications is computed in advance and
+the same order is followed on both resources. In the second category, the next
+task to schedule is dyanmically chosen based on different criteria. The final
+category is based on combining strategies from the first two categories: a static
+ordering is precomputed and corrected dynamically to avoid idle time caused by
+memory limitations. In all of our strategies (except linear programming based
+strategy), communication and computations take place in the same order.
+4.1
+
+Static Ordering
+
+In this class of strategies, we compute the order of processing in advance based
+on criteria such as communication time and computation time. After computing
+the order, we follow the same sequence on computation and communication
+resources and make sure that the memory constraint is respected at each point
+in the schedule.
+In Algorithm 1, compute intensive tasks are sorted in increasing order of
+communication times. It allows tasks to utilize the computation resource maximally and make enough margin on the communication resource to accommodate
+more communication intensive tasks with maximum overlap. Communication intensive tasks are sorted in decreasing order of computation time, which allows
+tasks to utilize the margin created on communication resource. Hence, in this
+
+12
+
+Kumar and Eyraud-Dubois, et al.
+
+section, we obtain the orders by sorting tasks based on different combinations
+of communication and computation times.
+i) order of optimal strategy infinite memory (OOSIM ): This heuristic uses the
+order given by Algorithm 1, but respects the memory constraint at each point
+in the schedule. Hence the makespan of this heuristic may be completely
+different from OM IM .
+ii) increasing order of communication strategy (IOCM S): Tasks are ordered in
+non-decreasing order of communication time.
+iii) decreasing order of computation strategy (DOCP S): Tasks are ordered in
+non-increasing order of computation time.
+iv) increasing order of communication plus computation strategy (IOCCS): Tasks
+are ordered in non-decreasing order of the sum of their communication and
+computation times.
+v) decreasing order of communication plus computation strategy (DOCCS):
+Tasks are ordered in non-increasing order of the sum of their communication
+and computation times.
+
+Memory Req
+Comm Time Comp Time
+=Comm Volume
+A
+3
+3
+2
+B
+1
+1
+3
+C
+4
+4
+4
+D
+2
+2
+1
+
+Task
+
+Table 3: A task set for static order schedules.
+
+In order to highlight the different behaviors of these static strategies, we
+propose on Table 3 an example instance, and on Figure 4 the corresponding
+schedules for all these heuristics.
+4.2
+
+Dynamic Selection
+
+Dynamic strategies are based on the following principle: when the communication resource is idle, a task is chosen based on a selection criterion which
+differs depending on the heuristic, among those which fit in memory and induce
+minimum idle time on the computation resource. For example, if the selection
+criterion is to choose a highly compute intensive task, then we compute the ratio
+of computation time and communication time for all tasks, and we select a task
+with the maximum ratio among those which induce minimum idle time on the
+computation resource and fit in the currently available memory. If no task fits
+in memory then we leave the resource idle at that point and proceed to the next
+event point. We also ensure that the order on both resources is the same, by
+ordering tasks on the computation resource accordingly.
+
+OMIM
+
+Performance Models for Data Transfers
+B
+
+C
+
+A
+
+B
+0
+
+D
+C
+
+1
+
+4
+
+13
+
+A
+
+5
+
+8
+
+D
+
+10 11 12 t
+
+9
+
+OOSIM
+
+(a) Infinite Memory Capacity
+B
+
+C
+B
+
+IOCMS
+
+0 1
+B
+
+4 5
+D
+B
+
+0 1
+DOCPS
+
+A
+9
+
+A
+D
+
+C
+
+C
+C
+8
+A
+B
+
+C
+
+IOCCS
+DOCCS
+
+0
+
+B
+D
+
+8
+
+A
+B
+
+2 3
+
+D
+13 14t
+
+C
+A
+6
+
+C
+8
+
+16t
+
+12
+A
+
+C
+4
+
+D
+A
+11
+
+C
+0
+
+16t
+
+12
+
+B
+4 5
+
+D
+
+D
+14 15t
+
+12
+
+A
+
+3 4 5 6
+
+0
+
+D
+A
+
+C
+
+8
+
+B D
+A
+
+B
+
+11 12 13 14
+
+D
+16 17t
+
+(b) Memory Capacity: 6
+
+Fig. 4: Different static order heuristic schedules for Table 3
+.
+
+i) largest communication task respects memory restriction (LCM R): A task
+with the largest communication time is chosen.
+ii) smallest communication task respects memory restriction (SCM R): A task
+with the smallest communication time is chosen.
+iii) maximum accelerated task respects memory restriction (M AM R): A task
+with the maximum ratio of computation time to communication time is
+chosen.
+We highlight the different dynamic heuristics with the instance described on
+Table 4 (these heuristics are too similar on the instance from the previous class),
+and Figure 5 shows the corresponding schedules.
+4.3
+
+Static Order with Dynamic Corrections
+
+In this class of strategy, we precompute the order of tasks based on some criterion
+and then follow this ordering as much as possible. But when the communication
+
+14
+
+Kumar and Eyraud-Dubois, et al.
+Memory Req
+Comm Time Comp Time
+=Comm Volume
+A
+3
+3
+2
+B
+1
+1
+6
+C
+4
+4
+6
+D
+5
+5
+1
+
+Task
+
+LCMR
+
+Table 4: A task set for dynamic schedules.
+
+B
+
+D
+B
+
+A
+
+SCMR
+
+0 1
+B
+
+MAMR
+
+0 1
+
+C
+
+11 13
+
+A
+
+23 t
+
+17
+
+C
+B
+
+B
+
+A
+
+6 7 8
+
+0 1
+
+C
+
+D
+
+D
+
+A
+
+4
+
+7
+
+C
+9
+
+D
+
+13
+
+C
+
+A
+B
+
+C
+5
+
+7
+
+D
+A
+
+13
+
+2425 t
+
+19
+
+16 18
+
+D
+2324 t
+
+Fig. 5: Different dynamic heuristic schedules for a task set of Table 4 with a
+memory capacity of 6.
+
+resource is idle because the memory requirement of the next task is too high, then
+we select a task with a dynamic strategy. After a task is dynamically selected,
+we update the remaining order without this task. This class of strategy takes
+advantage of static information in the form of precomputed order and dynamic
+corrections to minimize the idle time due to memory constraint.
+In all strategies of this class, the initial order is OM IM order, obtained by
+Algorithm 1. We define the following heuristics based on how we select a task
+from the set of tasks which fit in memory and induce minimum idle time on the
+computation resource. If no task fits in memory then we leave the resource idle
+and forward to the next event point.
+i) optimal order infinite memory largest communication task respects memory
+restriction (OOLCM R): A task with the largest communication time is
+chosen from the set.
+ii) optimal order infinite memory smallest communication task respects memory
+restriction (OOSCM R): A task with the smallest communication time is
+chosen from the set.
+iii) optimal order infinite memory maximum accelerated task respects memory
+restriction (OOM AM R): A task with the highest ratio of computation time
+to communication time is chosen from the set.
+
+Performance Models for Data Transfers
+
+15
+
+Memory Req
+Comm Time Comp Time
+=Comm Volume
+A
+4
+4
+1
+B
+2
+2
+6
+C
+8
+8
+8
+D
+5
+5
+4
+E
+3
+3
+2
+
+Task
+
+OOLCMR
+
+Table 5: A task set for static order dynamic corrections schedules.
+
+B
+
+D
+B
+
+OOMAMR OOSCMR
+
+0 2
+
+8
+
+B E
+
+0 2
+
+5
+
+B
+
+D
+B
+
+C
+C
+
+12 15 17
+
+A
+B
+
+0 2
+
+A E
+D A E
+
+D
+
+C
+
+EA
+8
+
+11
+E
+D
+
+8
+
+33 t
+
+25
+
+D
+15
+A
+E A
+
+11 14 17
+
+C
+19
+
+35t
+
+27
+C
+C
+25
+
+33
+
+t
+
+Fig. 6: Different static order dynamic corrections heuristic schedules for a task
+set of Table 5 with a memory capacity of 9. The OM IM order is BCDAE.
+
+As previously, we propose on Table 5 an example instance for this class of
+strategies, and provide on Figure 6 the corresponding schedules.
+4.4
+
+Additional heuristics from previous work
+
+We also consider two other static heuristics for evaluation. The first heuristic is
+based on an algorithm, proposed by Gilmore and Gomory, to obtain the minimal
+cost sequence for a set of jobs [24]. This is a classical algorithm for 2-machine
+no-wait flow shop. In this algorithm, each job has a start and end state and a cost
+is associated to change the state. In our context, this cost can be seen as nonoverlap time of computation for two adjacent tasks. Here is the main idea of this
+algorithm. Initially, a partial sequence of jobs is represented by a graph such that
+their overlap is maximum. Subsequently edges are greedily added to this graph
+to connect two components while minimizing the total non-overlap cost. When
+the graph is connected, an edge interchange mechanism is used to determine
+the sequence of jobs, which ensures that the sequence has minimal cost. More
+details can be found in the original paper [24] and our implementation is publicly
+
+16
+
+Kumar and Eyraud-Dubois, et al.
+
+available [25]. This algorithm does not take memory constraints into account and
+only provides the sequence of processing. We use this sequence with a memory
+capacity restriction just like for other static heuristcs, and we call this heuristic
+Gilmore-Gomory (GG).
+The second heuristic is based on the First-Fit algorithm for the bin packing
+problem. The idea of this heuristic is to identify groups of tasks which can fit in
+memory together, called bins. In First-Fit, tasks are considered in an arbitrary
+order and added to the first bin in which they can fit. If no suitable bin is found
+then a new bin is created and this task is added to it. When all tasks have been
+assigned to bins, we consider the sequence made of all tasks from the first bin,
+then tasks for the second bin, and so on. We call this heuristic Bin Packing
+(BP ).
+4.5
+
+Solving Linear Program Iteratively
+
+We use a mixed integer linear program to obtain the order of communications
+and computations. Recall that CPi and CMi represent computation and communication times of task i, and the memory capacity of the target system is C.
+In the linear program formulation, si and ei (resp. s0i and e0i ) represent the start
+and end times of communication (resp. computation) for task i, and M C(i) is
+the memory capacity requirement of task i. The formulation also contains for
+each pair of tasks i and j i) a boolean variable aij to denote the order of i and j
+on the communication resource ii) a boolean variables bij to denote the order of
+i and j on the computation resource, and iii) a boolean variables cij to denote
+the orderP
+of si and e0j .
+Let L = i (CPi + CMi ). It is evident that ei = si + CMi and e0i = s0i + CPi .
+The linear program is given below.
+Minimize l subject to:
+∀i, e0i ≤ l
+∀i, ei ≤ s0i
+(
+ej ≤ si + (1 − aij )L
+∀i, ∀j 6= i,
+ei ≤ sj + aij L
+( 0
+ej ≤ s0i + (1 − bij )L
+∀i, ∀j 6= i,
+e0i ≤ s0j + bij L
+( 0
+ej ≤ si + (1 − cij )L
+∀i, ∀j 6= i,
+si < e0j + cij L
+X
+∀i,
+(air − cir )M C(r) + M C(i) ≤ C
+
+(task i completes)
+(task i valid ordering)
+(exclusive use of
+communication link)
+(exclusive use of
+computation resource)
+(respect ordering
+of variables cij )
+(memory constraint)
+
+r6=i
+
+We use GLPK solver v4.65 to solve the above formulation. We also add the
+following constraints to help the solver: ∀i, ∀j 6= i, aij + aji = 1, bij + bji = 1,
+
+Performance Models for Data Transfers
+
+17
+
+cij ≤ aij , cij ≤ bij , and cij + cji ≤ 1. The solver was unable to solve this
+MILP at the scale of our interest in limited time. Hence, we solve the linear
+program iteratively for a small subset of size k = 3, 4, 5, 6: at the boundary of
+two iterations we fix the event (communication or computation) of an unfinished
+task started before the boundary point and consider other events flexible. The
+subsets are formed in the order in which tasks are submitted, which is arbitrary.
+For a given size k, we represent the makespan calculated by this heuristic as lp.k.
+We compute various lp.k values for different memory capacities and observe that
+most of the other heuristics perform better than this heuristic. Figure 7 shows
+the performance of different heuristics with MILP based heuristics for various
+memory capacities of a single trace file.
+
+mc
+
+1.125 mc
+
+1.25 mc
+
+1.2
+
+0.9
+
+0.6
+
+0.3
+
+Heuristic
+OMIM
+
+0.0
+
+OS
+1.375 mc
+
+1.5 mc
+
+1.625 mc
+
+1.2
+
+OOSIM
+IOCMS
+DOCPS
+IOCCS
+
+makespan
+
+0.9
+
+DOCCS
+LCMR
+
+0.6
+
+SCMR
+MAMR
+0.3
+
+OOLCMR
+OOSCMR
+
+0.0
+
+OOMAMR
+1.75 mc
+
+1.875 mc
+
+2 mc
+
+1.2
+
+lp.3
+lp.4
+lp.5
+lp.6
+
+0.9
+
+0.6
+
+0.3
+
+OMIM
+OS
+OOS
+IM
+IOCM
+S
+DOC
+PS
+IOCC
+S
+DOC
+CS
+LCM
+R
+SCM
+R
+MAM
+R
+OOL
+CMR
+OOS
+CM
+OOM R
+AMR
+lp.3
+lp.4
+lp.5
+lp.6
+
+OMIM
+OS
+OOS
+IM
+IOCM
+S
+DOC
+PS
+IOCC
+S
+DOC
+CS
+LCM
+R
+SCM
+R
+MAM
+R
+OOL
+CMR
+OOS
+CM
+OOM R
+AMR
+lp.3
+lp.4
+lp.5
+lp.6
+
+OMIM
+OS
+OOS
+IM
+IOCM
+S
+DOC
+PS
+IOCC
+S
+DOC
+CS
+LCM
+R
+SCM
+R
+MAM
+R
+OOL
+CMR
+OOS
+CM
+OOM R
+AMR
+lp.3
+lp.4
+lp.5
+lp.6
+
+0.0
+
+Fig. 7: Comparision of proposed heuristics heuristics with MILP solution based
+heuristic for different memory capacities of a single trace file . Here minimum
+memory requirement to process all tasks is mc = 176KB.
+
+18
+
+4.6
+
+Kumar and Eyraud-Dubois, et al.
+
+Favorable Situations for Heuristics
+
+Based on the definition of proposed strategies and the optimality of Algorithm 1,
+we present the scenarios which should be more favorable for each heuristic in
+Table 6. This allows programmers to use appropriate strategies to maximize
+communication-computation overlap for their applications. In this table, “moderate memory capacity” refers to the case where memory is constrained, but
+close to the maximal memory requirement of the OM IM schedule.
+Heuristic
+Favorable Situation
+OOSIM Memory capacity is not a restriction (Optimal)
+IOCM S Memory capacity is not a restriction and tasks are compute intensive
+(Optimal)
+DOCP S Memory capacity is not a restriction and tasks are communication intensive (Optimal)
+IOCCS Moderate memory capacity and most tasks are highly compute intensive
+DOCCS Moderate memory capacity and most tasks are highly communication
+intensive
+LCM R Limited memory capacity and significant percentage of tasks with large
+communication times are compute intensive
+SCM R Limited memory capacity and significant percentage of tasks with small
+communication times are compute intensive
+M AM R Limited memory capacity and significant percentage of tasks of both
+types
+OOLCM R Moderate memory capacity and significant percentage of tasks are communication intensive
+OOSCM R Moderate memory capacity and significant percentage of tasks are compute intensive
+OOM AM R Moderate memory capacity and significant percentage of highly compute
+and communication intensive tasks
+
+Table 6: Heuristics and their favorable scenarios.
+
+Some of these favorable scenarios can be clearly observed in our experimental
+results, on Figures 9 and 11. For example, HF compute intensive tasks have small
+communication times, which explains why the SCM R heuristic exhibits very
+good performance in limited memory cases. CCSD has significant percentage of
+both types of tasks, and indeed the performance of OOLCM R and OOSCM R
+is very close to optimality in moderate memory cases.
+
+5
+
+Experimental Settings
+
+We consider a machine called Cascade [26], available at PNNL, for our experiments. We obtain traces by running two molecular chemistry applications, double precision version of HF and CCSD of NWChem [27] package on 10 nodes of
+
+Performance Models for Data Transfers
+
+19
+
+this machine. Each node is composed of 16 Intel Xeon E5-2670 cores. NWChem
+takes advantages of a Partitioned Global Address Space Programming Model
+called Global Arrays (GA) [28] to use shared-memory programming APIs on
+distributed memory computers. GA dedicates one core of each node to handle
+other cores, hence we can view a node as being composed of 15 computational
+cores. We use 150 processes for each application and obtain 150 trace files. We
+run CCSD with Uracil molecules input and HF with SiOSi molecules (for Uracil
+molecules, HF has a much smaller workload, each processor executes only around
+20 tasks, that is why we chose SiOSi input for HF execution). Each process executes around 300-800 tasks. Our data transfer model is quite simple and we
+consider that all data transfers between the local memory of each process and
+the GA memory take the same route. Modeling of different routes of data transfers for the same source-destination pair, bandwidth sharing for different sourcedestination pairs and network congestion is more challenging and part of our
+future work. This simple model is enough to provide insight to the application
+developers (or runtime system) about the ordering of data transfers for the same
+source-destination pair so as to maximize communication-computation overlap.
+Our model is easily adaptable to any source-destination pair when there is one
+fixed route between source and destination (such as between CPU and GPU,
+one copy engine to transfer data from CPU (resp. GPU) to GPU (resp. CPU) ).
+Both applications mainly perform two types of computations, tensor transpose and tensor contraction. HF expects to specify a tile size and we set it to
+100, so that each core can be used efficiently. CCSD automatically determines
+tile sizes at different program points based on the input molecules. Hence, HF
+operates on almost homogeneous tiles while CCSD uses more heterogeneous tiles.
+5.1
+
+Workload Characteristics
+
+To get more insights into the considered workloads, we provide information about
+the instances we consider in Figure 8. For each instance, we compute the sum of
+communication times (sum comm) and sum of computation times (sum comp),
+and normalize it relatively to the OM IM value. Figure 8 also shows the maximum of both values, which is a lower bound on the possible makespan of a schedule for this instance, and their sum, which is an upper bound: this represents the
+makespan of the sequential schedule, obtained with zero overlap between computation and communication. We can see that HF is a communication intensive
+application and at most 20% overlap can be expected in the best scenario. On
+the other hand, in the CCSD workload, communications and computations are
+almost evenly distributed and a more significant overlap is possible.
+
+6
+
+Experimental Results
+
+We evaluate our scheduling heuristics for several memory capacities. From the
+obtained traces, we first determine the minimum requirement of the memory
+
+20
+
+Kumar and Eyraud-Dubois, et al.
+CCSD Workload
+
+HF Workload
+
+2.0
+
+Ratio to Optimal
+
+1.5
+
+●
+●
+
+1.0
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+
+●
+
+●
+
+0.5
+
+●
+●
+
+p
+m
+su
+m
+m
+co
+m
+su
+
+m
+
+ax
+
+(s
+
+su
+
+m
+
+um
+
+co
+
+co
+
+m
+
+m
+
+m
+
+m
+
++
+
+,s
+
+su
+
+um
+
+m
+
+co
+
+co
+
+m
+
+m
+
+p)
+
+p
+m
+co
+
+m
+
++
+
+su
+
+m
+
+co
+
+co
+m
+su
+
+um
+,s
+m
+m
+co
+um
+(s
+ax
+m
+
+m
+
+p
+m
+
+p)
+m
+co
+
+co
+m
+su
+
+su
+
+m
+
+co
+
+m
+
+m
+
+m
+
+p
+
+0.0
+
+Fig. 8: HF and CCSD tasks characteristics.
+
+capacity mc to execute all tasks. Then we observe the behavior of all heuristics with memory capacity mc to 2mc , in increments of 0.125mc . Our performance metric is the ratio to optimal r: if heuristic H has makespan MH on an
+instance, and the optimal makespan for the infinite memory case is OM IM ,
+MH
+then r(H) = OM
+IM (lower values are better). This ratio is at least 1, and a
+value close to 1 indicates a well-suited heuristic which achives maximum possible communication-computation overlap.
+Figures 9 and 11 show the distribution of the performance of each heuristic
+for different memory capacities, where plots are categorized by memory capacities. For each memory capacity and each heuristic, the box on the plot displays
+the median, first and last quartile, and the whiskers indicate minimum and maximum values, with outliers are shown by black dots.
+6.1
+
+HF Performance
+
+As indicated above, HF tasks operate on less heterogeneous tiles, this is also noticeable in Figure 9. All heuristics depict similar behavior for minimum memory
+capacity mc and increasing the memory capacity slightly does not change the
+performance of all heuristics. As memory capacity is increased further, dynamic
+variants of heuristics start performing better. For the moderate memory capacities (close to 2mc ), static order with dynamic corrections variants outperform
+others. GG heuristic does not achieve good performance, because its task sequence is obtained considering no extra memory is available, but is then applied
+
+Performance Models for Data Transfers
+mc
+1.11
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+1.125 mc
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+21
+
+1.25 mc
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+1.08
+
+1.05
+
+1.02
+
+Heuristic
+OS
+1.375 mc
+
+1.5 mc
+
+GG
+
+1.625 mc
+
+Ratio to Optimal
+
+1.11
+
+BP
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+1.08
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+OOSIM
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+IOCMS
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+DOCPS
+IOCCS
+
+1.05
+
+DOCCS
+LCMR
+
+1.02
+
+SCMR
+MAMR
+1.75 mc
+
+1.875 mc
+
+OOLCMR
+
+2 mc
+
+1.11
+
+1.08
+
+1.05
+
+OOSCMR
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+
+OOMAMR
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+
+1.02
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+
+Fig. 9: Comparison of different heuristics for HF with mc = 176KB.
+in a different scenario where memory is limited. Surprisingly, the BP heuristic
+which considers only memory constraint obtains good performance for a static
+heuristic, but is outperformed by more dynamic approaches.
+Figure 10 shows the performance comparison of the best variant in each
+category, in addition to the order of submission (OS) strategy which orders
+tasks in the (arbitrary) sequence in which they are given. Static strategies are
+expected to perform better when there is not any memory capacity restriction,
+and indeed this plot shows that static strategies face capacity bottleneck and
+underperform with limited memory. Dynamic strategies achieve slightly better
+performance with limited memory capacity, but when memory capacity is larger,
+static order with dynamic corrections strategies outperform all others.
+6.2
+
+CCSD Performance
+
+The CCSD application operates on tasks of different sizes, hence different heuristics exhibit distinct behaviors even at minimum memory capacity mc . Heterogeneity favors dynamic strategies, as can be seen by the fact that both dynamic
+and static order with dynamic corrections based strategies perform better than
+static based strategies. Similar to HF, static order with dynamic corrections
+based strategies outperform others as memory capacity becomes moderate.
+
+22
+
+Kumar and Eyraud-Dubois, et al.
+
+Ratio to Optimal
+
+1.08
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+1.05
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+1.02
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+0.99
+200000
+
+250000
+
+300000
+
+350000
+
+Memory Capacity
+Heuristic
+
+●
+
+OS
+
+●
+
+Best Static
+
+●
+
+Best Dynamic
+
+●
+
+Best Static Dynamic
+
+Fig. 10: Comparision of best variants of all categories for HF.
+
+Figure 12 shows that best variants of dynamic and static order with dynamic
+corrections strategies achieve similar performance at minimum memory capacity
+mc . But as memory capacity increases, heterogeneity allows static order with
+dynamic corrections based strategies to take advantage of static knowledge to
+get maximum overlap and dynamic correction to select another task in case
+of memory capacity limitation. Static strategies also start performing better
+at the end, which indicates that this application has potential for significant
+communication-computation overlap and pure dynamic strategies are unable to
+take this information into account while making scheduling decisions.
+
+6.3
+
+Scheduling in Batches
+
+In most applications, the runtime scheduler may only observe a limited batch of
+independent tasks. Therefore we organize tasks of each trace file in batches of
+100 (the last batch may have less than 100 tasks). We apply each heuristic on
+each group in succession. Figure 13 shows the performance of the best variants
+of each category for both applications. The plots exhibit behavior similar to Figures 10 and 12: static order with dynamic corrections variants attain maximum
+communication-computation overlap and outperform other heuristics.
+
+Performance Models for Data Transfers
+mc
+
+1.125 mc
+
+23
+
+1.25 mc
+
+●
+
+1.75
+
+●
+
+●
+
+1.50
+
+1.25
+
+Heuristic
+1.00
+
+OS
+1.375 mc
+
+1.5 mc
+
+GG
+
+1.625 mc
+
+BP
+
+Ratio to Optimal
+
+●
+●
+
+●
+
+●
+●
+
+1.75
+
+●
+●
+
+●
+
+OOSIM
+●
+●
+
+●
+●
+
+●
+
+●
+
+●
+
+●
+●
+
+●
+
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+IOCMS
+DOCPS
+
+1.50
+
+IOCCS
+DOCCS
+
+1.25
+
+LCMR
+SCMR
+
+1.00
+
+MAMR
+1.75 mc
+
+1.875 mc
+
+OOLCMR
+
+2 mc
+
+OOSCMR
+OOMAMR
+1.75
+
+●
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+●
+
+●
+
+●
+
+1.50
+
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+
+●
+●
+●
+
+●
+
+●
+
+●
+
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+1.25
+
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+
+●
+
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+●
+
+1.00
+
+Fig. 11: Comparison of different heuristics for CCSD with mc = 1.8GB.
+
+7
+
+Conclusion and Perspectives
+
+In this article, we consider the problem of deciding the order of data transfers
+between two memory nodes such that overlap of communications and computations is maximized. With Exascale computing, applications face bottlenecks due
+to communications. Hence, it is extremely important to achieve the maximum
+communication-computation overlap in order to exploit the full potential of the
+system. We show that determining the order of data transfers is a NP complete problem. We propose several data transfer heuristics and evaluate them
+on two molecular chemistry kernels, HF and CCSD. Our results show that some
+of our heuristics achieve significant overlap and perform very close to the lower
+bound. We plan to evaluate our strategies on different applications coming from
+multiple domains. We also plan to study the behavior of our strategies in the context of overlapping CPU-GPU communications with computations. A runtime
+system aiming at exposing different heuristics to maximize the communicationcomputation overlap at the developer level and automatically selecting the best
+one is currently underway.
+
+24
+
+Kumar and Eyraud-Dubois, et al.
+
+●
+
+Ratio to Optimal
+
+1.75
+
+1.50
+
+1.25
+
+1.00
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+
+●
+
+●
+●
+●
+●
+●
+●
+●
+
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+
+2.0e+09
+
+●
+●
+
+●
+
+●
+●
+
+●
+●
+
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+
+2.5e+09
+
+3.0e+09
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+●
+●
+●
+
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+●
+
+3.5e+09
+
+Memory Capacity
+Heuristic
+
+●
+
+OS
+
+●
+
+Best Static
+
+●
+
+Best Dynamic
+
+●
+
+Best Static Dynamic
+
+Fig. 12: Comparision of best variants of all categories for CCSD.
+
+References
+1. P. Brucker and S. Knust, “Complexity results for scheduling problems,” Web document, URL: http://www2.informatik.uni-osnabrueck.de/knust/class/.
+2. R. Bleuse, S. Kedad-Sidhoum, F. Monna, G. Mounié, and D. Trystram, “Scheduling independent tasks on multi-cores with gpu accelerators,” Concurrency and
+Computation: Practice and Experience, vol. 27, no. 6, pp. 1625–1638, 2015.
+3. A. YarKhan, J. Kurzak, and J. Dongarra, QUARK Users’ Guide: QUeueing And
+Runtime for Kernels, UTK ICL, 2011.
+4. G. Bosilca, A. Bouteiller, A. Danalis, M. Faverge, T. Hérault, and J. Dongarra,
+“PaRSEC: A programming paradigm exploiting heterogeneity for enhancing scalability,” Computing in Science and Engineering, 2013.
+5. C. Augonnet, S. Thibault, R. Namyst, and P.-A. Wacrenier, “StarPU: A
+Unified Platform for Task Scheduling on Heterogeneous Multicore Architectures,”
+Concurrency and Computation: Practice and Experience, Special Issue: EuroPar 2009, vol. 23, pp. 187–198, Feb. 2011. [Online]. Available: http:
+//hal.inria.fr/inria-00550877
+6. M. Bauer, S. Treichler, E. Slaughter, and A. Aiken, “Legion: Expressing locality
+and independence with logical regions,” in Proceedings of the International
+Conference on High Performance Computing, Networking, Storage and Analysis,
+ser. SC ’12. Los Alamitos, CA, USA: IEEE Computer Society Press, 2012,
+
+Performance Models for Data Transfers
+
+25
+
+Best Variants of CCSD
+1.4
+
+1.3
+
+1.2
+
+Ratio to Optimal
+
+1.1
+
+1.0
+2.0e+09
+
+2.5e+09
+
+3.0e+09
+
+3.5e+09
+
+Best Variants of HF
+
+1.06
+
+1.04
+
+1.02
+
+1.00
+200000
+
+250000
+
+300000
+
+Memory Capacity
+Heuristic
+
+OS
+
+Best Static
+
+Best Dynamic
+
+Best Static Dynamic
+
+Fig. 13: Best variants of all categories where heuristics are applied in the batches
+of 100 tasks.
+
+26
+
+7.
+
+8.
+
+9.
+
+10.
+
+11.
+
+12.
+13.
+
+14.
+
+15.
+
+16.
+
+17.
+
+18.
+
+19.
+
+Kumar and Eyraud-Dubois, et al.
+pp. 66:1–66:11. [Online]. Available: http://dl.acm.org/citation.cfm?id=2388996.
+2389086
+A. Duran, E. Ayguadé, R. M. Badia, J. Labarta, L. Martinell, X. Martorell,
+and J. Planas, “Ompss: a proposal for programming heterogeneous multi-core
+architectures,” Parallel Processing Letters, vol. 21, no. 2, pp. 173–193, 2011.
+[Online]. Available: https://doi.org/10.1142/S0129626411000151
+E. Hermann, B. Raffin, F. Faure, T. Gautier, and J. Allard, “Multi-GPU and
+Multi-CPU Parallelization for Interactive Physics Simulations,” in Euro-Par (2),
+2010, pp. 235–246.
+“Top ten exascale research challenges,” ASCAC committee report, URL:
+https://science.energy.gov/∼/media/ascr/ascac/pdf/meetings/20140210/
+Top10reportFEB14.pdf, 2014.
+K. Yelick, “Avoiding, hiding and managing communication at the exasacle,”
+2016. [Online]. Available: https://people.eecs.berkeley.edu/∼yelick/talks/exascale/
+Communication-Yelick-China16.pdf
+C. H. Papadimitriou and P. C. Kanellakis, “Flowshop scheduling with limited
+temporary storage,” J. ACM, vol. 27, no. 3, pp. 533–549, Jul. 1980. [Online].
+Available: http://doi.acm.org/10.1145/322203.322213
+M. R. Garey and D. S. Johnson, Computers and Intractability, a Guide to the
+Theory of NP-Completeness. W.H. Freeman and Company, 1979.
+H. Topcuouglu, S. Hariri, and M.-y. Wu, “Performance-Effective and LowComplexity Task Scheduling for Heterogeneous Computing,” IEEE Trans.
+Parallel Distrib. Syst., vol. 13, no. 3, pp. 260–274, Mar. 2002. [Online]. Available:
+http://dx.doi.org/10.1109/71.993206
+O. Beaumont, T. Cojean, L. Eyraud-Dubois, A. Guermouche, and S. Kumar,
+“Scheduling of Linear Algebra Kernels on Multiple Heterogeneous Resources,”
+in International Conference on High Performance Computing, Data, and
+Analytics (HiPC 2016), Hyderabad, India, Dec. 2016. [Online]. Available:
+https://hal.inria.fr/hal-01361992
+E. Agullo, O. Beaumont, L. Eyraud-Dubois, and S. Kumar, “Are Static
+Schedules so Bad? A Case Study on Cholesky Factorization,” in 2016 IEEE
+International Parallel and Distributed Processing Symposium, IPDPS 2016,
+Chicago, IL, USA, May 23-27, 2016, 2016, pp. 1021–1030. [Online]. Available:
+http://dx.doi.org/10.1109/IPDPS.2016.90
+L. Stanisic, S. Thibault, A. Legrand, B. Videau, and J.-F. Méhaut, “Modeling
+and simulation of a dynamic task-based runtime system for heterogeneous multicore architectures,” in Euro-Par 2014 Parallel Processing, F. Silva, I. Dutra, and
+V. Santos Costa, Eds. Cham: Springer International Publishing, 2014, pp. 50–62.
+E. Agullo, B. Bramas, O. Coulaud, E. Darve, M. Messner, and T. Takahashi,
+“Task-based fmm for heterogeneous architectures,” Concurrency and Computation:
+Practice and Experience, vol. 28, no. 9, pp. 2608–2629, 2016. [Online]. Available:
+https://onlinelibrary.wiley.com/doi/abs/10.1002/cpe.3723
+M. Predari, “Load Balancing for Parallel Coupled Simulations,” Theses, Université
+de Bordeaux, LaBRI ; Inria Bordeaux Sud-Ouest, Dec. 2016. [Online]. Available:
+https://hal.inria.fr/tel-01518956
+S. M. Johnson, “Optimal two- and three-stage production schedules with setup
+times included,” Naval Research Logistics Quarterly, vol. 1, no. 1, pp. 61–68,
+1954. [Online]. Available: https://onlinelibrary.wiley.com/doi/abs/10.1002/nav.
+3800010110
+
+Performance Models for Data Transfers
+
+27
+
+20. R. Sethi and J. D. Ullman, “The generation of optimal code for arithmetic
+expressions,” J. ACM, vol. 17, no. 4, pp. 715–728, Oct. 1970. [Online]. Available:
+http://doi.acm.org/10.1145/321607.321620
+21. D. Sbı̂rlea, Z. Budimlić, and V. Sarkar, “Bounded memory scheduling of dynamic
+task graphs,” in 2014 23rd International Conference on Parallel Architecture and
+Compilation Techniques (PACT), Aug 2014, pp. 343–355.
+22. L. Marchal, H. Nagy, B. Simon, and F. Vivien, “Parallel scheduling of dags under
+memory constraints,” in 2018 IEEE International Parallel and Distributed Processing Symposium (IPDPS), May 2018, pp. 204–213.
+23. M. R. Garey, D. S. Johnson, and R. Sethi, “The complexity of flowshop and
+jobshop scheduling,” Math. Oper. Res., vol. 1, no. 2, pp. 117–129, May 1976.
+[Online]. Available: http://dx.doi.org/10.1287/moor.1.2.117
+24. P. C. Gilmore and R. E. Gomory, “Sequencing a one state-variable machine: A
+solvable case of the traveling salesman problem,” Operations Research, vol. 12,
+no. 5, pp. 655–679, 1964. [Online]. Available: https://doi.org/10.1287/opre.12.5.655
+25. “Commincation
+scheduling,”
+https://github.com/surakuma/
+communication-scheuling, 2019.
+26. “Computing: Cascade,” 2019. [Online]. Available: https://www.emsl.pnl.gov/
+emslweb/10.25582/inst.34218
+27. “Nwchem: A comprehensive and scalable open-source solution for large scale
+molecular simulations,” Computer Physics Communications, vol. 181, no. 9, pp.
+1477 – 1489, 2010. [Online]. Available: http://www.sciencedirect.com/science/
+article/pii/S0010465510001438
+28. J. Nieplocha, R. J. Harrison, and R. J. Littlefield, “Global arrays: A nonuniform
+memory access programming model for high-performance computers,” The
+Journal of Supercomputing, vol. 10, no. 2, pp. 169–189, Jun 1996. [Online].
+Available: https://doi.org/10.1007/BF00130708
+
+

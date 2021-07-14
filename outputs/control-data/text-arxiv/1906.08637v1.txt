@@ -1,0 +1,1244 @@
+Back to Simplicity: How to Train Accurate BNNs from Scratch?
+
+arXiv:1906.08637v1 [cs.LG] 19 Jun 2019
+
+Joseph Bethge∗, Haojin Yang∗, Marvin Bornstein, Christoph Meinel
+Hasso Plattner Institute, University of Potsdam, Germany
+{joseph.bethge,haojin.yang,meinel}@hpi.de, {marvin.bornstein}@student.hpi.de
+
+Abstract
+
+SqueezeNet [13], MobileNets [10], and ShuffleNet [30]. On
+the other hand, information can be compressed by avoiding
+the common usage of full-precision floating point weights
+and activations, which use 32 bits of storage. Instead,
+quantized floating-point numbers with lower precision (e.g.
+4 bit of storage) [31] or even binary (1 bit of storage)
+weights and activations [12, 19, 22, 23] are used in these
+approaches. A BNN achieves up to 32× memory saving
+and 58× speedup on CPUs by representing both weights
+and activations with binary values [23]. Furthermore, computationally efficient, bitwise operations such as xnor and
+bitcount can be applied for convolution computation instead of arithmetical operations. Despite the essential advantages in efficiency and memory saving, BNNs still suffer from the noticeable accuracy degradation that prevents
+their practical usage. To improve the accuracy of BNNs,
+previous approaches mainly focused on reducing quantization errors by using complicated approximation methods and training tricks, such as scaling factors [23], multiple weight/activation bases [19], fine-tuning a full-precision
+model, multi-stage pre-training, or custom gradients [22].
+These work applied well-known real-valued network architectures such as AlexNet, GoogLeNet or ResNet to BNNs
+without thorough explanation or experiments on the design
+choices. However, they don’t answer the simple yet essential question: Are those real-valued network architectures
+seamlessly suitable for BNNs? Therefore, appropriate network structures for BNNs should be adequately explored.
+
+Binary Neural Networks (BNNs) show promising progress
+in reducing computational and memory costs but suffer from
+substantial accuracy degradation compared to their realvalued counterparts on large-scale datasets, e.g., ImageNet.
+Previous work mainly focused on reducing quantization errors of weights and activations, whereby a series of approximation methods and sophisticated training tricks have been
+proposed. In this work, we make several observations that
+challenge conventional wisdom. We revisit some commonly
+used techniques, such as scaling factors and custom gradients, and show that these methods are not crucial in training
+well-performing BNNs. On the contrary, we suggest several
+design principles for BNNs based on the insights learned
+and demonstrate that highly accurate BNNs can be trained
+from scratch with a simple training strategy. We propose
+a new BNN architecture BinaryDenseNet, which significantly surpasses all existing 1-bit CNNs on ImageNet without tricks. In our experiments, BinaryDenseNet achieves
+18.6% and 7.6% relative improvement over the well-known
+XNOR-Network and the current state-of-the-art Bi-Real
+Net in terms of top-1 accuracy on ImageNet, respectively.
+https://github.com/hpi-xnor/BMXNet-v2
+
+1. Introduction
+Convolutional Neural Networks have achieved state-of-theart on a variety of tasks related to computer vision, for example, classification [17], detection [7], and text recognition [15]. By reducing memory footprint and accelerating
+inference, there are two main approaches which allow for
+the execution of neural networks on devices with low computational power, e.g. mobile or embedded devices: On
+the one hand, information in a CNN can be compressed
+through compact network design. Such methods use fullprecision floating point numbers as weights, but reduce the
+total number of parameters and operations through clever
+network design, while minimizing loss of accuracy, e.g.,
+∗ Authors
+
+In this work, we first revisit some commonly used techniques in BNNs. Surprisingly, our observations do not
+match conventional wisdom. We found that most of these
+techniques are not necessary to reach state-of-the-art performance. On the contrary, we show that highly accurate
+BNNs can be trained from scratch by “simply” maintaining
+rich information flow within the network. We present how
+increasing the number of shortcut connections improves the
+accuracy of BNNs significantly and demonstrate this by designing a new BNN architecture BinaryDenseNet. Without
+bells and whistles, BinaryDenseNet reaches state-of-the-art
+by using standard training strategy which is much more efficient than previous approaches.
+
+contributed equally
+
+1
+
+Table 1: A general comparison of the most related methods to this work. Essential characteristics such as value space of
+inputs and weights, numbers of multiply-accumulate operations (MACs), numbers of binary operations, theoretical speedup
+rate and operation types, are depicted. The results are based on a single quantized convolution layer from each work. β and α
+denote the full-precision scaling factor used in proper methods, whilst m, n, k denote the dimension of weight (W ∈ Rn×k )
+and input (I ∈ Rk×m ). The table is adapted from [28].
+Methods
+Full-precision
+BC [3]
+BWN [23]
+TTQ [33]
+DoReFa [31]
+HORQ [18]
+TBN [28]
+XNOR [23]
+BNN [12]
+Bi-Real [22]
+Ours
+
+Inputs
+R
+R
+R
+R
+{0, 1}×4
+{−β, β}×2
+{−1, 0, 1}
+{−β, β}
+{−1, 1}
+{−1, 1}
+{−1, 1}
+
+Weights
+R
+{−1, 1}
+{−α, α}
+{−αn , 0, αp }
+{0, α}
+{−α, α}
+{−α, α}
+{−α, α}
+{−1, 1}
+{−1, 1}
+{−1, 1}
+
+MACs
+n×m×k
+n×m×k
+n×m×k
+n×m×k
+n×k
+4×n×m
+n×m
+2×n×m
+0
+0
+0
+
+Summarized, our contributions in this paper are:
+• We show that highly accurate binary models can be
+trained by using standard training strategy, which challenges conventional wisdom. We analyze why applying common techniques (as e.g., scaling methods, custom gradient, and fine-tuning a full-precision model)
+is ineffective when training from scratch and provide
+empirical proof.
+• We suggest several general design principles for BNNs
+and further propose a new BNN architecture BinaryDenseNet, which significantly surpasses all existing 1bit CNNs for image classification without tricks.
+• To guarantee the reproducibility, we contribute to
+an open source framework for BNN/quantized NN.
+We share codes, models implemented in this paper
+for classification and object detection. Additionally,
+we implemented the most influential BNNs including
+[12, 19, 22, 23, 31] to facilitate follow-up studies.
+The rest of the paper is organized as follows: We describe related work in Section 2. We revisit common techniques used in BNNs in Section 3. Section 4 and 5 present
+our approach and the main result.
+
+2. Related work
+In this section, we roughly divide the recent efforts for binarization and compression into three categories: (i) compact network design, (ii) networks with quantized weights,
+(iii) and networks with quantized weights and activations.
+Compact Network Design. This sort of methods use fullprecision floating point numbers as weights, but reduce the
+total number of parameters and operations through compact network design, while minimizing loss of accuracy.
+
+Binary Operations
+0
+0
+0
+0
+8×n×m×k
+4×n×m×k
+3×n×m×k
+2×n×m×k
+2×n×m×k
+2×n×m×k
+2×n×m×k
+
+Speedup
+1×
+∼ 2×
+∼ 2×
+∼ 2×
+∼ 15×
+∼ 29×
+∼ 40×
+∼ 58×
+∼ 64×
+∼ 64×
+∼ 64×
+
+Operations
+mul,add
+sign,add
+sign,add
+sign,add
+and,bitcount
+xor,bitcount
+and,xor,bitcount
+xor,bitcount
+xor,bitcount
+xor,bitcount
+xor,bitcount
+
+The commonly used techniques include replacing a large
+portion of 3×3 filters with smaller 1×1 filters [13]; Using
+depth-wise separable convolution to reduce operations [10];
+Utilizing channel shuffling to achieve group convolutions in
+addition to depth-wise convolution [30]. These approaches
+still require GPU hardware for efficient training and inference. A strategy to accelerate the computation of all these
+methods for CPUs has yet to be developed.
+Quantized Weights and Real-valued Activations. Recent
+efforts from this category, for instance, include BinaryConnect (BC) [3], Binary Weight Network (BWN) [23], and
+Trained Ternary Quantization (TTQ) [33]. In these work,
+network weights are quantized to lower precision or even
+binary. Thus, considerable memory saving with relatively
+little accuracy loss has been achieved. But, no noteworthy
+acceleration can be obtained due to the real-valued inputs.
+Quantized Weights and Activations. On the contrary, approaches adopting quantized weights and activations can
+achieve both compression and acceleration. Remarkable
+attempts include DoReFa-Net [31], High-Order Residual
+Quantization (HORQ) [18] and SYQ [6], which reported
+promising results on ImageNet [4] with 1-bit weights and
+multi-bits activations.
+Binary Weights and Activations. BNN is the extreme
+case of quantization, where both weights and activations
+are binary. Hubara et al. proposed Binarized Neural Network (BNN) [12], where weights and activations are restricted to +1 and -1. They provide efficient calculation
+methods for the equivalent of matrix multiplication by using xnor and bitcount operations. XNOR-Net [23] improved the performance of BNNs by introducing a channelwise scaling factor to reduce the approximation error of
+full-precision parameters. ABC-Nets [19] used multiple
+
+Table 2: The influence of using scaling, a full-precision
+downsampling convolution, and the approxsign function on
+the CIFAR-10 dataset based on a binary ResNetE18. Using approxsign instead of sign slightly boosts accuracy, but
+only if training a model with scaling factors.
+Use
+scaling
+of [23]
+
+Downsampl.
+convolution
+binary
+
+no
+full-precision
+binary
+yes
+full-precision
+
+Use
+approxsign
+of [22]
+yes
+no
+yes
+no
+yes
+no
+yes
+no
+
+Full-precision
+Input
+
+Binary
+
+Weight
+
+Input
+
+0.1
+
+0.5
+
+-0.5
+
+-0.1
+
+1
+
+1
+
+-1
+
+-1
+
+-0.7
+
+-0.1
+
+0.5
+
+0.5
+
+-1
+
+-1
+
+1
+
+1
+
+0.5
+
+-0.4
+
+-0.7
+
+0.3
+
+1
+
+-1
+
+-1
+
+1
+
+0.3
+
+0.3
+
+-0.1
+
+-0.7
+
+1
+
+1
+
+-1
+
+-1
+
+0.01
+
+-0.78
+
+-0.42
+
+Result
+
+2
+
+-4
+
+-2
+
+Error
+
+1.99
+
+3.22
+
+1.58
+
+Normalized
+
+1.25
+
+-1.0
+
+-0.25
+
+Error
+
+0.24
+
+0.05
+
+0.19
+
+*
+
+Result
+
+*
+
+Accuracy
+Top1/Top5
+Normalized
+
+84.9%/99.3%
+87.2%/99.5%
+86.1%/99.4%
+87.6%/99.5%
+84.2%/99.2%
+83.6%/99.2%
+84.4%/99.3%
+84.7%/99.2%
+
+weight bases and activation bases to approximate their fullprecision counterparts. Despite the promising accuracy improvement, the significant growth of weight and activation
+copies offsets the memory saving and speedup of BNNs.
+Wang et al. [28] attempted to use binary weights and
+ternary activations in their Ternary-Binary Network (TBN).
+They achieved a certain degree of accuracy improvement
+with more operations compared to fully binary models. In
+Bi-Real Net, Liu et al. [22] proposed several modifications
+on ResNet. They achieved state-of-the-art accuracy by applying an extremely sophisticated training strategy that consists of full-precision pre-training, multi-step initialization
+(ReLU→leaky clip→clip [21]), and custom gradients.
+Table 1 gives a thorough overview of the recent efforts
+in this research domain. We can see that our work follows
+the most straightforward binarization strategy as BNN [12],
+that achieves the highest theoretical speedup rate and the
+highest compression ratio. Furthermore, we directly train a
+binary network from scratch by adopting a simple yet effective strategy.
+
+3. Study on Common Techniques
+In this section, to ease the understanding, we first provide a
+brief overview of the major implementation principles of a
+binary layer (see supplementary materials for more details).
+We then revisit three commonly used techniques in BNNs:
+scaling factors [23, 31, 28, 27, 18, 33, 19], full-precision
+pre-training [31, 22], and approxsign function [22]. We
+didn’t observe accuracy gain as expected. We analyze why
+these techniques are not as effective as previously presented
+when training from scratch and provide empirical proof.
+The finding from this study motivates us to explore more
+effective solutions for training accurate BNNs.
+
+Binary with scaling
+
+Weight
+
+1.01
+
+-0.95
+
+-0.06
+
+Input Scaling
+
+0.4
+
+Weight Scaling
+
+0.33
+
+0.45
+
+0.4
+
+Result
+
+0.26
+
+-0.72
+
+-0.32
+
+Error
+
+0.25
+
+0.06
+
+0.1
+
+1.2
+
+-1.06
+
+-0.14
+
+0.19
+
+0.11
+
+0.08
+
+>
+
+Normalized
+
+≈
+
+Error
+
+Figure 1: An exemplary implementation shows that normalization minimizes the difference between a binary convolution with scaling (right column) and one without (middle column). In the top row, the columns from left to right
+respectively demonstrate the gemm results of full-precision,
+binary, and binary with scaling. The bottom row shows their
+results after normalization. Errors are the absolute difference between full-precision and binary results. The results
+indicate that normalization dilutes the effect of scaling.
+
+3.1. Implementation of Binary Layers
+We apply the sign function for binary activation, thus transforming floating-point values into binary values:
+(
++1 if x ≥ 0,
+(1)
+sign(x) =
+−1 otherwise.
+The implementation uses a Straight-Through Estimator
+(STE) [1] with the addition, that it cancels the gradients,
+when the inputs get too large, as proposed by Hubara et al.
+[12]. Let c denote the objective function, ri be a real number input, and ro ∈ {−1, +1} a binary output. Furthermore,
+tclip is the threshold for clipping gradients, which was set
+to tclip = 1 in previous works [31, 12]. Then, the resulting
+STE is:
+Forward: ro = sign(ri ) .
+∂c
+∂c
+=
+1|r |≤t .
+Backward:
+∂ri
+∂ro i clip
+
+(2)
+(3)
+
+3.2. Scaling Methods
+Binarization will always introduce an approximation error
+compared to a full-precision signal. In their analysis, Zhou
+et al. [32] show that this error linearly degrades the accuracy
+of a CNN.
+Consequently, Rastegari et al. [23] propose to scale the
+output of the binary convolution by the average absolute
+weight value per channel (α) and average absolut activation
+over all input channels (K).
+x ∗ w ≈ binconv(sign(x), sign(w)) · K · α
+
+(4)
+
+Use
+scaling
+of [23]
+
+Downsampl.
+convolution
+binary
+
+no
+full-precision
+binary
+yes
+full-precision
+
+Use
+approxsign
+of [22]
+yes
+no
+yes
+no
+yes
+no
+yes
+no
+
+Accuracy
+Top1/Top5
+54.3%/77.6%
+54.5%/77.8%
+56.6%/79.3%
+58.1%/80.6%
+53.3%/76.4%
+52.7%/76.1%
+55.3%/78.3%
+55.6%/78.4%
+
+The scaling factors should help binary convolutions to
+increase the value range. Producing results closer to those
+of full-precision convolutions and reducing the approximation error. However, these different scaling values influence
+specific output channels of the convolution. Therefore, a
+BatchNorm [14] layer directly after the convolution (which
+is used in all modern architectures) theoretically minimizes
+the difference between a binary convolution with scaling
+and one without. Thus, we hypothesize that learning a useful scaling factor is made inherently difficult by BatchNorm
+layers. Figure 1 demonstrates an exemplary implementation
+of our hypothesis.
+We empirically evaluated the influence of scaling factors
+(as proposed by Rastegari et al. [23]) on the accuracy of
+our trained models based on the binary ResNetE architecture (see Section 4.2). First, the results of our CIFAR-10
+[17] experiments verify our hypothesis, that applying scaling when training a model from scratch does not lead to
+better accuracy (see Table 2). All models show a decrease
+in accuracy between 0.7% and 3.6% when applying scaling factors. Secondly, we evaluated the influence of scaling
+for the ImageNet dataset (see Table 3). The result is similar, scaling reduces model accuracy ranging from 1.0% to
+1.7%. We conclude that the BatchNorm layers following
+each convolution layer absorb the effect of the scaling factors. To avoid the additional computational and memory
+costs, we don’t use scaling factors in the rest of the paper.
+
+3.3. Full-Precision Pre-Training
+Fine-tuning a full-precision model to a binary one is beneficial only if it yields better results in comparable, total
+training time. We trained our binary ResNetE18 in three
+different ways: fully from scratch (1), by fine-tuning a fullprecision ResNetE18 with ReLU (2) and clip (proposed by
+[22]) (3) as activation function (see Figure 2). The fullprecision trainings followed the typical configuration of
+
+top-1 accuracy (in %)
+
+60
+Table 3: The influence of using scaling, a full-precision
+downsampling convolution, and the approxsign function on
+the ImageNet dataset based on a binary ResNetE18.
+
+57.0
+56.3
+55.1
+
+50
+40
+30
+
+fp relu 1b sign
+fp clip 1b sign
+1b sign
+
+20
+10
+
+0
+
+5
+
+10
+
+15 20 25
+time (epoch)
+
+30
+
+35
+
+40
+
+Figure 2: Top-1 validation accuracy per epoch of training
+binary ResNetE18 from scratch (red, 40 epochs, Adam),
+from a full-precision pre-training (20 epochs, SGD) with
+clip (green) and ReLU (blue) as activation function. The
+degradation peak of the green and blue curve at epoch 20
+depicts a heavy “re-learning” effect when we start finetuning a full-precision model to a binary one.
+momentum SGD with weight decay over 20 epochs with
+learning rate decay of 0.1 after 10 and 15 epochs. For
+all binary trainings, we used Adam [16] without weight
+decay with learning rate updates at epoch 10 and 15 for
+the fine-tuning and 30 and 38 for the full binary training.
+Our experiment shows that clip performs worse than ReLU
+for fine-tuning and in general. Additionally, the training
+from scratch yields a slightly better result than with pretraining. Pre-training inherently adds complexity to the
+training procedure, because the different architecture of binary networks does not allow to use published ReLU models. Thus, we advocate the avoidance of fine-tuning fullprecision models. Note that our observations are based on
+the involved architectures in this work. A more comprehensive evaluation of other networks remains as future work.
+
+3.4. Backward Pass of the Sign Function
+Liu et al. [22] claim that a differentiable approximation
+function, called approxsign, can be made by replacing the
+backward pass with
+(
+2 − 2ri if ri ≥ 0,
+∂c
+∂c
+=
+1|r |≤t ·
+(5)
+∂ri
+∂ro i clip
+2 + 2ri otherwise.
+Since this could also benefit when training a binary network
+from scratch, we evaluated this in our experiments. We
+compared the regular backward pass sign with approxsign.
+First, the results of our CIFAR-10 experiments seem to depend on whether we use scaling or not. If we use scaling, both functions perform similarly (see Table 2). Without scaling the approxsign function leads to less accurate
+models on CIFAR-10. In our experiments on ImageNet,
+the performance difference between the use of the functions is minimal (see Table 3). We conclude that applying
+approxsign instead of sign function seems to be specific to
+
+Table 4: Comparison of our binary ResNetE18 model to state-of-the-art binary models using ResNet18 on the ImageNet
+dataset. The top-1 and top-5 validation accuracy are reported. For the sake of fairness we use the ABC-Net result with 1
+weight base and 1 activation base in this table.
+Downsampl.
+convolution
+
+Size
+
+Our result
+
+Bi-Real [22]
+
+TBN [28]
+
+HORQ [18]
+
+XNOR [23]
+
+ABC-Net (1/1) [19]
+
+full-precision
+binary
+
+4.0 MB
+3.4 MB
+
+58.1%/80.6%
+54.5%/77.8%
+
+56.4%/79.5%
+n/a
+
+55.6%/74.2%
+n/a
+
+55.9%/78.9%
+n/a
+
+51.2%/73.2%
+n/a
+
+n/a
+42.7%/67.6%
+
+fine-tuning from full-precision models [22]. We thus don’t
+use approxsign in the rest of the paper for simplicity.
+
+4. Proposed Approach
+In this section, we present several essential design principles for training accurate BNNs from scratch. We then practiced our design philosophy on the binary ResNetE model,
+where we believe that the shortcut connections are essential for an accurate BNN. Based on the insights learned we
+propose a new BNN model BinaryDenseNet which reaches
+state-of-the-art accuracy without tricks.
+
+4.1. Golden Rules for Training Accurate BNNs
+As shown in Table 4, with a standard training strategy our
+binary ResNetE18 model outperforms other state-of-the-art
+binary models by using the same network structure. We
+successfully train our model from scratch by following several general design principles for BNNs, summarized as follows:
+• The core of our theory is maintaining rich information
+flow of the network, which can effectively compensate
+the precision loss caused by quantization.
+• Not all the well-known real-valued network architectures can be seamlessly applied for BNNs. The network architectures from the category compact network
+design are not well suited for BNNs, since their design philosophies are mutually exclusive (eliminating
+redundancy ↔ compensating information loss).
+• Bottleneck design [26] should be eliminated in your
+BNNs. We will discuss this in detail in the following
+paragraphs (also confirmed by [2]).
+• Seriously consider using full-precision downsampling
+layer in your BNNs to preserve the information flow.
+• Using shortcut connections is a straightforward way to
+avoid bottlenecks of information flow, which is particularly essential for BNNs.
+• To overcome bottlenecks of information flow, we
+should appropriately increase the network width (the
+dimension of feature maps) while going deeper (as
+e.g., see BinaryDenseNet37/37-dilated/45 in Table 7).
+However, this may introduce additional computational
+costs.
+
+• The previously proposed complex training strategies,
+as e.g. scaling factors, approxsign function, FP pretraining are not necessary to reach state-of-the-art performance when training a binary model directly from
+scratch.
+Before thinking about model architectures, we must consider the main drawbacks of BNNs. First of all, the information density is theoretically 32 times lower, compared
+to full-precision networks. Research suggests, that the difference between 32 bits and 8 bits seems to be minimal
+and 8-bit networks can achieve almost identical accuracy as
+full-precision networks [8]. However, when decreasing bitwidth to four or even one bit (binary), the accuracy drops
+significantly [12, 31]. Therefore, the precision loss needs
+to be alleviated through other techniques, for example by
+increasing information flow through the network. We further describe three main methods in detail, which help to
+preserve information despite binarization of the model:
+First, a binary model should use as many shortcut connections as possible in the network. These connections allow layers later in the network to access information gained
+in earlier layers despite of precision loss through binarization. Furthermore, this means that increasing the number
+of connections between layers should lead to better model
+performance, especially for binary networks.
+Secondly, network architectures including bottlenecks
+are always a challenge to adopt. The bottleneck design reduces the number of filters and values significantly between
+the layers, resulting in less information flow through BNNs.
+Therefore we hypothesize that either we need to eliminate
+the bottlenecks or at least increase the number of filters in
+these bottleneck parts for BNNs to achieve best results.
+The third way to preserve information comes from replacing certain crucial layers in a binary network with full
+precision layers. The reasoning is as follows: If layers
+that do not have a shortcut connection are binarized, the
+information lost (due to binarization) can not be recovered in subsequent layers of the network. This affects the
+first (convolutional) layer and the last layer (a fully connected layer which has a number of output neurons equal
+to the number of classes), as learned from previous work
+[23, 31, 22, 28, 12]. These layers generate the initial information for the network or consume the final information for
+
+1⨉1
+
+3⨉3
+
+3⨉3
+
+3⨉3
+
+3⨉3
+
+2⨉2 AvgPool
+
+1⨉1
+
++
+
+2⨉2 MaxPool
+
++
+1⨉1 Conv
+
+3⨉3
+
++
+
+1⨉1, Δ(1⨉1)
+
++
+
+3⨉3, Δ(2⨉2)
+
+2⨉2 AvgPool
+
+ReLU
+1⨉1 Conv
+
++
+
+(a) ResNet
+(bottleneck)
+
+(b) ResNet
+(no bottleneck)
+
+(c) ResNetE
+(added shortcut)
+
+(a) ResNet
+
+(b) DenseNet
+
+(c)
+BinaryDenseNet
+
+3⨉3
+1⨉1
+
+3⨉3
+
+3⨉3
+3⨉3
+
+(d) DenseNet
+(bottleneck)
+
+(e) DenseNet
+(no bottleneck)
+
+(f) BinaryDenseNet
+
+Figure 3: A single building block of different network architectures (the length of bold black lines represents the
+number of filters). (a) The original ResNet design features a
+bottleneck architecture. A low number of filters reduces information capacity for BNNs. (b) A variation of the ResNet
+without the bottleneck design. The number of filters is increased, but with only two convolutions instead of three.
+(c) The ResNet architecture with an additional shortcut, first
+introduced in [22]. (d) The original DenseNet design with
+a bottleneck in the second convolution operation. (e) The
+DenseNet design without a bottleneck. The two convolution operations are replaced by one 3 × 3 convolution. (f)
+Our suggested change to a DenseNet where a convolution
+with N filters is replaced by two layers with N2 filters each.
+the prediction, respectively. Therefore, full-precision layers
+for the first and the final layer are always applied previously.
+Another crucial part of deep networks is the downsampling
+convolution which converts all previously collected information of the network to smaller feature maps with more
+channels (this convolution often has stride two and output
+channels equal to twice the number of input channels). Any
+information lost in this downsampling process is effectively
+no longer available. Therefore, it should always be considered whether these downsampling layers should be in fullprecision, even though it slightly increases model size and
+number of operations.
+
+4.2. ResNetE
+ResNet combines the information of all previous layers with
+shortcut connections. This is done by adding the input of
+a block to its output with an identity connection. As suggested in the previous section, we remove the bottleneck
+of a ResNet block by replacing the three convolution layers
+(kernel sizes 1, 3, 1) of a regular ResNet block with two
+3 × 3 convolution layers with a higher number of filters
+(see Figure 3a, b). We subsequently increase the number
+
+Figure 4: The downsampling layers of ResNet, DenseNet
+and BinaryDenseNet. The bold black lines mark the downsampling layers which can be replaced with FP layers. If we
+use FP downsampling in a BinaryDenseNet, we increase the
+reduction rate to reduce the number of channels (the dashed
+lines depict the number of channels without reduction). We
+also swap the position of pooling and Conv layer that effectively reduces the number of MACs.
+of connections by reducing the block size from two convolutions per block to one convolution per block, as inspired
+by [22]. This leads to twice the amount of shortcuts, as there
+are as many shortcuts as blocks, if the amount of layers is
+kept the same (see Figure 3c). However, [22] also incorporates other changes to the ResNet architecture. Therefore we
+call this specific change in the block design ResNetE (short
+for Extra shortcut). The second change is using the fullprecision downsampling convolution layer (see Figure 4a).
+In the following we conduct an ablation study for testing the
+exact accuracy gain and the impact of the model size.
+We evaluated the difference between using binary and
+full-precision downsampling layers, which has been often
+ignored in the literature. First, we examine the results of binary ResNetE18 on CIFAR-10. Using full-precision downsampling over binary leads to an accuracy gain between
+0.2% and 1.2% (see Table 2). However, the model size also
+increases from 1.39 MB to 2.03 MB, which is arguably too
+much for this minor increase of accuracy. Our results show
+a significant difference on ImageNet (see Table 3). The accuracy increases by 3% when using full-precision downsampling. Similar to CIFAR-10, the model size increases
+by 0.64 MB, in this case from 3.36 MB to 4.0 MB. The
+larger base model size makes the relative model size difference lower and provides a stronger argument for this tradeoff. We conclude that the increase in accuracy is significant,
+especially for ImageNet.
+Inspired by the achievement of binary ResNetE, we naturally further explored the DenseNet architecture, which is
+supposed to benefit even more from the densely connected
+layer design.
+
+4.3. BinaryDenseNet
+DenseNets [11] apply shortcut connections that, contrary
+to ResNet, concatenate the input of a block to its output
+
+Table 5: The difference of performance for different BinaryDenseNet models when using different downsampling
+methods evaluated on ImageNet.
+Blocks,
+growth-rate
+16, 128
+32, 64
+
+Model
+size
+(binary)
+3.39 MB
+3.03 MB
+3.45 MB
+3.08 MB
+
+Downsampl.
+convolution,
+reduction
+binary, low
+FP, high
+binary, low
+FP, high
+
+Accuracy
+Top1/Top5
+52.7%/75.7%
+55.9%/78.5%
+54.3%/77.3%
+57.1%/80.0%
+
+(see Figure 3d, b). Therefore, new information gained in
+one layer can be reused throughout the entire depth of the
+network. We believe this is a significant characteristic for
+maintaining information flow. Thus, we construct a novel
+BNN architecture: BinaryDenseNet.
+The bottleneck design and transition layers of the original DenseNet effectively keep the network at a smaller total
+size, even though the concatenation adds new information
+into the network every layer. However, as previously mentioned, we have to eliminate bottlenecks for BNNs. The
+bottleneck design can be modified by replacing the two
+convolution layers (kernel sizes 1 and 3) with one 3 × 3
+convolution (see Figure 3d, e). However, our experiments
+showed that DenseNet architecture does not achieve satisfactory performance, even after this change. This is due to
+the limited representation capacity of binary layers. There
+are different ways to increase the capacity. We can increase
+the growth rate parameter k, which is the number of newly
+concatenated features from each layer. We can also use a
+larger number of blocks. Both individual approaches add
+roughly the same amount of parameters to the network.
+To keep the number of parameters equal for a given BinaryDenseNet we can halve the growth rate and double the
+number of blocks at the same time (see Figure 3f) or vice
+versa. We assume that in this case increasing the number of
+blocks should provide better results compared to increasing
+the growth rate. This assumption is derived from our hypothesis: favoring an increased number of connections over
+simply adding weights.
+Another characteristic difference of BinaryDenseNet
+compared to binary ResNetE is that the downsampling layer
+reduces the number of channels. To preserve information
+flow in these parts of the network we found two options:
+On the one hand, we can use a full-precision downsampling
+layer, similarly to binary ResNetE. Since the full-precision
+layer preserves more information, we can use higher reduction rate for downsampling layers. To reduce the number
+of MACs, we modify the transition block by swapping the
+position of pooling and convolution layers. We use MaxPool→ReLU→1×1-Conv instead of 1×1-Conv→AvgPool
+
+Table 6: The accuracy of different BinaryDenseNet models
+by successively splitting blocks evaluated on ImageNet. As
+the number of connections increases, the model size (and
+number of binary operations) changes marginally, but the
+accuracy increases significantly.
+Blocks
+8
+16
+32
+
+Growthrate
+256
+128
+64
+
+Model size
+(binary)
+3.31 MB
+3.39 MB
+3.45 MB
+
+Accuracy
+Top1/Top5
+50.2%/73.7%
+52.7%/75.7%
+55.5%/78.1%
+
+in the transition block (see Figure 4c, b). On the other
+hand, we can use a binary downsampling conv-layer instead of a full-precision layer with a lower reduction rate, or
+even no reduction at all. We coupled the decision whether
+to use a binary or a full-precision downsampling convolution with the choice of reduction rate. The two variants we compare in our experiments (see Section 4.3.1) are
+thus called full-precision downsampling with high reduction
+(halve the number of channels in all transition layers) and
+binary downsampling with low reduction (no reduction in
+the first transition, divide number of channels by 1.4 in the
+second and third transition).
+4.3.1
+
+Experiment
+
+Downsampling Layers. In the following we present our
+evaluation results of a BinaryDenseNet when using a fullprecision downsampling with high reduction over a binary
+downsampling with low reduction. The results of a BinaryDenseNet21 with growth rate 128 for CIFAR-10 result
+show an accuracy increase of 2.7% from 87.6% to 90.3%.
+The model size increases from 673 KB to 1.49 MB. This
+is an arguably sharp increase in model size, but the model
+is still smaller than a comparable binary ResNet18 with a
+much higher accuracy. The results of two BinaryDenseNet
+architectures (16 and 32 blocks combined with 128 and 64
+growth rate respectively) for ImageNet show an increase of
+accuracy ranging from 2.8% to 3.2% (see Table 5). Further, because of the higher reduction rate, the model size decreases by 0.36 MB at the same time. This shows a higher
+effectiveness and efficiency of using a FP downsampling
+layer for a BinaryDenseNet compared to a binary ResNet.
+Splitting Layers. We tested our proposed architecture
+change (see Figure 3f) by comparing BinaryDenseNet models with varying growth rates and number of blocks (and
+thus layers). The results show, that increasing the number of connections by adding more layers over simply increasing growth rate increases accuracy in an efficient way
+(see Table 6). Doubling the number of blocks and halving the growth rate leads to an accuracy gain ranging from
+2.5% to 2.8%. Since the training of a very deep Binary-
+
+Table 7: Comparison of our BinaryDenseNet to state-ofthe-art 1-bit CNN models on ImageNet.
+Method
+
+Method
+
+Top-1/Top-5
+accuracy
+
+XNOR-ResNet18 [23]
+51.2%/73.2%
+TBN-ResNet18 [28]
+55.6%/74.2%
+∼4.0MB Bi-Real-ResNet18 [22]
+56.4%/79.5%
+BinaryResNetE18
+58.1%/80.6%
+BinaryDenseNet28
+60.7%/82.4%
+TBN-ResNet34 [28]
+58.2%/81.0%
+Bi-Real-ResNet34 [22]
+62.2%/83.9%
+∼5.1MB
+BinaryDenseNet37
+62.5%/83.9%
+BinaryDenseNet37-dilated∗ 63.7%/84.7%
+7.4MB
+BinaryDenseNet45
+63.7%/84.8%
+46.8MB
+Full-precision ResNet18
+69.3%/89.2%
+249MB
+Full-precision AlexNet
+56.6%/80.2%
+∗
+BinaryDenseNet37-dilated is slightly different to other models
+as it applies dilated convolution kernels, while the spatial dimention of the feature maps are unchanged in the 2nd, 3rd and 4th
+stage that enables a broader information flow.
+
+DenseNet becomes slow (it is less of a problem during inference, since no additional memory is needed during inference for storing some intermediate results), we have not
+trained even more highly connected models, but highly suspect that this would increase accuracy even further. The total model size slightly increases, since every second half of
+a split block has slightly more inputs compared to those of
+a double-sized normal block. In conclusion, our technique
+of increasing number of connections is highly effective and
+size-efficient for a BinaryDenseNet.
+
+5. Main Results
+In this section, we report our main experimental results
+on image classification and object detection using BinaryDenseNet. We further report the computation cost in comparison with other quantization methods. Our implementation is based on the BMXNet framework first presented by
+Yang et al. [29]. Our models are trained from scratch using
+a standard training strategy. Due to space limitations, more
+details of the experiment can be found in the supplementary
+materials.
+Image Classification. To evaluate the classification accuracy, we report our results on ImageNet [4]. Table 7 shows
+the comparison result of our BinaryDenseNet to state-ofthe-art BNNs with different sizes. For this comparison, we
+chose growth and reduction rates for BinaryDenseNet models to match the model size and complexity of the corresponding binary ResNet architectures as closely as possible.
+Our results show that BinaryDenseNet surpass all the existing 1-bit CNNs with noticeable margin. Particularly, BinaryDenseNet28 with 60.7% top-1 accuracy, is better than
+our binary ResNetE18, and achieves up to 18.6% and 7.6%
+
+Binary SSD
+Full-precision
+SSD512/faster rcnn/yolo
+∗
+
+Ours†
+37/45
+
+TBN∗
+ResNet34
+
+XNOR-Net∗
+ResNet34
+
+66.4/68.2
+
+59.5
+
+55.1
+
+76.8/73.2/66.4
+
+SSD300 result read from [28], † SSD512 result
+75
+70
+top-1 ImageNet accuracy in %
+
+Model
+size
+
+Table 8: Object detection performance (in mAP) of our BinaryDenseNet37/45 and other BNNs on VOC2007 test set.
+
+65
+60
+55
+50
+45
+
+BinaryResNetE18 (ours)
+XNOR-Net
+Bi-Real Net
+HORQ
+BinaryDenseNet{28, 37, 45} (ours)
+ResNet18 (FP)
+ABC-Net {1/1, 5/5}
+DoReFa (W:1,A:4)
+SYQ (W:1,A:8)
+TBN
+
+40
+0.00 0.25 0.50 0.75 1.00 1.25 1.50 1.75 2.00
+1e9
+number of operations
+
+Figure 5: The trade-off of top-1 validation accuracy on ImageNet and number of operations. All the binary/quantized
+models are based on ResNet18 except BinaryDenseNet.
+relative improvement over the well-known XNOR-Network
+and the current state-of-the-art Bi-Real Net, even though
+they use a more complex training strategy and additional
+techniques, e.g., custom gradients and a scaling variant.
+Preliminary Result on Object Detection. We adopted the
+off-the-shelf toolbox Gluon-CV [9] for the object detection
+experiment. We change the base model of the adopted SSD
+architecture [20] to BinaryDenseNet and train our models on the combination of PASCAL VOC2007 trainval and
+VOC2012 trainval, and test on VOC2007 test set [5]. Table 8 illustrates the results of binary SSD as well as some
+FP detection models [20, 25, 24].
+Efficiency Analysis. For this analysis, we adopted the
+same calculation method as [22]. Figure 5 shows that our
+binary ResNetE18 demonstrates higher accuracy with the
+same computational complexity compared to other BNNs,
+and BinaryDenseNet28/37/45 achieve significant accuracy
+improvement with only small additional computation overhead. For a more challenging comparison we include models with 1-bit weight and multi-bits activations: DoReFaNet (w:1, a:4) [31] and SYQ (w:1, a:8) [6], and a model
+with multiple weight and multiple activation bases: ABCNet {5/5}. Overall, our BinaryDenseNet models show
+superior performance while measuring both accuracy and
+computational efficiency.
+In closing, although the task is still arduous, we hope the
+ideas and results of this paper will provide new potential
+directions for the future development of BNNs.
+
+References
+[1] Y. Bengio, N. Léonard, and A. C. Courville. Estimating or
+propagating gradients through stochastic neurons for conditional computation. CoRR, abs/1308.3432, 2013. 3
+[2] J. Bethge, H. Yang, C. Bartz, and C. Meinel. Learning to
+train a binary neural network. CoRR, abs/1809.10463, 2018.
+5
+[3] M. Courbariaux, Y. Bengio, and J.-P. David. Binaryconnect:
+Training deep neural networks with binary weights during
+propagations. In Advances in neural information processing
+systems, pages 3123–3131, 2015. 2
+[4] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. FeiFei. Imagenet: A large-scale hierarchical image database. In
+IEEE Conference on Computer Vision and Pattern Recognition, pages 248–255. Ieee, 2009. 2, 8
+[5] M. Everingham, L. Gool, C. K. Williams, J. Winn, and
+A. Zisserman. The pascal visual object classes (voc) challenge. Int. J. Comput. Vision, 88(2):303–338, June 2010. 8
+[6] J. Faraone, N. Fraser, M. Blott, and P. H. Leong. Syq:
+Learning symmetric quantization for efficient deep neural
+networks. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, 2018. 2, 8
+[7] R. Girshick, J. Donahue, T. Darrell, and J. Malik. Rich feature hierarchies for accurate object detection and semantic
+segmentation. In Proceedings of the IEEE conference on
+computer vision and pattern recognition, 2014. 1
+[8] S. Han, H. Mao, and W. J. Dally. Deep compression: Compressing deep neural networks with pruning, trained quantization and huffman coding. In International Conference on
+Learning Representations (ICLR), 2016. 5
+[9] T. He, Z. Zhang, H. Zhang, Z. Zhang, J. Xie, and M. Li. Bag
+of tricks for image classification with convolutional neural
+networks. arXiv preprint arXiv:1812.01187, 2018. 8
+[10] A. G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang,
+T. Weyand, M. Andreetto, and H. Adam. Mobilenets: Efficient convolutional neural networks for mobile vision applications. arXiv preprint arXiv:1704.04861, 2017. 1, 2
+[11] G. Huang, Z. Liu, K. Q. Weinberger, and L. van der Maaten.
+Densely connected convolutional networks. In Proceedings of the IEEE conference on computer vision and pattern
+recognition, volume 1, page 3, 2017. 6
+[12] I. Hubara, M. Courbariaux, D. Soudry, R. El-Yaniv, and
+Y. Bengio. Binarized neural networks. In Advances in neural
+information processing systems, 2016. 1, 2, 3, 5
+[13] F. N. Iandola, S. Han, M. W. Moskewicz, K. Ashraf, W. J.
+Dally, and K. Keutzer. Squeezenet: Alexnet-level accuracy
+with 50x fewer parameters and 0.5 mb model size. arXiv
+preprint arXiv:1602.07360, 2016. 1, 2
+[14] S. Ioffe and C. Szegedy. Batch normalization: Accelerating
+deep network training by reducing internal covariate shift. In
+International conference on machine learning, pages 448–
+456, 2015. 4
+[15] M. Jaderberg, A. Vedaldi, and A. Zisserman. Deep features
+for text spotting. In Computer Vision – ECCV 2014, pages
+512–528, Cham, 2014. Springer International Publishing. 1
+[16] D. P. Kingma and J. Ba. Adam: A method for stochastic
+optimization. In ICLR, 2015. 4
+
+[17] A. Krizhevsky, V. Nair, and G. Hinton. Cifar-10. URL
+http://www. cs. toronto. edu/kriz/cifar. html, 2010. 1, 4
+[18] Z. Li, B. Ni, W. Zhang, X. Yang, and W. Gao. Performance guaranteed network acceleration via high-order residual quantization. In Proceedings of the IEEE International
+Conference on Computer Vision, 2017. 2, 3, 5
+[19] X. Lin, C. Zhao, and W. Pan. Towards accurate binary convolutional neural network. In Advances in Neural Information
+Processing Systems, pages 344–352, 2017. 1, 2, 3, 5
+[20] W. Liu, D. Anguelov, D. Erhan, C. Szegedy, S. E. Reed,
+C. Fu, and A. C. Berg. SSD: single shot multibox detector.
+In ECCV, pages 21–37, 2016. 8
+[21] Z. Liu, W. Luo, B. Wu, X. Yang, W. Liu, and K. Cheng.
+Bi-real net: Binarizing deep network towards real-network
+performance. CoRR, abs/1811.01335, 2018. 3
+[22] Z. Liu, B. Wu, W. Luo, X. Yang, W. Liu, and K.-T. Cheng.
+Bi-real net: Enhancing the performance of 1-bit cnns with
+improved representational capability and advanced training
+algorithm. In ECCV, September 2018. 1, 2, 3, 4, 5, 6, 8
+[23] M. Rastegari, V. Ordonez, J. Redmon, and A. Farhadi. Xnornet: Imagenet classification using binary convolutional neural networks. In European Conference on Computer Vision,
+pages 525–542. Springer, 2016. 1, 2, 3, 4, 5, 8
+[24] J. Redmon, S. K. Divvala, R. B. Girshick, and A. Farhadi.
+You only look once: Unified, real-time object detection.
+In 2016 IEEE Conference on Computer Vision and Pattern
+Recognition, CVPR 2016, Las Vegas, NV, USA, June 27-30,
+2016, pages 779–788, 2016. 8
+[25] S. Ren, K. He, R. Girshick, and J. Sun. Faster r-cnn: Towards real-time object detection with region proposal networks. In Advances in Neural Information Processing Systems 28, pages 91–99, 2015. 8
+[26] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed,
+D. Anguelov, D. Erhan, V. Vanhoucke, A. Rabinovich, and
+Others. Going deeper with convolutions. Cvpr, 2015. 5
+[27] W. Tang, G. Hua, and L. Wang. How to Train a Compact
+Binary Neural Network with High Accuracy. AAAI, 2017. 3
+[28] D. Wan, F. Shen, L. Liu, F. Zhu, J. Qin, L. Shao, and
+H. Tao Shen. Tbn: Convolutional neural network with
+ternary inputs and binary weights. In ECCV, September
+2018. 2, 3, 5, 8
+[29] H. Yang, M. Fritzsche, C. Bartz, and C. Meinel. Bmxnet:
+An open-source binary neural network implementation based
+on mxnet. In Proceedings of the 2017 ACM on Multimedia
+Conference, pages 1209–1212. ACM, 2017. 8
+[30] X. Zhang, X. Zhou, M. Lin, and J. Sun. Shufflenet: An
+extremely efficient convolutional neural network for mobile
+devices. In The IEEE Conference on Computer Vision and
+Pattern Recognition (CVPR), June 2018. 1, 2
+[31] S. Zhou, Y. Wu, Z. Ni, X. Zhou, H. Wen, and Y. Zou.
+Dorefa-net: Training low bitwidth convolutional neural
+networks with low bitwidth gradients. arXiv preprint
+arXiv:1606.06160, 2016. 1, 2, 3, 5, 8
+[32] Y. Zhou, S.-M. Moosavi-Dezfooli, N.-M. Cheung, and
+P. Frossard. Adaptive Quantization for Deep Neural Network. 2017. 3
+[33] C. Zhu, S. Han, H. Mao, and W. J. Dally. Trained ternary
+quantization. arXiv preprint arXiv:1612.01064, 2016. 2, 3
+
+

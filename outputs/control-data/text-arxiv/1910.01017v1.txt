@@ -1,0 +1,763 @@
+arXiv:1910.01017v1 [physics.comp-ph] 2 Oct 2019
+
+Modernizing Titan2D, a Parallel AMR
+Geophysical Flow Code to Support Multiple
+Rheologies and Extendability?
+Nikolay A. Simakov1[0000−0001−6131−5979] , Renette L.
+Jones-Ivey
+, Ali Akhavan-Safaei2[0000−0002−0812−1881] ,
+2[0000−0003−2398−9301]
+Hossein Aghakhani
+, Matthew D.
+Jones1[0000−0001−7293−226X] , and Abani K. Patra1,2[0000−0002−3571−5212]
+1,2[0000−0002−0907−7624]
+
+1
+
+2
+
+Center for Computational Research, University at Buffalo, Buffalo,NY
+Computational and Data-Enabled Sciences and Engineering, University at Buffalo,
+Buffalo, NY
+abani@buffalo.edu
+
+Abstract. In this work, we report on strategies and results of our initial
+approach for modernization of Titan2D code. Titan2D is a geophysical
+mass flow simulation code designed for modeling of volcanic flows, debris
+avalanches and landslides over a realistic terrain model. It solves an underlying hyperbolic system of partial differential equations using parallel
+adaptive mesh Godunov scheme. The following work was done during
+code refactoring and modernization. To facilitate user input two level
+python interface was developed. Such design permits large changes in
+C++ and Python low-level while maintaining stable high-level interface
+exposed to the end user. Multiple diverged forks implementing different
+material models were merged back together. Data storage layout was
+changed from a linked list of structures to a structure of arrays representation for better memory access and in preparation for further work on
+better utilization of vectorized instruction. Existing MPI parallelization
+was augmented with OpenMP parallelization. The performance of a hash
+table used to store mesh elements and nodes references was improved by
+switching from a linked list for overflow entries to dynamic arrays allowing the implementation of the binary search algorithm. The introduction
+of the new data layout made possible to reduce the number of hash table
+look-ups by replacing them with direct use of indexes from the storage
+class. The modifications lead to 8-9 times performance improvement for
+serial execution.
+Keywords: Code refactoring · Python API · Geophysical Mass Flows.
+
+1
+
+Introduction
+
+Titan2D is a tool developed for simulation of granular flows over digital elevation models of natural terrain including volcanic flows, landslides, debris and
+?
+
+We gratefully acknowledge the support of NSF awards OAC 1339765
+
+2
+
+N.A. Simakov et al.
+
+snow avalanches [9, 11, 13]. It is widely used by researchers and civil protection
+authorities for risk assessment and mitigation scenarios for these hazards.
+The Titan2D code built on an earlier AMR infrastructure developed for fluid
+dynamics simulations using adaptive hp finite elements [7]. While this allowed
+rapid and reliable development, it also baked in design decisions in data structures and coding that were sub-optimal. Secondly, the wide adoption of the code
+based on its ability to use sophisticated computing methodologies like AMR
+and its application to many different physical contexts led to many versions and
+forks.
+Many choices in the software design are motivated by how the computational
+problem is mapped to available hardware, therefore it is not surprising that many
+legacy applications do not operate optimally on modern systems. In the case of
+Titan2D many currently sub-optimal designs decisions were largely motivated
+by a file system input/output bottleneck caused by the inability to hold the
+whole topography in the available system memory. Since the I/O performance
+limitation disguised other inefficiencies, many design decisions favored ease of
+development or debugging. For example, a hash values lookup table (hash function based on space filling curve (SFC) ordering of cells) was used for accessing
+neighboring elements every time paying extra penalty for a search. However, it
+simplified the development as there is no need to track memory location of neighboring elements for each element and the performance penalty was way below
+that caused by poor filesystem performance. Nowadays most of the topological
+maps can fit into main memory and the element search penalty significantly
+degrades the overall performance.
+Titan2D is open source and distributed through GitHub as source code and
+binaries. Code consists of over 50 thousand lines (generated using David A.
+Wheeler’s SLOCCount) and is primarily written in C++, with new interface
+in Python and GUI written in Java. Titan2D is also available through an online resource for collaboration in volcanology research and risk mitigation called
+Vhub (vhub.org). It is a turnkey solution for running Titan2d. Since 2011 there
+were 650 unique users from 8 different counties (about 100 active users each
+year) executing more than 5 thousand simulation runs. Because GitHub does
+not provide enough statistic on utilization (it tracks cloning and visits for only
+two weeks), we cannot estimate the number of users who obtained code through
+GitHub and running it on their system. In our HPC center, all jobs executed
+Titan2D consume more than 2 million CPU hours (257 CPU years) since 2015
+(tracking with XDMoD). Thus, performance and usability improvement benefit
+not only the developers’ team and close affiliates but also other users as well.
+In this work we report on our initial approach to modernize Titan2D. We
+replace the fixed format input with a Python interface, redesigned the data
+structure layout to benefit vectorized instructions, combined multiple forks under
+the same codebase, reduced hash table use with direct index use and introduced
+hybrid OpenMP/MPI parallelization. In the next section we briefly describe the
+Titan2D governing equation and numerical methods it uses to solve them. In
+the following sections we described our modifications in more detail.
+
+Modernizing Titan2D
+
+3
+
+Fig. 1. Simulation of block and ash flows that have occurred at the Colima volcano,
+Mexico, during the 1991 year eruptive episode. A. Overlay of three snapshots from
+the simulation visualized with Google Earth. B. Illustration of adaptive grid used for
+same simulation, the snapshot corresponds to the middle region from A, visualized
+with ParaView.
+
+2
+
+Titan2D and Benchmark Problem
+
+Titan2D is based upon a depth-averaged model for an incompressible continuum, a shallow-water granular flow. We will briefly review the functionality here;
+details of the modeling and numerical methodology may be found in the literature [9,11]. The conservation equations for mass and momentum are solved with
+different rheologies modeling the interactions between the grains of the media
+and between the granular material and the basal surface. The resulting hyperbolic system of equations is solved using an MPI parallel, adaptive mesh (see
+Fig. 1.B for adaptive grid illustration), Godunov scheme. Titan2D also takes as
+input the topography maps in the form of Digital Elevation Models (DEM) and
+(where available) local information on basal resistance to the flow. Source codes,
+examples and Linux binaries are available at the Titan2D GitHub repository
+(https://github.com/TITAN2D).
+Benchmark Problem. To measure the overall performance impact from our
+modifications, block and ash flow simulations on the Colima volcano, Mexico,
+(see Fig. 1) were done for the legacy and modernized versions. The simulations
+were done with Coulomb material model, first order method with AMR. The
+calculation was done for 10000 iterations totalling 2 minutes total flow time.
+The average number of elements was 141 thousand. This simulation corresponds
+to one from the Titan2D examples with increased space accuracy (number of
+cells across smallest pile axis increased from 16 to 32). This problem is of lower
+middle size. Number of users have done much larger computations while larger
+portion of users perform calculations on similar or smaller sizes. Thus, for the
+purpose of analysis this problem size exercises the code well. The legacy code
+was executed in MPI mode while modernized in OpenMP mode. Calculations
+were done on two systems: 1) desktop (Intel Core i7-9800X Skylake-X CPU,
+8 cores, 3.80 GHz; 64 GB of RAM (4xDDR4-2800); 1TB SATA SSD) and 2)
+
+4
+
+N.A. Simakov et al.
+
+academic compute cluster at the Center for Computational Research, University
+at Buffalo, SUNY (Intel Xeon Gold 6130, Skylake-X CPU,2x16 cores, 2.10GHz;
+192GB of RAM; Isilon file-system).
+
+3
+3.1
+
+Refactoring Strategies
+Adopting a Python Interface
+
+Legacy Titan2D has a fixed input file format, where each line specifies a particular parameter. Such an input system is easy to implement, however it has many
+drawbacks and lacks flexibility and is hard to extend to new models and options.
+Unused parameters still should be specified even when unused making software
+hard to maintain. Nevertheless, ease of implementation made this choice popular
+in older software especially given harder to find and steeper learning curves to
+other C/C++ implemented alternatives. In our modernization effort the fixed
+input format was replaced with a Python interface.
+A Python interface to C++ applications provides many benefits. It is highly
+flexible and allows the implementation of multiple methods and models under
+the same codebase as well as a number of ways to extend the application. Its
+programmability allows the creation of higher-level simulations schemes like parameter search and better integration with a Graphical User Interface (GUI). It
+also has a number of ways to interface with programs and libraries written in C,
+C++ and Fortran. Due to these benefits Python is used in many scientific applications and chosen for modernization or to serve as ”glue” for multiple legacy
+applications [5,6,8]. All this makes Python very popular and many modelers are
+familiar with it. It also has a large ecosystem of scientific libraries and applications. Thus, the implementation of the Titan2D Python interface would allow
+closer integration with that ecosystem and reuse of already developed software.
+There are a number of ways for creating a Python API for C++ application.
+We choose to go with the Simplified Wrapper and Interface Generator (SWIG)
+since it provides automatic mapping of C++ classes and functions to Python.
+Such a mapping results in a Python API which closely follows C++ API. Due
+to the anticipation that the C++ API would change drastically during modernization, we chose two level design for Python interface: the low-level Python
+interface is automatically generated by SWIG and high-level is built on top of it
+and is exposed to the end user. This allows us to stabilize the user exposed highlevel interface earlier while giving us the freedom of unrestricted modifications
+of underlying C++ and low-level Python interface.
+Python programming language combined with C++ allows us to use the
+strengths of both languages. Python has significantly less boilerplate allowing
+fast prototyping and development while C++ can achieve high performance.
+Thus, using Python in performance non-critical places would lead to faster development. This way we also significantly improve user interaction by implementing
+extensive user input validation in the high-level Python layer.
+
+Modernizing Titan2D
+
+3.2
+
+5
+
+Merging Multiple Forks
+
+The rigidity of the fixed input format resulted in multiple Titan2D forks which
+differ in physical model or numeric method. Pressed by deadlines or the desire to
+test promising new models led some researchers to replace parts of code with a
+new implementation instead of extending the original code. This lead to multiple
+forks which largely differ only in few places where the new model replaced the
+original one. Because forks were branched at different times the forked version
+also differs in some core Titan2D classes and functions which were changed after
+the fork. Maintaining multiple forks implementing different methods in multiple
+places is a labor-intensive task even using modern tools with sophisticated branch
+merging routines. Another drawback of multiple forks is that improvements to
+core functionality in one fork do not automatically transfer to other forks. The
+Python interface provides the flexibility to keep multiple models under the same
+code base. In new Titan2D, the model and its parameter are specified by user
+using high-level Python interface and the parameters are propagated down to
+the C++ level. Because of forking at different times, code replacement for new
+models and lack of multi-model support in the original code an automatic merge
+was not possible. Consequently, the merging was done manually with heavy
+utilization of Integrated Developer Environment (IDE) code analysis tools and
+stand-alone difference visualization and merging tools.
+The first merged fork was one implementing two-phase Pitman-Le material model [10] with the original single phase model. Due to the need to describe two separate phases this fork has significant differences with original Titan2D and the following strategy was used. First two branches were merged
+together into a single source code base and functionally similar parts were
+placed next to each within a conditional compilation if-else macro. That is, if the
+COULOMB TWO PHASE macro was defined the resulting code produced two
+phase Pitman-Le material model and the original single phase Coulomb model
+otherwise. Such single code base allows to see clearly all changes associated with
+merging fork and identify the best strategy to support both models without recompilation. To aid merging the visual differences and merge tool called Meld [4]
+was used. Next, the parameters needed for new models were identified and new
+model selection and parameters specification were implemented in Python with
+their propagation to the C++ level. Finally, the conditional compilation if-else
+macro was replaced either with conditions or separate functions depending on the
+amount and type of differences. Two other forks implementing Voellmy-Salm [2]
+and Pouliquen-Forterre [3,12] rheologies had very small and isolated changes and
+did not required as extensive work as the previously described merge. Briefly, the
+Python interface was extended to enable setting new parameters and propagate
+them to C++; next, several functions was converted from Fortran to C++, renamed and copied to master Titan2D. The converted Fortran function performed
+a computation for a single cell; thus it did not provide benefits of Fortran compiler optimization and converting to C++ inline function also allows to eliminate
+functional call and add space for further optimization.
+
+6
+
+N.A. Simakov et al.
+
+The lesson learned: do not allow forks to diverge significantly; think about
+extensibility of the software and use modern tools for version control.
+3.3
+
+Changing Data Layout to for Modern CPU Architectures
+
+Modern CPUs benefit greatly from vector instructions which require use of primitive data type arrays (e.g. arrays of integers or doubles) with stride of one for
+best results. Therefore, for performance reasons, Structure of Arrays (SoA) concept is more preferable than arrays of structure [1] which was often used due
+to better fit of object oriented design. The original Titan2d stores elements and
+nodes data in allocated on demand objects, the pointers to which are stored in
+hash tables with a linked list for overflow entries (Fig. 2.A). This storage method
+closely resembles a linked list of structures and does not allow efficient use of
+vector instructions. Therefore, the first step was to redesign the data layout to a
+structure of arrays. Although it looks like an enormous amount of work requiring rewriting most of the code, taking advantage of C++ object-oriented design,
+data encapsulation strategy, modern refactoring tools, and regular expression
+substitution allows us to do it in a relatively short period of time.
+The new data layout utilizes a structure of arrays approach. The hash table
+class was augmented with elements storage capability where the element’s properties are stored as separate arrays and values with same array index belonging
+to the same element (Fig. 2.B). To do a seamless transition, the original element
+class which stores the element properties values are transformed to an element
+properties accessor class which is a wrapper around new elements storage class
+and only stores the element index from the elements storage class. The element
+properties accessor class retains the same API as the original element properties
+class, allowing the existing functions to use new accessor class instead of old
+element class without any modifications as long as they do not access elements
+data directly but through getters and setters methods. Unfortunately, as is the
+case with many older transitional C to C++ codes even though getters and
+setters are present, they are not consistently utilized throughout the code. In
+addition, some of getters and setters operate on pointers. Therefore, prior to a
+transition to SoA, preparatory work needed to be done to ensure complete data
+encapsulation and work of getters and setters on proper data reference type.
+The overall process of changing the data layout was as follow: 1) reinforce
+proper data encapsulation throughout the code, 2) create new elements storage class with necessary data manipulation infrastructure and old element class
+members transfer to new storage class, and 3) update the hot functions to use
+new storage class directly instead of the element accessor class.
+Data encapsulation reinforcement. For each member of element and node
+class we ensure first that the proper data access interface is used. For example,
+accessor to class member double state vars[NUM OF STATE VARS] was double* get state vars() which essentially is almost the same as to use data directly
+and throughout the code it is used for both setting and getting. It was replaced
+with double state vars(const int idim) const and void state vars(const int idim,
+
+Modernizing Titan2D
+
+7
+
+const double value). Next the direct class members access was replaced with respective getters and setters methods. Manual refactoring for a large code is a
+tedious task. Fortunately the refactoring and code analyzing capabilities of modern IDEs significantly simplify interface transformation. NetBeans and Eclipse
+were used in this work. Unfortunately, these IDEs do not allow automatic conversion from direct members access to access through getters and setters. To aid
+this task the following strategy was used for each member of element and node
+classes: first using the IDEs refactoring tools the class member was renamed
+to a code-wide unique name to prevent accidental substitution during the next
+step, then the regular expression substitution was used to replace class member
+accesses with the proper getter or setter method. The IDEs regular expression
+substitution tool allows guided substitution throughout the whole code reducing
+changes for unintended substitution. The regression tests were run regularly to
+ensure that refactoring behaved as expected. Overall the described process is a
+labor intensive task, however it is tractable with proper tools and strategy.
+Elements content storage class. One of the key features of Titan2D is adaptive mesh refinement. This poses additional challenges on the elements properties storage class, due to the need to insert new elements as well as delete old
+elements. The linked structures on x86 architecture often have the best performance for this type of operation however their performance suffers during access
+to a small selection of their content due to a pseudo random access pattern.
+A structure of arrays approach offer better performance in the latter case but
+has worse performance for element insertion and deletion. With proper care this
+performance impact can be drastically reduced.
+In the legacy implementation the elements are exclusively referred by their
+space filling curve (SFC) value. Without getting into detail the SFC function
+maps 2D coordinates to a single value and with adequate care for numeric accuracy such a mapping is unique. The elements are found through the hash table
+which uses truncated SFC values as the hash value. When iteration through all
+elements is needed it is done by iterating though all hash table entries. Thus, for
+elements insertion and removal one only needs to maintain the hash table and it
+is possible to use element appending in the elements properties storage class and
+delayed deletion. Elements are inserted only during the mesh refinement step
+and removed only during the coarsening step. For sequential storage of elements
+properties a new container class template, tivector, was created, it is similar to
+standard C++ std::vector class in that it pre-allocates internal arrays for larger
+number of entries (capacity) than requested (size) and reallocation happens only
+if new size exceeds the capacity. When a new element is created its properties
+are appended to corresponding tivectors and its mapping of SFC value to index
+is added to the hash table. This way the performance for new element insertion is comparable with a linked list implementation. For the element deletion it
+needs only be removed from hash table, the actual deletion from storage arrays
+can happen later in bulk. With the exception of mesh refinement and coarsening steps, the elements properties are stored ordered according to the elements
+SFC value. This is done in order to improve memory locality using the local-
+
+8
+
+N.A. Simakov et al.
+
+A. Legacy
+
+Hash Table
+
+Find state_var[0] for
+Element with SFC key
+
+Element[3]
+
+Buckets: HashEntryPointer[0]
+
+Get bucket #
+with hash(key)
+
+NULL
+
+Find Element
+for key
+
+HashEntryPointer[2]
+
+key: SFC_key
+value: ElementPointer
+If keys don’t next: HashEntryPointer
+match check previous: HashEntryPointer
+
+HashEntryPointer[3]
+
+Element[5]
+
+If keys match
+get Element
+
+key: SFC_key
+state_var: double[Nvars]
+…
+
+Value
+Found
+
+get_state_var(i)
+…
+B. Modernized
+Find state_var[0] for
+Element with SFC key
+
+next
+
+HashEntry[1]
+
+HashTable:
+Buckets: HashLineEntry[0]
+
+Mixed Binary
+Tree/Linear Search
+
+Find index
+for key
+
+HashLineEntry[1]
+
+Elements Content Storage:
+index
+0 1 2 3
+
+HashLineEntry[2]
+keys
+
+HashLineEntry[2]
+
+index
+
+HashLineEntry[3]
+
+Get state_var[0]
+at index
+
+4
+
+5
+
+6
+
+…
+
+keys
+state_var[0]
+Value
+Found
+
+state_var[1]
+…
+Elements
+
+Both have same
+hash value
+
+key: SFC_key
+value: ElementPointer
+next: HashEntryPointer
+previous: HashEntryPointer
+
+Element Storage With Hash Table
+
+Get bucket #
+with hash(key)
+
+Content of
+Element[1]
+
+HashEntry[0]
+
+Element for
+legacy interfaces
+
+It stores only
+index in storage
+
+Element[5]
+index
+get_state_var(i)
+…
+
+Fig. 2. Diagram showing search for state var value of element with key SFC value.
+Another common operation is to cycle other all elements: in legacy version it was
+accomplished by looping through all linked hash entries for each hash bucket, in modernized version it is done by going through array of required data.
+
+ity property of SFC. Points with similar SFC values are located close to each
+other in 2D space. The SFC values are also used for load balancing during MPI
+runs. Actual element data deletion and reordering of new elements occurs only
+after both mesh refinement and coarsening steps are complete. Keeping track of
+new and removed elements allows us to use it during sorting step and reduce
+computational cost.
+The migration to new element storage class was completed by removing all
+members from the old element class, adding the index of the element within the
+storage class and by changing the getters and setters to use the respective values
+from the storage class. The class member access method was implemented as an
+
+Modernizing Titan2D
+
+9
+
+inline method allowing most modern compilers to replace the function call with
+direct class member access. The performance improvement due to changing the
+layout was 12.9%.
+Updating the hot functions. The time-consuming functions were identified
+using Intel VTune profiler. In these functions the access to elements content were
+replaced with direct access to respective variables from the element content storage class. In most cases due to the unstructured grid the conditions for successful
+automatic vectorization were not met and thus we did not get significant performance improvement from this particular step. However, in the element storage
+class there is no strict requirements on the order of stored elements (the ordering
+by space filling curve values is done mainly for region distribution between MPI
+processes) and therefore in the future we may be able to reorder the elements to
+favor vectorized instructions.
+3.4
+
+Efficient Indexing for Elements/Nodes Addressing
+
+As mentioned in the previous section, in the legacy implementation the elements
+are referenced by their SFC values and located through a hash table by their
+SFC value. The frequent hash table use for lookup presents a significant performance impact even for moderately sized simulations due to high amount of hash
+values collision (i.e. multiple entries have the same hash value). In the legacy Titan2D these collisions are resolved by a linear search through an overflow linked
+list of entries. Titan2D modernization replaces the overflow linked list entries
+with usage of standard C++ vectors for hash table buckets. This allows us to
+implement binary search with linear search at last level. This improvement gives
+us about 50% improvement in performance for large problems.
+We also realized after the implementation of new elements properties storage
+class that we can use indexes from the storage class instead of SFC values and
+thus avoid the use of hash table in many cases. First, we implemented index
+search prior to getting into the PDE solving routines and later we implemented
+proper index handling during mesh refinement and coarsening.
+3.5
+
+Introducing OpenMP and Hybrid OpenMP/MPI Parallelization
+
+Single core performance improvements have declined in recent years, resulting
+in an increasing number of core per node. It is common nowadays for HPC
+compute nodes to have half a hundred cores and many performance desktops
+have eight or more cores. Such high core counts and shared memory space make
+a multithreaded parallelization approach very attractive. Implementing parallel
+algorithms with OpenMP is relatively simple, although it can be challenging
+to achieve best possible performance. Therefore, we decided to go with hybrid
+OpenMP/MPI parallelization scheme and at first pay more attention to performance of pure OpenMP on a single node while ensuring that MPI parallelization
+is still working. Previously described modifications are mainly concerning single
+core performance and by adding OpenMP we following the strategy to maximize
+
+N.A. Simakov et al.
+
+Run Time, Minutes
+
+A 256
+
+x1.0
+
+8-core Desktop
+
+B 256 32-core UB-HPC Compute Node
+x1.0
+Titan2D Version
+
+x1.8
+
+128
+
+x3.4
+
+64
+
+x5.5
+
+32 x1.0(x9.0)
+x1.6(x8.1)
+
+16
+
+x2.6(x6.8)
+x3.6(x5.8)
+
+8
+4
+
+Run Time, Minutes
+
+10
+
+x1.9
+
+128
+
+Legacy
+Modernized
+
+x3.6
+
+64
+
+x6.2
+
+32 x1.0(x7.9)
+x1.3(x5.3)
+
+x10.4
+x14.1
+x2.0(x4.4)
+x3.1(x3.9)
+x4.2(x3.2)
+x4.7(x2.6)
+
+16
+8
+4
+
+1
+
+2
+
+4
+
+Number of Cores
+
+8
+
+1
+
+2
+
+4
+
+8
+
+16
+
+Number of Cores
+
+32
+
+Fig. 3. Comparison of Titan2D performance as measure by execution time of Colima volcano benchmark between legacy and modernized version executed on A 8-core
+desktop and B 32-core compute node from UBHPC cluster. The number for each
+point shows the parallel scaling and the number in brackets shows speed-up from the
+legacy version executed on same number of cores. Note the log2 − log2 scales. For this
+benchmark, both Titan2D versions are limited to a single node.
+
+single node performance prior moving to multi node runs. OpenMP parallelization was done for the most time-consuming parts of Titan2D. Such parts were
+identified with Intel Vtune profiler. At our initial approach we largely add pragmas to implement parallel for loops (leaving room for future improvement with
+more restructuring to take advantage of larger parallel regions, etc.). Due to
+the large increase in performance of a single process the inefficiencies of MPI
+implementation become a limiting factor for performance growth in MPI runs
+to a degree that two MPI processes takes longer time to execute than a serial
+run. It is not uncommon that improvements in one part of the program reveal
+inefficiencies on other part as now they become a larger limiting factor.
+
+4
+
+Performance Improvement Evaluation
+
+The overall effect of the modifications is shown in Fig. 3. Single core performance
+is improved by 8 to 9 times, reducing calculation time from hours to tens of
+minutes. OpenMP parallel run shows a very modest parallel scaling on a single
+socket: the parallel speed-up is 3.6 on 8 cores, which is smaller than speed-up
+of 5.5 demonstrated by legacy Titan2D (Fig. 3.A). On a dual socket system the
+OpenMP parallel speed-up starts to level-off on largest core count (Fig. 3.C).
+Interestingly, the speed-up on 2 cores is smaller for dual socket system, which is
+most likely due to lack of NUMA awareness and no CPU affinity reinforcement.
+The not so ideal parallel performance of the modernized version is mainly
+due to a less than optimal implementation with OpenMP. To date we have
+mainly concentrated on fork merge and data layout transformation. Still the
+performance of modernized version on a single core of 8-core desktop is 64%
+higher than the performance of the legacy version on all 8 desktop cores and for
+
+Modernizing Titan2D
+
+11
+
+Table 1. Comparison of performance metrics obtained with Intel VTune profiler. Executed on eight cores, no. of elements and iterations were reduced for more tractable
+profiling.
+
+Metric
+Legacy Modernized
+Elapsed time, s
+371.7
+69.2
+Instructions retired
+4.28x1012 1.41x1012
+Cycles per instruction rate (CPI)
+2.84
+1.50
+DRAM bound, % of clockticks
+60
+20
+Double precision GFLOPS
+1.01
+1.93
+MPI busy wait time
+0.8s(0.2%)
+OMP parallel region, % of walltime
+63.0%
+
+Table 2. Comparison of hotspots obtained with Intel VTune profiler. Number of elements and interation was reduced for more tractable profiling.
+
+Legacy
+CPU time, s Modernized
+CPU time, s
+HashTable::lookup
+838.37 OMP barriers
+187.88
+MPI data moving
+366.95 Integration step
+34.08
+Integration step
+149.44 Slope calculation
+30.38
+Slope calculation
+137.25 Edge states calculation
+29.88
+Statistics calculation
+133.55 Z-direction flux calculation
+15.49
+Total CPU Time
+2963.3 Total Time
+517.1
+
+the dual socket system 4 cores can perform better than the legacy code on the
+whole node (13% faster).
+The performance metrics, as well as hot spots obtained with Intel VTune profiler, is shown in Table 1 and 2. As can be seen, the modernized version uses two
+times less instruction in part due to reducing hash table look-ups and improving
+its algorithm. The new version also has two times better cycles per instruction
+rate (CPI), that is it do twice more instruction per cycle and almost twice higher
+GFLOPS. In both cases, the floating point operation was not packed. The new
+version also reduces its memory bound. The current version still has high time
+for OpenMP barriers and on 63% parallel region. Therefore there is still space
+to improve OpenMP parallelization further.
+
+5
+
+Conclusions and Future Plans
+
+Large amounts of work were done to bring Titan2D up-to-date. Introduction of
+a Python interface allows easier implementation of different material methods as
+well as numeric methods under the same source code. Merging several Titan2D
+forks together allows end users to use the same code for different models and
+discover which one suits their need. Redesign of the data layout provides bet-
+
+12
+
+N.A. Simakov et al.
+
+ter memory access and prepares the code foundation for future improvements.
+The current, modernized Titan2D, still largely does not use vectorized instructions, which is a non-trivial task for unstructured grids. We envision that proper
+ordering of elements within the storage class should allow us to implement a
+scheme which would benefit from vectorization. Still, modernized code already
+has significant performance improvement over the legacy version.
+
+References
+1. Soax: A generic c++ structure of arrays for handling particles in hpc
+codes. Computer Physics Communications 224, 325–332 (mar 2018).
+https://doi.org/10.1016/J.CPC.2017.11.015
+2. Christen, M., Kowalski, J., Bartelt, P.: Ramms: Numerical simulation of dense
+snow avalanches in three-dimensional terrain. Cold Regions Science and Technology
+63(1-2), 1–14 (aug 2010). https://doi.org/10.1016/J.COLDREGIONS.2010.04.005
+3. Forterre,
+Y.,
+Pouliquen,
+O.:
+Flows
+of
+dense
+granular
+media.
+Annual
+Review
+of
+Fluid
+Mechanics
+40(1),
+1–24
+(jan
+2008).
+https://doi.org/10.1146/annurev.fluid.40.111406.102142
+4. Kai Willadsen: Meld: a Visual Diff and Merge Tool, http://meldmerge.org/
+5. Krischer, L., Megies, T., Barsch, R., Beyreuther, M., Lecocq, T., Caudron,
+C., Wassermann, J.: ObsPy: a bridge for seismology into the scientific Python
+ecosystem. Computational Science & Discovery 8(1), 014003 (may 2015).
+https://doi.org/10.1088/1749-4699/8/1/014003
+6. Ladwig, W.: wrf-python (version 1.2. 0). Boulder, Colorado (2017).
+https://doi.org/10.5065/D6W094P1
+7. Laszloffy, A., Long, J., Patra, A.K.: Simple data management, scheduling and
+solution strategies for managing the irregularities in parallel adaptive hp finite element simulations. Parallel Comput. 26(13-14), 1765–1788 (Dec 2000).
+https://doi.org/10.1016/S0167-8191(00)00054-5
+8. Marais, N.: Driving and Extending Legacy Codes using Python.
+IEEE Antennas and Propagation Magazine 49(1), 140–148 (feb 2007).
+https://doi.org/10.1109/MAP.2007.371002
+9. Patra, A., Bauer, A., Nichita, C., Pitman, E., Sheridan, M., Bursik, M.,
+Rupp, B., Webber, A., Stinton, A., Namikawa, L., Renschler, C.: Parallel
+adaptive numerical simulation of dry avalanches over natural terrain. Journal of Volcanology and Geothermal Research 139(1-2), 1–21 (jan 2005).
+https://doi.org/10.1016/J.JVOLGEORES.2004.06.014
+10. Pitman, E.B., Le, L.: A two-fluid model for avalanche and debris flows. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering
+Sciences 363(1832), 1573–1601 (jul 2005). https://doi.org/10.1098/rsta.2005.1596
+11. Pitman, E.B., Nichita, C.C., Patra, A., Bauer, A., Sheridan, M., Bursik, M.: Computing granular avalanches and landslides. Physics of Fluids 15(12), 3638–3646
+(dec 2003). https://doi.org/10.1063/1.1614253
+12. Pouliquen, O., Forterre, Y.: Friction law for dense granular flows: application to
+the motion of a mass down a rough inclined plane. Journal of Fluid Mechanics
+453, 133–151 (feb 2002). https://doi.org/10.1017/S0022112001006796
+13. Takeuchi, Y., Nishimura, K., Patra, A.: Observations and numerical simulations of
+the braking effect of forests on large-scale avalanches. Annals of Glaciology pp. 1–9
+(2018). https://doi.org/https://doi.org/10.1017/aog.2018.22
+
+

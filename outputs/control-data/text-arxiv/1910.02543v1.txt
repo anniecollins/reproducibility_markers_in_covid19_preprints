@@ -1,0 +1,1009 @@
+I MPROVING O NE - SHOT NAS
+P OSTERIOR FADING
+
+BY
+
+S UPPRESSING
+
+THE
+
+Xiang Li∗ 1 , Chen Lin∗2 , Chuming Li2 , Ming Sun2 , Wei Wu2 , Junjie Yan2 , and Wanli Ouyang3
+1
+
+Brown University
+Sensetime Group Limited
+3
+The University of Sydney
+xiang li 1@brown.edu; wanli.ouyang@sydney.edu.au;
+{linchen,lichuming,sunming1,wuwei,yanjunjie}@sensetime.com
+
+arXiv:1910.02543v1 [cs.CV] 6 Oct 2019
+
+2
+
+A BSTRACT
+There is a growing interest in automated neural architecture search (NAS). To improve the efficiency of NAS, previous approaches adopt weight sharing method
+to force all models share the same set of weights. However, it has been observed
+that a model performing better with shared weights does not necessarily perform
+better when trained alone. In this paper, we analyse existing weight sharing oneshot NAS approaches from a Bayesian point of view and identify the posterior
+fading problem, which compromises the effectiveness of shared weights. To alleviate this problem, we present a practical approach to guide the parameter posterior towards its true distribution. Moreover, a hard latency constraint is introduced during the search so that the desired latency can be achieved. The resulted
+method, namely Posterior Convergent NAS (PC-NAS), achieves state-of-the-art
+performance under standard GPU latency constraint on ImageNet. In our small
+search space, our model PC-NAS-S attains 76.8% top-1 accuracy, 2.1% higher
+than MobileNetV2 (1.4x) with the same latency. When adopted to the large search
+space, PC-NAS-L achieves 78.1% top-1 accuracy within 11ms. The discovered
+architecture also transfers well to other computer vision applications such as object detection and person re-identification.
+
+1
+
+I NTRODUCTION
+
+Neural network design requires extensive experiments by human experts. In recent years, neural
+architecture search (Zoph & Le, 2016; Liu et al., 2018a; Zhong et al., 2018; Li et al., 2019; Lin
+et al., 2019) has emerged as a promising tool to alleviate the cost of human efforts on manually
+balancing accuracy and resources constraint.
+Early works of NAS (Real et al., 2018; Elsken et al., 2017) achieve promising results but have
+to resort to search only using proxy or subsampled dataset due to its large computation expense.
+Recently, the attention is drawn to improve the search efficiency via sharing weights across models
+(Bender et al., 2018; Pham et al., 2018). Generally, weight sharing approaches utilize an overparameterized network (supergraph) containing every single model, which can be mainly divided
+into two categories.
+The first category is continuous relaxation method (Liu et al., 2018c; Cai et al., 2018), which keeps a
+set of so called architecture parameters to represent the model, and updates these parameters alternatively with supergraph weights. The resulted model is obtained using the architecture parameters at
+convergence. The continuous relaxation method entails the rich-get-richer problem (Adam & Lorraine, 2019), which means that a better-performed model at the early stage would be trained more
+frequently (or have larger learning rates). This introduces bias and instability to the search process.
+∗
+
+Equal Contribution
+
+1
+
+Another category is referred to as one-shot method (Brock et al., 2017b; Guo et al., 2019; Bender
+et al., 2018; Chu et al., 2019), which divides the NAS proceedure into a training stage and a searching
+stage. In the training stage, the supergraph is optimized along with either dropping out each operator
+with certain probability or sampling uniformly among candidate architectures. In the search stage, a
+search algorithm is applied to find the architecture with the highest validation accuracy with shared
+weights. The one-shot approach ensures the fairness among all models by sampling architecture
+or dropping out operator uniformly. However, as identified in (Adam & Lorraine, 2019; Chu et al.,
+2019; Bender et al., 2018), the validation accuracy of the model with shared weights is not predictive
+to its true performance.
+In this paper, we formulate NAS as a Bayesian model selection problem (Chipman et al., 2001).
+With this formulation, we can obtain a comprehensive understanding of one-shot approaches. We
+show that shared weights are actually a maximum likelihood estimation of a proxy distribution to
+the true parameter distribution. Further, we identify the common issue of weight sharing, which we
+call Posterior Fading, i.e., the KL-divergence between true parameter posterior and proxy posterior
+also increases with the number of models contained in the supergraph.
+To alleviate the aforementioned problem, we proposed a practical approach to guide the convergence
+of the proxy distribution towards the true parameter posterior. Specifically, our approach divides the
+training of supergraph into several intervals. We maintain a pool of high potential partial models and
+progressively update this pool after each interval . At each training step, a partial model is sampled
+from the pool and complemented to a full model. To update the partial model pool, we generate
+candidates by extending each partial model and evaluate their potentials, the top ones among which
+form the new pool size. Since the search space is shrinked in the upcoming training interval, the
+parameter posterior get close to the desired true posterior during this procedure. Main contributions
+of our work is concluded as follows:
+• We analyse the one-shot approaches from a Bayesian point of view and identify the associated disadvantage which we call Posterior Fading.
+• Inspired by the theoretical discovery, we introduce a novel NAS algorithm which guide the
+proxy distribution to converge towards the true parameter posterior.
+We apply our proposed approach to ImageNet classification (Russakovsky et al., 2015) and achieve
+strong empirical results. In one typical search space (Cai et al., 2018), our PC-NAS-S attains 76.8%
+top-1 accuracy, 0.5% higher and 20% faster than EfficientNet-B0 (Tan & Le, 2019a), which is the
+previous state-of-the-art model in mobile setting. To show the strength of our method, we apply our
+algorithm to a larger search space, our PC-NAS-L boosts the accuracy to 78.1%.
+
+2
+
+R ELATED WORK
+
+Increasing interests are drawn to automating the design of neural network with machine learning
+techniques such as reinforcement learning or neuro-evolution, which is usually referred to as neural
+architecture search(NAS) (Miller et al., 1989; Liu et al., 2018b; Real et al., 2017; Zoph & Le, 2016;
+Baker et al., 2017a; Wang et al., 2019; Liu et al., 2018c; Cai et al., 2018). This type of NAS is
+typically considered as an agent-based explore and exploit process, where an agent (e.g. an evolution
+mechanism or a recurrent neural network(RNN)) is introduced to explore a given architecture space
+with training a network in the inner loop to get an evaluation for guiding exploration. Such methods
+are computationally expensive and hard to be used on large-scale datasets, e.g. ImageNet.
+Recent works (Pham et al., 2018; Brock et al., 2017a; Liu et al., 2018c; Cai et al., 2018) try to alleviate this computation cost via modeling NAS as a single training process of an over-parameterized
+network that comprises all candidate models, in which weights of the same operators in different
+models are shared. ENAS (Pham et al., 2018) reduces the computation cost by orders of magnitude, while requires an RNN agent and focuses on small-scale datasets (e.g. CIFAR10). One-shot
+NAS (Brock et al., 2017b) trains the over-parameterized network along with droping out each operator with increasing probability. Then it use the pre-trained over-parameterized network to evaluate
+randomly sampled architectures. DARTS (Liu et al., 2018c) additionally introduces a real-valued
+architecture parameter for each operator and alternately train operator weights and architecture parameters by back-propagation. ProxylessNAS (Cai et al., 2018) binarize the real-value parameters
+in DARTS to save the GPU cumputation and memory for training the over-parameterized network.
+2
+
+The paradigm of ProxylessNAS (Cai et al., 2018) and DARTS (Liu et al., 2018c) introduce unavoidable bias since operators of models performing well in the beginning will easily get trained more
+and normally keep being better than other. But they are not necessarily superior than others when
+trained from scratch.
+Other relevant works are ASAP (Noy et al., 2019) and XNAS (Nayman et al., 2019), which introduce pruning during the training of over-parameterized networks to improve the efficiency of NAS.
+Similarly, we start with an over-parameterized network and then reduce the search space to derive
+the optimized architecture. The distinction is that they focus on the speed-up of training and only
+prune by evaluating the architecture parameters, while we improves the rankings of models and
+evaluate operators direct on validation set by the performance of models containing it.
+
+3
+
+M ETHODS
+
+In this section, we first formulate neural architecture search in a Bayesian manner. Utilizing this
+setup, we introduce our PC-NAS approach and analyse its advantage against previous approach.
+Finally, we discuss the search algorithm combined with latency constraint.
+3.1
+
+A P ROBABILISTIC S ETUP FOR M ODEL U NCERTAINTY
+
+Suppose K models M = {m1 , ..., mK } are under consideration for data D, and p(D|θk , mk )
+describes the probability density of data D given model mk and its associated parameters θk . The
+Bayesian approach proceeds by assigning a prior probability distribution p(θk |mk ) to the parameters
+of each model, and a prior probability p(mk ) to each model.
+In order to ensure fairness among all models, we set the model prior p(mk ) a uniform distribution.
+Under previous setting, we can drive
+p(D|mk )p(mk )
+p(mk |D) = P
+,
+k p(D|mk )p(mk )
+where
+
+(1)
+
+Z
+p(D|mk ) =
+
+p(D|θk , mk )p(θk |mk )dθk .
+
+(2)
+
+Since p(mk ) is uniform, the Maximum Likelihood Estimation (MLE) of mk is just the maximum
+of (2). It can be inferred that, p(θk |mk ) is crucial to the solution of the model selection. We
+are interested in attaining the model with highest test accuracy in a trained alone manner, thus the
+parameter prior p(θk |mk ) is just the posterior palone (θk |mk , D) which means the distribution of θk
+when mk is trained alone on dataset D. Thus we would use the term true parameter posterior to
+refer palone (θk |mk , D).
+3.2
+
+N ETWORK A RCHITECTURE S ELECTION I N A BAYESIAN P OINT OF V IEW
+
+We constrain our discussion on the setting which is frequently used in NAS literature. As a building
+block of our search space, a mixed operator (mixop), denoted by O = {O1 . . . , ON }, contains N
+different choices of candidate operators Oi for i = 1, . . . N in parallel. The search space is defined
+by L mixed operators (layers) connected sequentially interleaved by downsampling as in Fig. 1(a).
+The network architecture (model) m is defined by a vector [o1 , o2 , ..., oL ], ol ∈ O representing the
+choice of operator for layer l. The parameter for the operator o at the l-th layer is denoted as θlo .
+The parameters of the supergraph are denoted by θ which includes {θlo |l ∈ {1, 2, ..., L}, o ∈ O}.
+In this setting, the parameters of each candidate operator are shared among multiple architectures.
+The parameters related with a specific model mk is denoted as θmk = θ1,o1 , θ2,o2 , ..., θL,oL , which
+is a subset of the parameters of the supergraph θ, the rest of the parameters are denoted as θ̄mk , i.e.
+θmk ∩ θ̄mk = ∅, θmk ∪ θ̄mk = θ. The posterior of all parameters θ given mk has the property
+palone (θmk |mk , D) = palone (θmk |mk , D)palone (θ̄k |mk , D). Implied by the fact that θ̄mk does not
+affect the prediction of mk and also not updated during training, palone (θ̄mk |mk , D) is uniformly
+distributed, . Obtaining the palone (θk |mk , D) or a MLE of it for each single model is computationally
+intractable. Therefore, the one-shot method trains the supergraph by dropping out each operator
+(Brock et al., 2017b) or sampling different architectures (Bender et al., 2018; Chu et al., 2019)
+3
+
+Figure 1: One example of search space(a) and PC-NAS process(b)(c)(d). Each mixed opperator
+consists of N (=3 in this figure) operators. However, only one operator in each mixop is invoked at
+a time for each batch. In (b), partial models 1 and 2 in the pool consist of choices in mixop 1 and
+2. We extend these 2 partial models to one mixop 3. 6 extended candidate models are evaluated and
+ranked in(c). In (d), the new pool consists of the top-2 candidate models ranked in (c).
+
+and utilize the shared weights to evaluate single model. In this work, we adopt the latter training
+paradigm while the former one could be easily generalized. Suppose we sample a model mk and
+optimize the supergraph with a mini-batch of data based on the objective function Lalone :
+− log palone (θ|mk , D) ∝ Lalone (θ, mk , D) = − log palone (D|θ, mk ) − log p(θ|mk ),
+
+(3)
+
+where − log p(θ|mk ) is a regularization term. Thus minimizing this objective equals to making
+MLE to palone (θ|mk , D). When training the supergraph, we sample many models mk , and then train
+the parameters for these models, which corresponds to a stochastic approximation of the following
+objective function:
+1 X
+Lshare (θ, D) =
+Lalone (θ, mk , D).
+(4)
+K
+k
+
+This is equivalent to adopting a proxy parameter posterior as follows:
+1 Y
+palone (θ|mk , D),
+Z
+
+(5)
+
+X
+
+(6)
+
+pshare (θ|D) =
+
+k
+
+− log pshare (θ|D) = −
+
+log palone (θ|mk , D) + log Z.
+
+k
+
+Maximizing pshare (θ|D) is equivalent to minimizing Lshare .
+We take one step further to assume that the parameters at each layer are independent, i.e.
+Y
+palone (θ|mk , D) =
+palone (θl,o |mk , D).
+
+(7)
+
+l,o
+
+Due to the independence, we have
+YY
+Y
+pshare (θ|D) =
+palone (θl,o |mk , D) =
+pshare (θl,o |D),
+k
+
+l,o
+
+(8)
+
+l,o
+
+where
+pshare (θl,o |D) =
+
+Y
+k
+
+4
+
+palone (θl,o |mk , D).
+
+(9)
+
+The KL-divergence between palone (θl,o |mk , D) and pshare (θl,oj |D) is as follows:
+ Z
+
+palone (θl,o |mk , D)
+DKL palone (θl,o |mk , D) pshare (θl,o |D) = palone (θl,o |mk , D) log
+dθ
+pshare (θl,o |D)
+Z
+palone (θl,o |mk , D)
+= palone (θl,o |mk , D) log Q
+dθ
+i palone (θl,o |mi , D)
+X Z
+=
+− palone (θl,o |mk , D) log palone (θl,o |mi , D)dθ.
+i6=k
+
+(10)
+Since the KL-divergence is just the summation of the cross-entropy of palone (θl,o |mk , D) and
+palone (θl,o |mi , D) where i 6= k. The cross-entropy term is always positive. Increasing the number of architectures would push pshare away from palone , namely the Posterior Fading. We conclude
+that non-predictive problem originates naturally from one-shot supergraph training. Based on this
+analysis, if we effectively reduce the number of architectures in Eq.(10), the divergence would decrease, which motivates our design in the next section.
+Algorithm 1 Potential: Evaluating the Potential of Partial Candidates
+Inputs: G(supergraph), L(num of mixops in G), m0 (partial candidate), Lat(latency constraint),
+S(evaluation number), Dval (validataion set)
+Scores = ∅
+for i = 1 : S do
+m∗ = expand(m0 ) randomly expand m0 to full depth L
+if Latency(m∗ ) > Lat then
+continue dump samples that don’t satisfy the latency constraint
+end if
+acc = Acc(m∗ , Dval ) inference m∗ for one batch and return its accuracy
+Scores.append(acc) save accuracy
+end for
+Outputs: Average(Scores)
+
+3.3
+
+P OSTERIOR C ONVERGENT NAS
+
+One trivial way to mitigate the posterior fading problem is limit the number of candidate models
+inside the supergraph. However, large number of candidate models is demanded for NAS to discover
+promising models. Due to this conflict, we present PC-NAS which adopt progressive search space
+shrinking. The resulted algorithm divide the training of shared weights into L intervals, where L
+is the number of mixed operators in the search space. The number of training epochs of a single
+interval is denoted as Ti .
+Partial model pool is a collection of partial models. At the l-th interval, a single partial model
+should contain l − 1 selected operators [o1 , o2 , ..., ol ]. The size of partial model pool is denoted as
+P . After the l-th interval, each partial model in the pool will be extended by the N operators in l-th
+mixop. Thus there are P × N candidate extended partial models with length l. These candidate
+partial models are evaluated and the top-P among which are used as the partial model pool for the
+interval l + 1. An illustrative exmaple of partial model pool update is in Fig. 1(b)(c)(d).
+Candidate evaluation with latency constraint: We simply define the potential of a partial model
+to be the expected validation accuracy of the models which contain the partial model.
+Potential(o1 , o2 , ..., ol ) = Em∈{m|mi =oi ,∀i≤l} (Acc(m)).
+
+(11)
+
+where the validation accuracy of model m is denoted by Acc(m). We estimate this value by uniformly sampling valid models and computing the average of their validation accuracy using one
+mini-batch. We use S to denote the evaluation number, which is the total number of sampled models. We observe that when S is large enough, the potential of a partial model is fairly stable and
+discriminative among candidates. See Algorithm. 1 for pseudo code. The latency constraint is imposed by dumping invalid full models when calculating potentials of extended candidates of partial
+models in the pool.
+5
+
+Training based on partial model pool The training iteration of the supergraph along with the partial
+model pool has two steps. First, for a partial model from the pool, we randomly sample the missing
+operator {ol+1 , ol+2 , ..., oL } to complement the partial model to a full model. Then we optimize
+θ using the sampled full model and mini-batch data. We Initially, the partial model pool is empty.
+Thus the supergraph is trained by uniformly sampled models, which is identical to previous one-shot
+training stage. After the initial training, all operators in the first mixop are evaluated. The top P
+operators forms the partial model pool in the second training stage. Then, the supergraph resume
+training and the training procedure is identical to the one discussed in last paragraph. Inspired by
+warm-up, the first stage is set much more epochs than following stages denoted as Tw . The whole
+PC-NAS process is elaborated in algorithm. 2 The number of models in the shrinked search space
+at the interval l is strictly less than interval l − 1. At the final interval, the number of cross-entropy
+terms in Eq.(10) are P-1 for each architectures in final pool. Thus the parameter posterior of PC-NAS
+would move towards the true posterior during these intervals.
+Algorithm 2 PC-NAS: Posterior Convergent Architecture Search
+Inputs: P (size of partial model pool), G(supergraph), Oi (the ith operator in mixed operator),
+L(num of mixed operators in G), Tw (warm-up epochs), Ti (interval between updation of partial
+model pool), Dtrain (train set), Dval (validataion set), Lat(latency constraint)
+PartialModels = ∅
+Warm-up(G, Dtrain , Tw ) uniformly sample models from G and train
+for I = 0:(L · Ti −1) do
+if I mod Ti == 0 then
+ExtendedPartialModels = ∅
+if PartialModels == ∅ then
+ExtendedPartialModels.append([Oi ]) add all operator in the first mixop
+end if
+for m in PartialModels do
+ExtendedPartialModels.append(Extend(m,O1 ), ..., Extend(m,ON ))
+end for
+for m0 in ExtendedPartialModels do
+m0 .potential = Potential(m0 , Dval , Lat, S) evaluate the extended partial model
+end for
+PartialModels = Top(ExtendedPartialModels, P ) keep P best partial models
+end if
+Train(PartialModels, Dtrain ) train one epoch using partial models
+end for
+Outputs: PartialModels
+
+4
+
+E XPERIMENTS R ESULTS
+
+We demonstrate the effectiveness of our methods on ImageNet, a large scale benchmark dataset,
+which contains 1,000,000 training samples with 1000 classes. For this task, we focus on models that
+have high accuracy under certain GPU latency constraint. We search models using PC-NAS, which
+progressively updates a partial model pool and trains shared weights. Then, we select the model
+with the highest potential in the pool and report its performance on the test set after training from
+scratch. Finally, we investigate the transferability of the model learned on ImageNet by evaluating
+it on two tasks, object detection and person re-identification.
+4.1
+
+T RAINING D ETAILS
+
+Dataset and latency measurement: As a common practice, we randomly sample 50,000 images
+from the train set to form a validation set during the model search. We conduct our PC-NAS on the
+remaining images in train set. The original validation set is used as test set to report the performance
+of the model generated by our method. The latency is evaluated on Nvidia GTX 1080Ti and the
+batch size is set 16 to fully utilize GPU resources.
+6
+
+Search spaces: We use two search spaces. We benchmark our small space similar to ProxylessNAS
+(Cai et al., 2018) and FBNet (Wu et al., 2018) for fair comparison. To test our PC-NAS method in a
+more complicated search space, we add 3 more kinds of operators to the small space’s mixoperators
+to construct our large space. Details of the two spaces are in A.1.
+PC-NAS hyperparameters: We use PC-NAS to search in both small and large space. To balance
+training time and performance, we set evaluation number S = 900 and partial model pool size
+P = 5 in both experiments. Ablation study of the two values is in 4.4. When updating weights of
+the supergraph, we adopt mini-batch nesterov SGD optimizer with momentum 0.9, cosine learning
+rate decay from 0.1 to 5e-4 and batch size 512, and L2 regularization with weight 1e-4. The warmup epochs Tw and shrinking interval Ti are set 100 and 5, thus the total training of supergraph lasts
+100 + 20 × 5 = 200 epochs. After searching, we select the best one from the top 5 final partial
+models and train it from scratch. The hyperparameters used to train this best model are the same as
+that of supergraph and the training takes 300 epochs. We add squeeze-and-excitation layer to this
+model at the end of each operator and use mixup during the training of resulted model.
+4.2
+
+I MAGE N ET R ESULTS
+
+Table 1: PC-NAS’ Imagenet results compared with state-of-the-art methods in the mobile setting.
+model
+MobileNetV2 1.4x (Sandler et al., 2018)
+AmoebaNet-A(Real et al., 2018)
+PNASNet (Liu et al., 2018a)
+MnasNet(Tan et al., 2018)
+FBNet-C(Wu et al., 2018)
+ProxylessNAS-gpu(Cai et al., 2018)
+EfficientNet-B0(Tan & Le, 2019a)
+MixNet-S(Tan & Le, 2019b)
+PC-NAS-S
+PC-NAS-L
+
+space
+5.6x1014
+1021
+721
+1021
+2021
+
+params
+6.9M
+5.1M
+5.1M
+4.4M
+5.5M
+7.1M
+5.3M
+4.1M
+5.1M
+15.3M
+
+latency(gpu)
+10ms
+23ms
+25ms
+11ms
+8ms
+13 ms
+13 ms
+10 ms
+11 ms
+
+top-1 acc
+74.7%
+74.5%
+74.2%
+74.8%
+74.9%
+75.1%
+76.3%
+75.8%
+76.8%
+78.1%
+
+Table 1 shows the performance of our model on ImageNet. We set our target latency at 10ms
+according to our measurement of mobile setting models on GPU. Our search result in the small
+space, namely PC-NAS-S, achieves 76.8% top-1 accuracy under our latency constraint, which is
+0.5% higher than EffcientNet-B0 (in terms of absolute accuracy improvement), 1% higher than
+MixNet-S. If we slightly relax the time constraint, our search result from the large space, namly
+PC-NAS-L, achieves 78.1% top-1 accuracy, which improves top-1 accuracy by 1.8% compared
+to EfficientNet-B0, 2.3% compared to MixNet-S. Both PC-NAS-S and PC-NAS-L are faster than
+EffcientNet-b0 and MixNet-S.
+Table 2: Performance Comparison on COCO and Market-1501
+backbone
+MobileNetV2
+ResNet50
+ResNet101
+PC-NAS-L
+
+4.3
+
+params
+3.5M
+25.5M
+44.4M
+15.3M
+
+latency
+7ms
+15ms
+26ms
+11ms
+
+COCO mAP
+31.7
+36.8
+39.4
+38.5
+
+Market-1501 mAP
+76.8
+80.9
+82.1
+81.0
+
+T RANSFERABILITY OF PC-NAS
+
+We validate our PC-NAS’s transferability on two tasks, object detection and person re-identification.
+We use COCO (Lin et al., 2014) dataset as benchmark for object detection and Market-1501 (Zheng
+et al., 2015) for person re-identification. For the two dataset, PC-NAS-L pretrained on ImageNet is
+utilized as feature extractor, and is compared with other models under the same training script. For
+7
+
+0.76
+0.755
+0.75
+5
+
+Tw=150
+Tw=100
+
+4
+
+3
+
+2
+
+1
+
+5
+
+6
+
+7
+
+8
+
+9
+
+One-shot accuracy
+
+Accuracy of PC-NAS
+
+One-shot
+
+Pool size P Evaluation number S x100
+
+(a)
+
+PC-NAS
+
+0.616
+
+0.282
+
+0.614
+
+0.28
+
+0.612
+
+0.278
+
+0.61
+
+0.276
+
+0.608
+
+0.274
+
+0.606
+
+0.272
+0.27
+
+0.604
+0.75
+
+0.755
+
+0.76
+
+0.765 0.75
+
+0.755
+
+Stand alone accuracy
+
+0.76
+
+PC-NAS accuracy
+
+Model rankings comparison
+
+Impact of hyperparameters
+
+0.765
+
+(b)
+
+Figure 2: (a): Influence of warm-up epochs Tw , partial model pool size P , and evaluation number S
+to the resulted model. (b): Comparison of model rankings for One-Shot (left) and PC-NAS (right).
+
+object detection, the experiment is conducted with the two-stage framework FPN (Lin et al., 2017).
+Table 2 shows the performance of our PC-NAS model on COCO and Market-1501. For COCO,
+our approach significantly surpasses the mAP of MobileNetV2 as well as ResNet50. Compare to
+the standard ResNet101 backbone, our model achieves comparable mAP quality with almost 1/3
+parameters and 2.3× faster speed. Similar phenomena are found on Market-1501.
+
+4.4
+
+A BLATION S TUDY
+
+Impact of hyperparameters: In this section, we further study the impact of hyperparameters on
+our method within our small space on ImageNet. The hyperparameters include warm-up, training
+epochs Tw, partial model pool size P , and evaluation number S. We tried setting Tw as 100 and
+150 with fixed P = 5 and S = 900. The resulted models of these two settings show no significant
+difference in top-1 accuracy (less than 0.1%), shown as in Fig. 2a. Thus we choose warm-up training
+epochs as 100 in our experiment to save computation resources. For the influence of P and S,
+we show the results in Fig. 2a. It can be seen that the top-1 accuracy of the models found by
+PC-NAS increases with both P and S. Thus we choose P = 5, S = 900 in the experiments for
+better performance. we did not observe significant improvement when further increasing these two
+hyperparameters.
+Effectiveness of shrinking search space: To assess the role of space shrinking, we trains the supergraph of our large space using One-Shot(Brock et al., 2017b) method without any shrinking of the
+search space. Then we conduct model search on this supergraph by progressively updating a partial
+model pool in our method. The resulted model using this setting attains 77.1% top-1 accuracy on
+ImageNet, which is 1% lower than our PC-NAS-L as in Table.3.
+We add another comparison as follows. First, we select a batch of models from the candidates of our
+final pool under small space and evaluate their stand alone top-1 accuracy. Then we use One-Shot to
+train the supergraph also under small space without shrinking. Finally, we shows the model rankings
+of PC-NAS and One-Shot using the accuracy obtained from inferring the models in the supergraphs
+trained with the two methods. The difference is shown in Fig. 2b, the pearson correlation coefficients
+between stand-alone accuracy and accuracy in supergraph of One-Shot and PC-NAS are 0.11 and
+0.92, thus models under PC-NAS’s space shrinking can be ranked by their accuracy evaluated on
+sharing weights much more precisely than One-Shot.
+Effectiveness of our search method: To investigate the importance of our search method, we utilize
+Evolution Algorithm (EA) to search for models with the above supergraph of our large space trained
+with One-Shot. The top-1 accuracy of discovered model drops furthur to 75.9% accuracy, which is
+2.2% lower than PC-NAS-L . We implement EA with population size 5, aligned to the value of pool
+size P in our method, and set the mutation operation as randomly replace the operator in one mixop
+operator to another. We constrain the total number of validation images in EA the same as ours. The
+results are shown in Table.3.
+8
+
+Table 3: Comparision with One-Shot and Evolution Algorithm
+training method
+Ours
+One-shot
+One-shot
+
+5
+
+search method
+Ours
+Ours
+EA
+
+top-1 acc
+78.1%
+77.1%
+75.9%
+
+C ONCLUSION
+
+In this paper, a new architecture search approach called PC-NAS is proposed. We study the conventional weight sharing approach from Bayesian point of view and identify a key issue that compromises the effectiveness of shared weights. With the theoretical insight, a practical method is
+devised to mitigate the issue. Experimental results demonstrate the effectiveness of our method,
+which achieves state-of-the-art performance on ImageNet, and transfers well to COCO detection
+and person re-identification too.
+
+R EFERENCES
+Georege Adam and Jonathan Lorraine. Understanding neural architecture search techniques. arXiv
+preprint arXiv:1904.00438, 2019.
+Bowen Baker, Otkrist Gupta, Nikhil Naik, and Ramesh Raskar. Designing neural network architectures using reinforcement learning. International Conference on Learning Representations,
+2017a.
+Gabriel Bender, Pieter-Jan Kindermans, Barret Zoph, Vijay Vasudevan, and Quoc V. Le. Understanding and simplifying one-shot architecture search. ICML, 2018.
+Andrew Brock, Ritchie James M. Lim, Theodore, and Nick Weston. Smash: one-shot model architecture search through hypernetworks. NIPS Workshop on Meta-Learning, 2017a.
+Andrew Brock, J.M. Ritchie, Theodore Lim, and Nick Weston. Smash: One-shot model architecture
+search through hypernetworks. arXiv preprint arXiv:1708.05344, 2017b.
+Han Cai, Ligeng Zhu, and Song Han. Proxylessnas: Direct neural architecture search on target task
+and hardware. arXiv preprint arXiv:1812.00332, 2018.
+Hugh Chipman, Edward I. George, and Robert E. McCulloch. The practical implementation of
+bayesian model selectio. In Institute of Mathematical Statistics Lecture Notes - Monograph Series,
+38, pp. 65–116, 2001.
+XiangXiang Chu, Bo Zhang, Ruijun Xu, and Jixiang Li. Fairnas:rethinking evaluation of weight
+sharing neural architecture search. arXiv preprint arXiv:1907.01845v2, 2019.
+Thomas Elsken, Jan-Hendrik Metzen, and Frank Hutter. Simple and efficient architecture search for
+convolutional neural networks. ICLR workshop, 2017.
+Zichao Guo, Xiangyu Zhang, Haoyuan Mu, Wen Heng, Zechun Liu, Yichen Wei, and Jian
+Sun. Single path one-shot neural architecture search with uniform sampling. arXiv preprint
+arXiv:1904.00420, 2019.
+Chuming Li, Xin Yuan, Chen Lin, Minghao Guo, Wei Wu, Wanli Ouyang, and Junjie Yan. Am-lfs:
+Automl for loss function search. arXiv preprint arXiv:1905.07375, 2019.
+Chen Lin, Minghao Guo, Chuming Li, Xin Yuan, Wei Wu, Dahua Lin, Wanli Ouyang, and
+Junjie Yan. Online hyper-parameter learning for auto-augmentation strategy. arXiv preprint
+arXiv:1905.07373, 2019.
+Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays, Pietro Perona, Deva Ramanan, Piotr
+Dollár, and C Lawrence Zitnick. Microsoft coco: Common objects in context. In European
+conference on computer vision, pp. 740–755. Springer, 2014.
+9
+
+Tsung-Yi Lin, Piotr Dollár, Ross Girshick, Kaiming He, Bharath Hariharan, and Serge Belongie.
+Feature pyramid networks for object detection. In Proceedings of the IEEE conference on computer vision and pattern recognition, pp. 2117–2125, 2017.
+Chenxi Liu, Barret Zoph, Maxim Neumann, Jonathon Shlens, Wei Hua, Li-Jia Li, Fei-Fei Li, Alan
+Yuille, Jonathan Huang, and Kevin Murphy. Progressive neural architecture search. In Proceedings of the European Conference on Computer Vision (ECCV), pp. 19–34, 2018a.
+Hanxiao Liu, Karen Simonyan, Oriol Vinyals, Chrisantha Fernando, and Koray Kavukcuoglu. Hierarchical representations for efficient architecture search. ICLR, 2018b.
+Hanxiao Liu, Karen Simonyan, and Yiming Yang. Darts: Differentiable architecture search. arXiv
+preprint arXiv:1806.09055, 2018c.
+Geoffrey F. Miller, Peter M. Todd, and Shailesh U. Hegde. Designing neural networks using genetic
+algorithms. ICGA, pp. volume 89, pages 379–384, 1989.
+Niv Nayman, Asaf Noy, Tal Ridnik, Itamar Friedman, Rong Jin, and Lihi Zelnik-Manor. Xnas:
+Neural architecture search with expert advice. arXiv preprint arXiv:1906.08031, 2019.
+Asaf Noy, Niv Nayman, Tal Ridnik, Nadav Zamir, Sivan Doveh, Itamar Friedman, Raja Giryes,
+and Lihi Zelnik-Manor. Asap: Architecture search, anneal and prune. arXiv preprint
+arXiv:1904.04123, 2019.
+Hieu Pham, Melody Y. Guan, Barret Zoph, Quoc V. Le, and Jeff Dean. Efficient neural architecture
+search via parameter sharing. arXiv preprint arXiv:1802.03268, 2018.
+Esteban Real, Sherry Moore, Andrew Selle, Saurabh Saxena, Yutaka Leon Suematsu, Jie Tan,
+Quoc V. Le, and Alexey Kurakin. Large-scale evolution of image classifiers. In Proceedings
+of the 34th International Conference on Machine Learning-Volume 70, pp. 2902–2911. JMLR.
+org, 2017.
+Esteban Real, Alok Aggarwal, Yanping Huang, and Quoc V. Le. Regularized evolution for image
+classifier architecture search. arXiv preprint arXiv:1802.01548, 2018.
+Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma, Zhiheng
+Huang, Andrej Karpathy, Aditya Khosla, Michael Bernstein, Alexander C. Berg, and Fei-Fei
+Li. Imagenet large scale visual recognition challenge. International Journal of Computer Vision,
+pp. 115(3):211–252, 2015.
+Mark Sandler, Andrew Howard, Menglong Zhu, Andrey Zhmoginov, and Liang-Chieh Chen. Mobilenetv2: Inverted residuals and linear bottlenecks. In Proceedings of the IEEE Conference on
+Computer Vision and Pattern Recognition, pp. 4510–4520, 2018.
+Mingxing Tan and Quoc V. Le. Efficientnet: Rethinking model scaling for convolutional neural
+networks. arXiv preprint arXiv:1905.11946, 2019a.
+Mingxing Tan and Quoc V. Le. Mixnet: Mixed depthwise convolutional kernels. BMVC, 2019b.
+Mingxing Tan, Bo Chen, Ruoming Pang, Vijay Vasudevan, and Quoc V. Le. Mnasnet: Platformaware neural architecture search for mobile. arXiv preprint arXiv:1807.11626, 2018.
+Linnan Wang, Yiyang Zhao, Yuu Jinnai, Yuandong Tian, and Rodrigo Fonseca. Alphax: exploring neural architectures with deep neural networks and monte carlo tree search. arXiv preprint
+arXiv:1903.11059, 2019.
+Bichen Wu, Xiaoliang Dai, Peizhao Zhang, Yanghan Wang, Fei Sun, Yiming Wu, Yuandong Tian,
+Peter Vajda, Yangqing Jia, and Kurt Keutzer. Fbnet: Hardware-aware efficient convnet design via
+differentiable neural architecture search. arXiv preprint arXiv:1812.03443, 2018.
+Liang Zheng, Liyue Shen, Lu Tian, Shengjin Wang, Jingdong Wang, and Qi Tian. Scalable person
+re-identification: A benchmark. In Proceedings of the IEEE international conference on computer
+vision, pp. 1116–1124, 2015.
+10
+
+Zhao Zhong, Junjie Yan, Wei Wu, Jing Shao, and Cheng-Lin Liu. Practical block-wise neural
+network architecture generation. In Proceedings of the IEEE Conference on Computer Vision and
+Pattern Recognition, pp. 2423–2432, 2018.
+Barret Zoph and Quoc V. Le. Neural architecture search with reinforcement learning. arXiv preprint
+arXiv:1611.01578, 2016.
+
+A
+A.1
+
+A PPENDIX
+C ONSTRUCTION OF THE S EARCH S PACE :
+
+The operators in our spaces have structures described by either Conv1x1-ConvNxM-Conv1x1 or
+Conv1x1-ConvNxM-ConvMxN-Conv1x1. We define expand ratio as the ratio between the channel
+numbers of the ConvNxM in the middle and the input of the first Conv1x1.
+Small search space Our small search space contains a set of MBConv operators (mobile inverted
+bottleneck convolution (Sandler et al., 2018)) with different kernel sizes and expand ratios, plus
+Identity, adding up to 10 operators to form a mixoperator. The 10 operators in our small search space
+are listed in the left column of Table 4, where notation OP X Y represents the specific operator OP
+with expand ratio X and kernel size Y.
+Large search space We add 3 more kinds of operators to the mixoperators of our large search
+space, namely NConv, DConv, and RConv. We use these 3 operators with different kernel sizes
+and expand ratios to form 10 operators exclusively for large space, thus the large space contains 20
+operators. For large search space, the structure of NConv, DConv are Conv1x1-ConvKxK-Conv1x1
+and Conv1x1-ConvKxK-ConvKxK-Conv1x1, and that of RConv is Conv1x1-Conv1xK-ConvKx1Conv1x1. The kernel sizes and expand ratios of operators exclusively for large space are lised in the
+right column of Table 4, where notation OP X Y represents the specific operator OP with expand
+ratio X and K=Y.
+There are altogether 21 mixoperators in both small and large search spaces. Thus our small search
+space contains 1021 models, while the large one contains 2021 .
+Table 4: operator table
+Operators in both
+large and small space
+MBConv 1 3
+MBConv
+MBConv 6 3
+MBConv
+MBConv 3 5
+MBConv
+MBConv 1 7
+MBConv
+MBConv 6 7
+Identity
+
+A.2
+
+3
+1
+6
+3
+
+3
+5
+5
+7
+
+Operators exclusively in
+large space
+NConv 1 3
+NConv 2 3
+DConv 1 3
+DConv 2 3
+RConv 1 5
+RConv 2 5
+RConv 4 5
+RConv 1 7
+RConv 2 7
+RConv 4 7
+
+S PECIFICATIONS OF RESULTED MODELS :
+
+The specifications of PC-NAS-S and PC-NAS-L are shown in Fig. 3. We observe that PC-NAS-S
+adopts either high expansion rate or large kernel size at the tail end, which enables a full use of high
+level features. However, it tends to select small kernels and low expansion rates to ensure the model
+remains lightweight. PC-NAS-L chooses lots of powerful bottlenecks exclusively contained in the
+large space to achieve the accuracy boost. The high expansion rate is not quite frequently seen which
+is to compensate the computation utilized by large kernel size. Both PC-NAS-S and PC-NAS-L tend
+to use heavy operator when the resolution reduces, circumventing too much information loss in these
+positions.
+
+11
+
+224×224×3
+
+12
+
+(b) Specification for PC-NAS-L
+
+Figure 3: The architectures of PC-NAS-S and PC-NAS-L.
+7×7×264
+7×7×1024
+
+Pooling FC
+
+Conv1×1
+
+DConv_2_3 SE
+
+7×7×264
+
+RConv_2_7 SE
+
+7×7×264
+
+MBConv_6_5 SE
+
+14×14×136
+
+RConv_1_5 SE
+
+14×14×136
+
+MBConv_6_5 SE
+
+14×14×136
+
+MBConv_1_5 SE
+
+14×14×136
+
+RCov_2_5 SE
+
+14×14×136
+
+DConv_2_3 SE
+
+14×14×136
+
+MBConv_6_7 SE
+
+14×14×136
+
+RConv_1_7 SE
+
+14×14×136
+
+DConv_2_3 SE
+
+28×28×64
+
+RConv_1_5 SE
+
+28×28×64
+
+RConv_1_5 SE
+
+28×28×64
+
+NConv_2_3 SE
+
+28×28×64
+
+NConv_2_3 SE
+
+56×56×32
+
+DConv_1_3 SE
+
+56×56×32
+
+DConv_2_3 SE
+
+56×56×32
+
+RConv_2_7 SE
+
+56×56×32
+
+RConv_2_7 SE
+
+112×112×16
+
+RConv_2_7 SE
+
+112×112×16
+
+Conv3×3
+
+(a) Specification for PC-NAS-S
+
+224×224×3
+
+Pooling FC
+
+7×7×1024
+
+Conv1×1
+
+7×7×264
+
+MBConv_6_3 SE
+
+7×7×264
+
+MBConv_6_7 SE
+
+7×7×264
+
+MBConv_3_7 SE
+
+7×7×264
+
+MBConv_6_3 SE
+
+14×14×136
+
+MBConv_3_5 SE
+
+14×14×136
+
+MBConv_3_5 SE
+
+14×14×136
+
+MBConv_6_3 SE
+
+14×14×136
+
+MBConv_6_3 SE
+
+14×14×136
+
+MBConv3_3 SE
+
+14×14×136
+
+MBConv_1_3 SE
+
+14×14×136
+
+MBConv_3_7 SE
+
+14×14×136
+
+MBCov_6_5 SE
+
+28×28×64
+
+MBConv_1_5 SE
+
+28×28×64
+
+MBConv_3_3 SE
+
+28×28×64
+
+MBConv_3_5 SE
+
+28×28×64
+
+MBConv_6_5 SE
+
+56×56×32
+
+MBConv_1_3 SE
+
+56×56×32
+
+MBConv_3_3 SE
+
+56×56×32
+
+MBConv_6_5 SE
+
+112×112×16
+
+MBConv_3_3 SE
+
+112×112×16
+
+Conv3×3
+
+

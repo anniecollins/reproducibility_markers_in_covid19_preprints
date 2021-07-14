@@ -1,0 +1,1709 @@
+Optimizing Rank-based Metrics with Blackbox Differentiation
+Michal Rolı́nek1∗ , Vı́t Musil2 ∗ , Anselm Paulus1 , Marin Vlastelica1 , Claudio Michaelis3 , Georg Martius1
+
+arXiv:1912.03500v2 [cs.LG] 18 Mar 2020
+
+1
+
+Max-Planck-Institute for Intelligent Systems,
+Tübingen, Germany
+
+2
+
+Università degli Studi di Firenze,
+Italy
+
+3
+
+University of Tübingen,
+Germany
+
+michal.rolinek@tuebingen.mpg.de
+
+Abstract
+Rank-based metrics are some of the most widely used criteria for performance evaluation of computer vision models.
+Despite years of effort, direct optimization for these metrics
+remains a challenge due to their non-differentiable and nondecomposable nature. We present an efficient, theoretically
+sound, and general method for differentiating rank-based
+metrics with mini-batch gradient descent. In addition, we
+address optimization instability and sparsity of the supervision signal that both arise from using rank-based metrics as
+optimization targets. Resulting losses based on recall and
+Average Precision are applied to image retrieval and object
+detection tasks. We obtain performance that is competitive
+with state-of-the-art on standard image retrieval datasets
+and consistently improve performance of near state-of-theart object detectors.
+
+1. Introduction
+Rank-based metrics are frequently used to evaluate performance on a wide variety of computer vision tasks. For
+example, in the case of image retrieval, these metrics are
+∗ These
+
+authors contributed equally.
+
+required since, at test-time, the models produce a ranking
+of images based on their relevance to a query. Rank-based
+metrics are also popular in classification tasks with unbalanced class distributions or multiple classes per image. One
+prominent example is object detection, where an average
+over multiple rank-based metrics is used for final evaluation. The most common metrics are recall [12], Average
+Precision (AP ) [68], Normalized Discounted Cumulative
+Gain (NDCG) [6], and the Spearman Coefficient [9].
+Directly optimizing for the rank-based metrics is inviting
+but also notoriously difficult due to the non-differentiable
+(piecewise constant) and non-decomposable nature of such
+metrics. A trivial solution is to use one of several popular surrogate functions such as 0-1 loss [33], the area under the ROC curve [1] or cross entropy. Many studies
+from the last two decades have addressed direct optimization with approaches ranging from histogram binning approximations [4, 20, 49], finite difference estimation [23],
+loss-augmented inference [40, 68], gradient approximation
+[56] all the way to using a large LSTM to fit the ranking
+operation [10].
+Despite the clear progress in direct optimization [4, 7,
+40], these methods are notably omitted in the most publicly used implementation hubs for object detection [8, 25,
+37, 64], and image retrieval [51]. The reasons include poor
+
+Figure 1: Differentiation of a piecewise constant rank-based loss. A two-dimensional section of the loss landscape is shown
+(left) along with two efficiently differentiable interpolations of increasing strengths (middle and right).
+
+scaling with sequence lengths, lack of publicly available implementations that are efficient on modern hardware, and
+fragility of the optimization itself.
+In a clean formulation, backpropagation through rankbased losses reduces to providing a meaningful gradient of
+the piecewise constant ranking function. This is an interpolation problem, rather than a gradient estimation problem (the true gradient is simply zero almost everywhere).
+Accordingly, the properties of the resulting interpolation
+(whose gradients are returned) should be of central focus,
+rather than the gradient itself.
+In this work, we interpolate the ranking function via
+blackbox backpropagation [60], a framework recently proposed in the context of combinatorial solvers. This framework is the first one to give mathematical guarantees on
+an interpolation scheme. It applies to piecewise constant
+functions that originate from minimizing a discrete objective function. To use this framework, we reduce the ranking
+function to a combinatorial optimization problem. In effect, we inherit two important features of [60]: mathematical guarantees and the ability to compute the gradient only
+with the use of a non-differentiable blackbox implementation of the ranking function. This allows using implementations of ranking functions that are already present in popular machine learning frameworks which results in straightforward implementation and significant practical speed-up.
+Finally, differentiating directly the ranking function gives
+additional flexibility for designing loss functions.
+Having a conceptually pure solution for the differentiation, we can then focus on another key aspect: sound loss
+design. To avoid ad-hoc modifications, we take a deeper
+look at the caveats of direct optimization for rank-based
+metrics. We offer multiple approaches for addressing these
+caveats, most notably we introduce margin-based versions
+of rank-based losses and mathematically derive a recallbased loss function that provides dense supervision.
+Experimental evaluation is carried out on image retrieval
+tasks where we optimize the recall-based loss and on object
+detection where we directly optimize mean Average Precision. On the retrieval experiments, we achieve performance
+that is on-par with state-of-the-art while using a simpler
+setup. On the detection tasks, we show consistent improvement over highly-optimized implementations that use the
+cross-entropy loss, while our loss is used in an out-of-thebox fashion. We release the code used for our experiments1 .
+
+2. Related work
+Optimizing for rank-based metrics As rank-based evaluation metrics are now central to multiple research areas,
+their direct optimization has become of great interest to
+the community. Traditional approaches typically rely on
+1 https://github.com/martius-lab/blackboxbackprop.
+
+different flavors of loss-augmented inference [38–40, 68],
+or gradient approximation [23, 56]. These approaches often require solving a combinatorial problem as a subroutine
+where the nature of the problem is dependent on the particular rank-based metric. Consequently, efficient algorithms
+for these subproblems were proposed [40, 56, 68].
+More recently, differentiable histogram-binning approximations [4, 20, 21, 49] have gained popularity as they offer a
+more flexible framework. Completely different techniques
+including learning a distribution over rankings [58], using
+a policy-gradient update rule [45], learning the sorting operation entirely with a deep LSTM [10] or perceptron-like
+error-driven updates have also been applied [7].
+Metric learning There is a great body of work on metric
+learning for retrieval tasks, where defining a suitable loss
+function plays an essential role. Bellet et al. [2] and Kulis
+et al. [30] provide a broader survey of metric learning techniques and applications. Approaches with local losses range
+from employing pair losses [3, 29], triplet losses [24, 52, 56]
+to quadruplet losses [31]. While the majority of these works
+focus on local, decomposable losses as above, multiple
+lines of work exist for directly optimizing global rank-based
+losses [10, 49, 58]. The importance of good batch sampling
+strategies is also well-known, and is the subject of multiple
+studies [12, 42, 52, 63], while others focus on generating
+novel training examples [41, 56, 70].
+Object detection Modern object detectors use a combination of different losses during training [14, 19, 32, 34,
+47, 48]. While the biggest performance gains have originated from improved architectures [13, 19, 46, 48] and feature extractors [18, 71], some works focused on formulating
+better loss functions [15, 32, 50]. Since its introduction in
+the Pascal VOC object detection challenge [11] mean Average Precision (mAP ) has become the main evaluation
+metric for detection benchmarks. Using the metric as a
+replacement for other less suitable objective functions has
+thus been studied in several works [7, 23, 45, 56].
+
+3. Background
+3.1. Rank-based metrics
+For a positive integer n, we denote by Πn the set of all
+permutations of {1, . . . , n}. The rank of vector y =
+[y1 , . . . , yn ] ∈ Rn , denoted by rk(y), is a permutation
+π ∈ Πn satisfying
+yπ−1 (1) ≥ yπ−1 (2) ≥ · · · ≥ yπ−1 (n) ,
+
+(1)
+
+i.e. sorting y. Note, that rank is not defined uniquely for
+those vectors for which any two components coincide. In
+the formal presentation, we reduce our attention to proper
+rankings in which ties do not occur.
+
+The rank rk of the i-th element is one plus the number
+of members in the sequence exceeding its value, i.e.
+rk(y)i = 1 + |{j : yj > yi }|.
+3.1.1
+
+(2)
+
+Average Precision
+
+For a fixed query, let y ∈ Rn be a vector of relevance scores
+of n examples. We denote by y∗ ∈ {0, 1}n the vector of
+their ground truth labels (relevant/irrelevant) and by
+∗
+
+rel(y ) = {i :
+
+yi∗
+
+= 1}
+
+(3)
+
+the set of indices of the relevant examples. Then Average
+Precision is given by
+AP (y, y∗ ) =
+
+1
+| rel(y∗ )|
+
+X
+
+Prec(i),
+
+(4)
+
+i∈rel(y∗ )
+
+where precision at i is defined as
+Prec(i) =
+
+|{j ∈ rel(y∗ ) : yj ≥ yi }|
+rk(y)i
+
+(5)
+
+and describes the ratio of relevant examples among the i
+highest-scoring examples.
+In classification tasks, the dataset typically consists of
+annotated images. This we formalize as pairs (xi , yi∗ )
+where xi is an input image and yi∗ is a binary class vector,
+where, for every i, each (yi∗ )c ∈ {0, 1} denotes whether
+an image xi belongs to the class c ∈ C. Then, for each
+example xi the model provides a vector of suggested classrelevance scores yi = φ(xi , θ), where θ are the parameters
+of the model.
+To evaluate mean Average Precision (mAP ), we consider for each class c ∈ C the vector of scores y(c) =
+[(yi )c ]i and labels y∗ (c) = [(yi∗ )c ]i . We then take the mean
+of Average Precisions over all the classes
+
+1 X
+mAP =
+AP y(c), y∗ (c) .
+|C|
+
+(6)
+
+c∈C
+
+Note that mAP ∈ [0, 1] and that the highest score 1 corresponds to perfect score prediction in which all relevant
+examples precede all irrelevant examples.
+3.1.2
+
+Recall
+
+Recall is a metric that is often used for information retrieval.
+Let again y ∈ Rn and y∗ ∈ {0, 1}n be the scores and the
+ground-truth labels for a given query over a dataset. For a
+positive integer K, we set
+(
+1 if ∃i ∈ rel(y∗ ) with rk(y)i ≤ K
+∗
+r @K (y, y ) =
+0 otherwise,
+(7)
+
+where rel(y∗ ) is given in Eq. 3.
+In a setup where each element xi of the dataset D is a
+possible query, we define the ground truth matrix as follows.
+We set yi∗ (j) = 1 if xj belongs to the same class as the
+query xi , and zero otherwise. The scores suggested by the
+model are again denoted by yi = [φ(xi , xj , θ) : j ∈ D].
+In order to evaluate the model over the whole dataset D,
+we average r @K over all the queries xi , namely
+R@K =
+
+
+1 X
+r @K yi , yi∗ .
+|D|
+
+(8)
+
+i∈D
+
+Again, R@K ∈ [0, 1] for every K. The highest score 1
+means that a relevant example is always found among the
+top K predictions.
+
+3.2. Blackbox differentiation of combinatorial
+solvers
+In order to differentiate the ranking function, we employ
+a method for efficient backpropagation through combinatorial solvers – recently proposed in [60]. It turns algorithms
+or solvers for problems like SHORTEST- PATH, TRAVELING SALESMAN - PROBLEM , and various graph cuts into differentiable building blocks of neural network architectures.
+With minor simplifications, such solvers (e.g. for the
+M ULTICUT problem) can be formalized as maps that take
+continuous input y ∈ Rn (e.g. edge weights of a fixed
+graph) and return discrete output s ∈ S ⊂ Rn (e.g. indicator vector of a subset of edges forming a cut) such that it
+minimizes a combinatorial objective expressed as an inner
+product y · s (e.g. the cost of the cut). Note that the notation differs from [60] (y was w and s was y). In short, a
+blackbox solver is
+y 7→ s(y) such that s(y) = arg min y · s,
+
+(9)
+
+s∈S
+
+where S is the discrete set of admissible assignments (e.g.
+subsets of edges forming cuts).
+The key technical challenge when computing the backward pass is meaningful differentiation of the piecewise
+constant function y → L(s(y)) where L is the final loss
+of the network. To that end, [60] constructs a family of continuous and (almost everywhere) differentiable functions
+parametrized by a single hyperparameter λ > 0 that controls the trade-off between “faithfulness to original function” and “informativeness of the gradient”, see Fig. 1. For
+a fixed λ the gradient of such an interpolation at point s is
+computed and passed further down the network (instead of
+the true zero gradient) as
+∂L(s(y))
+1
+:= − (s − sλ )
+∂y
+λ
+
+(10)
+
+where sλ is the output of the solver for a certain precisely
+constructed modification of the input. The modification is
+
+where the incoming gradient information ∂L(s(y))/∂s(y)
+is used. For full details including the mathematical guarantees on the tightness of the interpolation, see [60].
+The main advantage of this method is that only a blackbox implementation of the solver (i.e. of the forward pass)
+is required to compute the backward pass. This implies that
+powerful optimized solvers can be used instead of relying
+on suboptimal differentiable relaxations.
+
+4. Method
+4.1. Blackbox differentiation for ranking
+In order to apply blackbox differentiation method for ranking, we need to find a suitable combinatorial objective. Let
+y ∈ Rn be a vector of n real numbers (the scores) and let
+rk ∈ Πn be their ranks. The connection between blackbox
+solver and ranking is captured in the following proposition.
+Proposition 1. In the notation set by Eqs. (1) and (2), we
+have
+rk(y) = arg min y · π.
+(11)
+π∈Πn
+
+In other words, the mapping y → rk(y) is a minimizer
+of a linear combinatorial objective just as Eq. 9 requires.
+The proof of Proposition 1 rests upon a classical rearrangement inequality [16, Theorem 368]. The following
+theorem is its weaker formulation that is sufficient for our
+purpose.
+Theorem 1 (Rearrangement inequality). For every positive
+integer n, every choice of real numbers y1 ≥ · · · ≥ yn and
+every permutation π ∈ Πn it is true that
+y1 · 1 + · · · + yn · n ≤ y1 π(1) + · · · + yn π(n).
+Moreover, if y1 , . . . , yn are distinct, equality occurs precisely for the identity permutation π.
+Proof of Proposition 1. Let π be the permutation that minimizes (11). This means that the value of the sum
+y1 π(1) + · · · + yn π(n)
+
+(12)
+
+is the lowest possible. Using the inverse permutation π −1
+(12) rewrites as
+
+Method
+RaMBO
+Mohapatra et al. [40]
+Chen et al. [7]
+Yue et al. [68]
+FastAP [4]
+SoDeep [10]
+
+forward + backward
+
+general ranking
+
+O(n log n)
+O(n log p)
+O(np)
+O(n2 )
+
+O (n + p)L
+
+O (n + p)h2
+
+X
+x
+X
+x
+X
+X
+
+Table 1: Computational complexity of different approaches
+for differentiable ranking. The numbers of the negative and
+of the positive examples are denoted by n and p, respectively. For SoDeep, h denotes the LSTM’s hidden state
+size (h ≈ n) and for FastAP L denotes the number of bins.
+RaMBO is the first method to directly differentiate general
+ranking with a truly sub-quadratic complexity.
+this to a built-in function of the employed framework
+(e.g. TORCH . ARGSORT). Consequently, we inherit the
+O(n log n) computational complexity as well as a fast vectorized implementation on a GPU. To our knowledge, the
+resulting algorithm is the first to have both truly subquadratic complexity (for both forward and backward pass)
+and to operate with a general ranking function as can be
+seen in Tab. 1 (not however that [40] have a lower complexity as they specialize on AP and not general ranking).
+Algorithm 1 RaMBO: Blackbox differentiation for ranking
+define Ranker as blackbox operation computing ranks
+function F ORWARD PASS(y)
+rk(y) := Ranker(y)
+save y and rk(y) for backward pass
+return rk(y)
+function BACKWARD PASS( ddL
+rk )
+load y and rk(y) from forward pass
+load hyperparameter λ
+yλ := y + λ · ddL
+rk
+rk(yλ ) := Ranker(yλ )
+
+return − λ1 rk(y) − rk(yλ )
+
+4.2. Caveats for sound loss design
+
+and therefore, being minimal in (13) makes (1) hold due to
+Theorem 1. This shows that π = rk(y).
+
+Is resolving the non-differentiability all that is needed for
+direct optimization? Unfortunately not. To obtain wellbehaved loss functions, some delicate considerations need
+to be made. Below we list a few problems (P1)–(P3) that
+arise from direct optimization without further adjustments.
+
+The resulting gradient computation is provided in Algorithm 1 and only takes a few lines of code. We call the
+method Ranking Metric Blackbox Optimization (RaMBO).
+Note again the presence of a blackbox ranking operation. In practical implementation, we can delegate
+
+(P1) Evaluation of rank-based metrics is typically carried
+out over the whole test set while direct optimization methods rely on mini-batch approximations. This, however,
+does not yield an unbiased gradient estimate. Particularly small mini-batch sizes result in optimizing a very poor
+
+yπ−1 (1) · 1 + · · · + yπ−1 (n) · n
+
+(13)
+
+E mAP
+
+1.0
+
+plain ranking
+
+0.8
+
+learned scores
+
+ranking with shift
+learned scores
+
+0.6
+
+shift scores
+induced margin
+during training
+
+collapse
+
+0.4
+0.2
+4
+
+8 16 32
+
+128
+512
+batch size
+
+4096
+
+16384
+
+Figure 2: Mini-batch estimation of mean Average Precision.
+The expected mAP (i.e. the optimized loss) is an overly optimistic estimator of the true mAP over the dataset; particularly for small batch sizes. The mean and standard deviations over sampled mini-batch estimates are displayed.
+approximation of mAP , see Fig. 2.
+(P2) Rank-based metrics are brittle when many ties
+happen in the ranking. As an example, note that any rankbased metric attains all its values in the neighborhood of
+a dataset-wide tie. Additionally, once a positive example is
+rated higher than all negative examples even by the slightest
+difference, the metric gives no incentive for increasing the
+difference. This induces a high sensitivity to potential shifts
+in the statistics when switching to the test set. The need to
+pay special attention to ties was also noted in [4, 20].
+(P3) Some metrics give only sparse supervision. For
+example, the value of r @K only improves if the highestranked positive example moves up the ranking, while the
+other positives have no incentive to do so. Similarly, Average Precision does not give the incentive to decrease the
+possibly high scores of negative examples, unless also some
+positive examples are present in the mini-batch. Since positive examples are typically rare, this can be problematic.
+
+4.3. Score memory
+In order to mitigate the negative impact of small batch sizes
+on approximating the dataset-wide loss (P1) we introduce a
+simple running memory. It stores the scores for elements of
+the last τ previous batches, thereby reducing the bias of the
+estimate. All entries are concatenated for loss evaluation,
+but the gradients only flow through the current batch. This
+is a simpler variant of “batch-extension” mechanisms introduced in [4, 49]. Since only the scores are stored, and not
+network parameters or the computational graph, this procedure has a minimal GPU memory footprint.
+
+4.4. Score margin
+Our remedy for brittleness around ties (P2) is inspired by
+the triplet loss [52]; we introduce a shift in the scores during training in order to induce a margin. In particular, we
+add a negative shift to the positively labeled scores and
+positive shift the negatively labeled scores as illustrated in
+
+Figure 3: Naive rank-based losses can collapse during optimization. Shifting the scores during training induces a margin and a suitable scale for the scores. Red lines indicate
+negative scores and green positive scores.
+Fig. 3. This also implicitly removes the destabilizing scaleinvariance. Using notation as before, we modify the scores
+as
+(
+yi + α2 if yi∗ = 0
+←
+→
+yi=
+(14)
+yi − α2 if yi∗ = 1
+where α is the prescribed margin. In the implementation,
+we replace the ranking operation with rkα given by
+
+→
+rk (y) = rk ←
+y .
+(15)
+α
+
+4.5. Recall loss design
+Let y be scores and y∗ the truth labels, as usual. As noted in
+(P3) the value of r @K only depends on the highest scoring
+relevant element. We overcome the sparsity of the supervision by introducing a refined metric
+e
+r @K (y, y∗ ) =
+
+|{i ∈ rel(y∗ ) : ri < K}|
+,
+| rel(y∗ )|
+
+(16)
+
+where rel(y∗ ) denotes the set of relevant elements (3) and
+ri stands for the number of irrelevant elements outrunning
+the i-th element. Formally,
+ri = rkα (y)i − rkα (y+ )i
+
+for i ∈ rel(y∗ ),
+
+(17)
+
+in which rkα (y+ )i denotes the rank of the i-th element only
+within the relevant ones. Note that e
+r @K depends on all the
+relevant elements as intended. We then define the loss at K
+as
+L@K (y, y∗ ) = 1 − e
+r @K (y, y∗ ).
+(18)
+Next, we choose a weighting wK ≥ 0 of these losses
+Lrec (y, y∗ ) =
+
+∞
+X
+
+wK L@K (y, y∗ ),
+
+(19)
+
+K=1
+
+over values of K.
+Proposition 2 (see the Supplementary material) computes a closed form of (19) for a given sequence of weights
+wK . Here, we exhibit closed-form solutions for two natural
+decreasing sequences of weights:
+
+1
+if wK ≈ K
+ E ∗ `(ri )
+i∈rel(y )
+∗
+
+Lrec (y, y ) =
+1
+ E ` `(ri ) if wK ≈ K log
+K,
+∗
+i∈rel(y )
+
+(20)
+
+4.6. Average Precision loss design
+Having differentiable ranking, the generic AP does not require any further modifications. Indeed, for any relevant
+element index i ∈ rel(y∗ ), its precision obeys
+Prec(i) =
+
+rkα (y+ )i
+rkα (y)i
+
+(21)
+
+where rk(y+ )i is the rank of the i-th element within all the
+relevant ones. The AP loss then reads
+∗
+
+LAP (y, y ) = 1 −
+
+E
+
+i∈rel(y∗ )
+
+Prec(i).
+
+(22)
+
+For calculating the mean Average Precision loss LmAP , we
+simply take the mean over the classes C.
+To alleviate the sparsity of supervision caused by rare
+positive examples (P3), we also consider the AP loss across
+all the classes. More specifically, we treat the matrices y(c)
+and y∗ (c) as concatenated vectors y and y∗ , respectively,
+and set
+LAP C = LAP (y, y∗ ).
+(23)
+This practice is consistent with [7].
+
+5. Experiments
+We evaluate the performance of RaMBO on object detection and several image retrieval benchmarks. The experiments demonstrate that our method for differentiating
+through mAP and recall is generally on-par with the stateof-the-art results and yields in some cases better performance. We will release code upon publication. Throughout the experimental section, the numbers we report for
+RaMBO are averaged over three restarts.
+
+5.1. Image retrieval
+To evaluate the proposed Recall Loss (Eq. 20) derived from
+RaMBO we run experiments for image retrieval on the
+CUB-200-2011 [62], Stanford Online Products [55], and Inshop Clothes [35] benchmarks. We compare against a variety of methods from recent years, multiple of which achieve
+state-of-the-art performance. The best-performing methods
+are ABE-8 [27], FastAP [4], and Proxy NCA [41].
+Architecture For all experiments, we follow the most
+standard setup. We use a pretrained ResNet50 [18] in which
+we replace the final softmax layer with a fully connected
+embedding layer which produces a 512-dimensional vector
+
+query
+top 3 retrieval
+
+where `(k) = log(1 + k).
+This also gives a theoretical explanation why some previous works [7, 23] found it “beneficial” to optimize the
+logarithm of a ranking metric, rather than the metric itself.
+In our case, the log arises from the most natural weight decay 1/K.
+
+Figure 4: Stanford Online Products image retrieval examples.
+
+for each batch element. We normalize each vector so that it
+represents a point on the unit sphere. The cosine similarities of all the distinct pairs of elements in the batch are then
+computed and the ground truth similarities are set to 1 for
+those elements belonging to the same class and 0 otherwise.
+The obvious similarity of each element with itself is disregarded. We compute the Lrec loss for each batch element
+with respect to all other batch elements using the similarities and average it to compute the final loss. Note that our
+method does not employ any sampling strategy for mining
+suitable pairs/triplets from those present in a batch. It does,
+however, share a batch preparation strategy with [4] on two
+of the datasets.
+Parameters We use Adam optimizer [28] with an amplified learning rate for the embedding layer. We consistently
+set the batch size to 128 so that each experiment runs on
+a GPU with 16GB memory. Full details regarding training
+schedules and exact values of hyperparameters for the different datasets are in the Supplementary material.
+Datasets For data preparation, we resize images to 256 ×
+256 and randomly crop and flip them to 224 × 224 during
+training, using a single center crop on evaluation.
+We use the Stanford Online Products dataset consisting
+of 120, 053 images with 22, 634 classes crawled from Ebay.
+The classes are grouped into 12 superclasses (e.g. cup, bicycle) which are used for mini-batch preparation following the
+procedure proposed in [4]. We follow the evaluation protocol proposed in [55], using 59, 551 images corresponding to
+11, 318 classes for training and 60, 502 images corresponding to 11, 316 classes for testing.
+The In-shop Clothes dataset consists of 54, 642 images
+with 11, 735 classes. The classes are grouped into 23 superclasses (e.g. MEN/Denim, WOMEN/Dresses), which we
+use for mini-batch preparation as before. We follow previous work by using 25, 882 images corresponding to 3, 997
+classes for training and 14, 218 + 12, 612 images corre-
+
+R@K
+Contrastive512
+G [42]
+512
+TripletG [42]
+LiftedStruct512
+G [42]
+Binomial Deviance512
+G [59]
+Histogram Loss512
+G [59]
+512
+N-Pair-LossG [54]
+Clustering64
+G [43]
+HDC384
+[67]
+G
+Angular Loss512
+G [61]
+Margin128
+[63]
+R50
+Proxy NCA64
+G [41]
+A-BIER512
+G [44]
+128
+HTLG [12]
+ABE-8512
+G [27]
+FastAP512
+R50 [4]
+RaMBO512
+R50 log
+512
+RaMBOR50 log log
+
+1
+
+10
+
+100
+
+1000
+
+R@K
+Contrastive512
+G [42]
+512
+TripletG [42]
+LiftedStruct512
+G [42]
+Binomial Deviance512
+G [59]
+Histogram Loss512
+G [59]
+64
+N-Pair-LossG [54]
+Clustering64
+G [43]
+Proxy NCA512
+G [41]
+Smart Mining64
+G [17]
+Margin128
+[63]
+G
+HDC384
+G [67]
+Angular Loss512
+G [61]
+128
+HTLG [12]
+A-BIER512
+G [44]
+ABE-8512
+G [27]
+Proxy NCA512
+R50 [51]
+512
+RaMBOR50 log
+RaMBO512
+R50 log log
+
+42.0
+42.1
+62.1
+65.5
+63.9
+67.7
+67.0
+69.5
+70.9
+72.7
+73.7
+74.2
+74.8
+76.3
+76.4
+
+58.2
+63.5
+79.8
+82.3
+81.7
+83.8
+83.7
+84.4
+85.0
+86.2
+86.9
+88.3
+88.4
+89.1
+
+73.8
+82.5
+91.3
+92.3
+92.2
+93.0
+93.2
+92.8
+93.5
+93.8
+94.0
+94.8
+94.8
+95.4
+
+89.1
+94.8
+97.4
+97.6
+97.7
+97.8
+97.7
+98.0
+98.0
+97.8
+98.4
+98.2
+98.5
+
+77.8
+78.6
+
+90.1
+90.5
+
+95.9
+96.0
+
+98.7
+98.7
+
+Table 2: Comparison with the state-of-the-art on the Stanford Online Products [42]. On this dataset, with the highest
+number of classes in the test set, RaMBO gives better performance than other state-of-the-art methods.
+sponding to 3, 985 classes each for testing (split into a query
++ gallery set respectively). Given an image from the query
+set, we retrieve corresponding images from the gallery set.
+The CUB-200-2011 dataset consists of 11, 788 images
+of 200 bird categories. Again we follow the evaluation protocol proposed in [55], using the first 100 classes consisting
+of 5, 864 images for training and the remaining 100 classes
+with 5, 924 images for testing.
+Results For all retrieval results in the tables we add the
+embedding dimension as a superscript and the backbone
+architecture as a subscript. The letters R, G, V represent
+ResNet [22], GoogLeNet [57], and VGG-16 [53], respectively. We report results for both RaMBO 512
+R50 log and
+RaMBO 512
+R50 log log, the main difference being if the logarithm is applied once or twice to the rank in Eq. (20).
+On Stanford Online Products we report R@K for K ∈
+{1, 10, 100, 1000} in Tab. 2. The fact that the dataset contains the highest number of classes seems to favor RaMBO,
+as it outperforms all other methods. Some example retrievals are presented in Fig. 4.
+On CUB-200-2011 we report R@K for K ∈ {1, 2, 4, 8}
+in Tab. 3. For fairness, we include the performance of Proxy
+NCA with a ResNet50 [18] backbone even though the results are only reported in an online implementation [51].
+With this implementation Proxy NCA and RaMBO are the
+best-performing methods.
+
+1
+
+2
+
+4
+
+8
+
+26.4
+36.1
+47.2
+52.8
+50.3
+51.0
+48.2
+49.2
+49.8
+63.8
+53.6
+54.7
+57.1
+57.5
+60.6
+64.0
+
+37.7
+48.6
+58.9
+64.4
+61.9
+63.3
+61.4
+61.9
+62.3
+74.4
+65.7
+66.3
+68.8
+68.7
+71.5
+75.4
+
+49.8
+59.3
+70.2
+74.7
+72.6
+74.3
+71.8
+67.9
+74.1
+83.1
+77.0
+76.0
+78.7
+78.3
+80.5
+84.2
+
+62.3
+70.0
+80.2
+83.9
+82.4
+83.2
+81.9
+72.4
+83.3
+90.0
+85.6
+83.9
+86.5
+86.2
+87.7
+90.5
+
+63.5
+64.0
+
+74.8
+75.3
+
+84.1
+84.1
+
+90.4
+90.6
+
+Table 3: Comparison with the state-of-the-art on the CUB200-2011 [62] dataset. Our method RaMBO is on-par with
+an (unofficial) ResNet50 implementation of Proxy NCA.
+R@K
+
+1
+
+10
+
+20
+
+30
+
+50
+
+FashionNetV [36]
+HDC384
+G [67]
+DREML48
+R18 [66]
+128
+HTLG [12]
+A-BIER512
+G [44]
+ABE-8512
+G [27]
+FastAP-Matlab512
+R50 [4]
+2
+FastAP-Python512
+R50 [5]
+
+53.0
+62.1
+78.4
+80.9
+83.1
+87.3
+90.9
+83.8?
+
+73.0
+84.9
+93.7
+94.3
+95.1
+96.7
+97.7
+95.5?
+
+76.0
+89.0
+95.8
+95.8
+96.9
+97.9
+98.5
+96.9?
+
+77.0
+91.2
+96.7
+97.2
+97.5
+98.2
+98.8
+97.5?
+
+80.0
+93.1
+97.8
+98.0
+98.7
+99.1
+98.2?
+
+RaMBO512
+R50 log
+512
+RaMBOR50 log log
+
+88.1 97.0 97.9 98.4 98.8
+86.3 96.2 97.4 97.9 98.5
+
+Table 4: Comparison with the state-of-the-art methods
+on the In-shop Clothes [35] dataset. RaMBO is on par
+with an ensemble-method ABE-8. Leading performance is
+achieved with a Matlab implementation of FastAP.
+
+On In-shop Clothes we report R@K for value of K ∈
+{1, 10, 20, 30, 50} in Tab. 4. The best-performing method is
+probably FastAP, even though the situation regarding reproducibility is puzzling2 . RaMBO matches the performance
+of ABE-8 [27], a complex ensemble method.
+We followed the reporting strategy of [27] by evaluating on the test set in regular training intervals and reporting
+
+Method
+Faster R-CNN
+Faster R-CNN
+Faster R-CNN
+Faster R-CNN
+
+Backbone
+
+Training
+
+ResNet50
+07
+ResNet50 07+12
+ResNet101 07+12
+X101 32×4d 07+12
+
+CE RaMBO
+74.2
+80.4
+82.4
+83.2
+
+75.7
+81.4
+82.9
+83.6
+
+Table 5: Object detection performance on the Pascal VOC
+07 test set measured in AP 50 . Backbone X stands for
+ResNeXt and CE for cross entropy loss.
+
+Length
+
+100k
+
+1M
+
+10M
+
+100M
+
+CPU
+GPU
+
+33 ms
+1.3 ms
+
+331 ms
+7 ms
+
+3.86 s
+61 ms
+
+36.4 s
+0.62 s
+
+Table 6: Processing time of Average Precision (using plain
+P YTORCH implementation) depending on sequence length
+for forward/backward computation on a single Tesla V100
+GPU and 1 Xeon Gold CPU core at 2.2GHz.
+R@1
+
+performance at a time-point that maximizes R@1 .
+
+5.2. Object detection
+We follow a common protocol for testing new components by using Faster R-CNN [48], the most commonly
+used model in object detection, with standard hyperparameters for all our experiment. We compare against baselines from the highly optimized mmdetection toolbox [8]
+and only exchange the cross-entropy loss of the classifier
+with a weighted combination of LmAP and LAP C .
+Datasets and evaluation All experiments are performed
+on the widely used Pascal VOC dataset [11]. We train our
+models on the Pascal VOC 07 and VOC 12 trainval
+sets and test them on the VOC 07 test set. Performance
+is measured in AP 50 which is AP computed for bounding boxes with at least 50% intersection-over-union overlap
+with any of the ground truth bounding boxes.
+Parameters The model was trained for 12 epochs on a
+single GPU with a batch-size of 8. The initial learning rate
+0.1 is reduced by a factor of 10 after 9 epochs. For the LAP
+loss, we use τ = 7, α = 0.15, and λ = 0.5. The losses
+LmAP and LAP C are weighted in the 2 : 1 ratio.
+Results We evaluate Faster R-CNN trained on VOC 07
+and VOC 07+12 with three different backbones (ResNet50,
+ResNet101, and ResNeXt101 32x4d [18, 65]). Training
+with our AP loss gives a consistent improvement (see
+Tab. 5) and pushes the standard Faster R-CNN very close
+to state-of-the-art values (≈ 84.1) achieved by significantly
+more complex architectures [26, 69].
+
+5.3. Speed
+Since RaMBO can be implemented using sorting functions
+it is very fast to compute (see Tab. 6) and can be used on
+very long sequences. Computing AP loss for sequences
+with 320k elements as in the object detection experiments
+takes less than 5 ms for the forward/backward pass. This is
+< 0.5% of the overall computation time on a batch.
+2 FastAP public code [5] offers Matlab and PyTorch implementations.
+Confusingly, the two implementations give very different results. We contacted the authors but neither we nor they were able to identify the source
+of this discrepancy in two seemingly identical implementations. We report
+both numbers.
+
+CUB200
+
+In-shop
+
+Online Prod.
+
+64.0
+62.5
+63.2
+
+88.1
+87.0
+x
+
+78.6
+72.4
+x
+
+Full RaMBO
+No batch memory
+No margin
+
+Table 7: Ablation experiments for margin(Sec. 4.4) and
+batch memory (Sec. 4.3) in retrieval on the CUB200, Inshop and Stanford Online Products datasets.
+Method
+Faster R-CNN
+Faster R-CNN
+Faster R-CNN
+Faster R-CNN
+Faster R-CNN
+
+RaMBO
+
+λ
+
+X
+X
+X
+X
+
+0.5
+0.1
+0.5
+2.5
+
+margin
+
+AP 50
+
+X
+X
+X
+
+74.2
+74.6
+75.2
+75.7
+74.3
+
+Table 8: Ablation for RaMBO on the object detection task.
+
+5.4. Ablation studies
+We verify the validity of our loss design in multiple ablation
+studies. Table 7 shows the relevance of margin and batch
+memory for the retrieval task. In fact, some of the runs
+without a margin diverged. The importance of margin is
+also shown for the mAP loss in Tab. 8. Moreover, we can
+see that the hyperparameter λ of the scheme [60] does not
+need precise tuning. Values of λ that are within a factor 5
+of the selected λ = 0.5 still outperform the baseline.
+
+6. Discussion
+The proposed method RaMBO is singled out by its conceptual purity in directly optimizing for the desired metric
+while being simple, flexible, and computationally efficient.
+Driven only by basic loss-design principles and without serious engineering efforts, it can compete with state-of-theart methods on image retrieval and consistently improve
+near-state-of-the-art object detectors. Exciting opportunities for future work lie in utilizing the ability to efficiently
+optimize ranking-metrics of sequences with millions of elements.
+
+References
+[1] B. T. Bartell, G. W. Cottrell, and R. K. Belew. Automatic
+combination of multiple ranked retrieval systems. In ACM
+Conference on Research and Development in Information
+Retrieval, SIGIR’94, pages 173–181. Springer, 1994. 1
+[2] A. Bellet, A. Habrard, and M. Sebban. A survey on metric learning for feature vectors and structured data. arXiv
+preprint arXiv:1306.6709, 2013. 2
+[3] J. Bromley, I. Guyon, Y. LeCun, E. Säckinger, and R. Shah.
+Signature verification using a “siamese” time delay neural
+network. In Advances in Neural Information Processing Systems, NIPS’94, pages 737–744, 1994. 2
+[4] F. Cakir, K. He, X. Xia, B. Kulis, and S. Sclaroff. Deep metric learning to rank. In IEEE Conference on Computer Vision and Pattern Recognition, CVPR’19, pages 1861–1870,
+2019. 1, 2, 4, 5, 6, 7, 13, 14
+[5] F. Cakir, K. He, X. Xia, B. Kulis, and S. Sclaroff. Deep Metric Learning to Rank. https://github.com/kunhe/
+FastAP-metric-learning, 2019. Commit: 7ca48aa.
+7, 8, 12
+[6] S. Chakrabarti, R. Khanna, U. Sawant, and C. Bhattacharyya. Structured learning for non-smooth ranking
+losses. In KDD, 2008. 1
+[7] K. Chen, J. Li, W. Lin, J. See, J. Wang, L. Duan, Z. Chen,
+C. He, and J. Zou. Towards accurate one-stage object detection with ap-loss. In IEEE Conference on Computer Vision and Pattern Recognition, CVPR’19, pages 5119–5127,
+2019. 1, 2, 4, 6
+[8] K. Chen, J. Wang, J. Pang, Y. Cao, Y. Xiong, X. Li,
+S. Sun, W. Feng, Z. Liu, J. Xu, Z. Zhang, D. Cheng,
+C. Zhu, T. Cheng, Q. Zhao, B. Li, X. Lu, R. Zhu, Y. Wu,
+J. Dai, J. Wang, J. Shi, W. Ouyang, C. C. Loy, and D. Lin.
+MMDetection: Open MMLab detection toolbox and benchmark. arXiv preprint arXiv:1906.07155, 2019. Commit:
+9d767a03c0ee60081fd8a2d2a200e530bebef8eb. 1, 8
+[9] R. Cohendet, C.-H. Demarty, N. Duong, M. Sjöberg,
+B. Ionescu, , and T.-T. Do. MediaEval 2018: Predicting media memorability. arXiv:1807.01052, 2018. 1
+[10] M. Engilberge, L. Chevallier, P. Pérez, and M. Cord. Sodeep:
+a sorting deep net to learn ranking loss surrogates. In IEEE
+Conference on Computer Vision and Pattern Recognition,
+CVPR’19, pages 10792–10801, 2019. 1, 2, 4, 13, 14
+[11] M. Everingham, L. Van Gool, C. Williams, J. Winn, and
+A. Zisserman. The pascal visual object classes (voc) challenge. International Journal of Computer Vision, 2010. 2,
+8
+[12] W. Ge. Deep metric learning with hierarchical triplet loss. In
+European Conference on Computer Vision, ECCV’18, pages
+269–285, 2018. 1, 2, 7
+
+[13] G. Ghiasi, T.-Y. Lin, and Q. V. Le. Nas-fpn: Learning scalable feature pyramid architecture for object detection. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’19, 2019. 2
+[14] R. Girshick, J. Donahue, T. Darrell, and J. Malik. Rich feature hierarchies for accurate object detection and semantic
+segmentation. In IEEE Conference on Computer Vision and
+Pattern Recognition, CVPR’14, pages 580–587, 2014. 2
+[15] E. Goldman, R. Herzig, A. Eisenschtat, J. Goldberger, and
+T. Hassner. Precise detection in densely packed scenes.
+In The IEEE Conference on Computer Vision and Pattern
+Recognition, CVPR’19, 2019. 2
+[16] G. H. Hardy, J. E. Littlewood, and G. Pólya. Inequalities.
+Cambridge University Press, Cambridge, England, 1952. 4
+[17] B. Harwood, B. Kumar, G. Carneiro, I. Reid, T. Drummond,
+et al. Smart mining for deep metric learning. In IEEE International Conference on Computer Vision, ICCV’17, pages
+2821–2829, 2017. 7
+[18] K. He, X. Zhang, S. Ren, and J. Sun. Deep residual learning
+for image recognition. In IEEE Conference on Computer
+Vision and Pattern Recognition, CVPR’18, pages 770–778,
+2016. 2, 6, 7, 8
+[19] K. He, G. Gkioxari, P. Dollár, and R. Girshick. Mask RCNN. In IEEE International Conference on Computer Vision, ICCV’17, pages 2980–2988, 2017. 2
+[20] K. He, F. Cakir, S. Adel Bargal, and S. Sclaroff. Hashing as tie-aware learning to rank. In IEEE Conference on
+Computer Vision and Pattern Recognition, CVPR’18, pages
+4023–4032, 2018. 1, 2, 5
+[21] K. He, Y. Lu, and S. Sclaroff. Local descriptors optimized for
+average precision. In IEEE Conference on Computer Vision
+and Pattern Recognition, CVPR’18, pages 596–605, 2018. 2
+[22] W. He, X.-Y. Zhang, F. Yin, and C.-L. Liu. Deep direct regression for multi-oriented scene text detection. In IEEE
+International Conference on Computer Vision, ICCV’17,
+2017. 7
+[23] P. Henderson and V. Ferrari. End-to-end training of object
+class detectors for mean average precision. In Asian Conference on Computer Vision, pages 198–213. Springer, 2016. 1,
+2, 6
+[24] E. Hoffer and N. Ailon. Deep metric learning using triplet
+network. In International Workshop on Similarity-Based
+Pattern Recognition, pages 84–92. Springer, 2015. 2
+[25] J. Huang, V. Rathod, C. Sun, M. Zhu, A. Korattikara,
+A. Fathi, I. Fischer, Z. Wojna, Y. Song, S. Guadarrama,
+and K. Murphy.
+Tensorflow Object Detection API.
+https://github.com/tensorflow/models/
+tree/master/research/object detection,
+2017. Commit: 0ba83cf. 1
+
+[26] S.-W. Kim, H.-K. Kook, J.-Y. Sun, M.-C. Kang, and S.-J.
+Ko. Parallel feature pyramid network for object detection. In
+European Conference on Computer Vision, ECCV’18, pages
+230–256, 2018. 8
+[27] W. Kim, B. Goyal, K. Chawla, J. Lee, and K. Kwon.
+Attention-based ensemble for deep metric learning. In European Conference on Computer Vision, ECCV’18, pages
+736–751, 2018. 6, 7
+[28] D. P. Kingma and J. Ba. Adam: A method for stochastic
+optimization. In International Conference on Learning Representations, ICLR’14, 2014. 6
+[29] G. Koch, R. Zemel, and R. Salakhutdinov. Siamese neural networks for one-shot image recognition. In ICML deep
+learning workshop, volume 2, 2015. 2
+[30] B. Kulis et al. Metric learning: A survey. Foundations and
+Trends in Machine Learning, 5(4):287–364, 2013. 2
+[31] M. T. Law, N. Thome, and M. Cord. Quadruplet-wise image similarity learning. In IEEE International Conference
+on Computer Vision, ICCV’13, pages 249–256, 2013. 2
+[32] T.-Y. Lin, P. Goyal, R. Girshick, K. He, and P. Dollár. Focal loss for dense object detection. IEEE Transactions on
+Pattern Analysis and Machine Intelligence, 2018. 2
+[33] Y. Lin, Y. Lee, and G. Wahba. Support vector machines for
+classification in nonstandard situations. Machine Learning,
+46(1):191–202, 2002. doi: 10.1023/A:1012406528296. 1
+[34] W. Liu, D. Anguelov, D. Erhan, C. Szegedy, S. Reed, C.-Y.
+Fu, and A. C. Berg. Ssd: Single shot multibox detector. In
+ECCV, pages 21–37. Springer, 2016. 2
+[35] Z. Liu, P. Luo, S. Qiu, X. Wang, and X. Tang. Deepfashion:
+Powering robust clothes recognition and retrieval with rich
+annotations. In IEEE Conference on Computer Vision and
+Pattern Recognition, CVPR’16, 2016. 6, 7
+[36] Z. Liu, P. Luo, S. Qiu, X. Wang, and X. Tang. Deepfashion:
+Powering robust clothes recognition and retrieval with rich
+annotations. In IEEE Conference on Computer Vision and
+Pattern Recognition, CVPR’16, pages 1096–1104, 2016. 7
+[37] F. Massa and R. Girshick. maskrcnn-benchmark: Fast,
+modular reference implementation of Instance Segmentation and Object Detection algorithms in PyTorch.
+https://github.com/facebookresearch/
+maskrcnn-benchmark, 2018. Commit: f027259. 1
+[38] B. McFee and G. R. Lanckriet. Metric learning to rank. In
+International Conference on Machine Learning, ICML’10,
+pages 775–782, 2010. 2
+[39] P. Mohapatra, C. Jawahar, and M. P. Kumar. Efficient optimization for average precision svm. In Advances in Neural
+Information Processing Systems, pages 2312–2320, 2014.
+
+[40] P. Mohapatra, M. Rolinek, C. Jawahar, V. Kolmogorov, and
+M. Pawan Kumar. Efficient optimization for rank-based loss
+functions. In IEEE Conference on Computer Vision and Pattern Recognition, CVPR’18, pages 3693–3701, 2018. 1, 2,
+4
+[41] Y. Movshovitz-Attias, A. Toshev, T. K. Leung, S. Ioffe, and
+S. Singh. No fuss distance metric learning using proxies. In IEEE International Conference on Computer Vision,
+ICCV’17, pages 360–368, 2017. 2, 6, 7
+[42] H. Oh Song, Y. Xiang, S. Jegelka, and S. Savarese. Deep
+metric learning via lifted structured feature embedding. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’16, pages 4004–4012, 2016. 2, 7
+[43] H. Oh Song, S. Jegelka, V. Rathod, and K. Murphy. Deep
+metric learning via facility location. In IEEE Conference on
+Computer Vision and Pattern Recognition, CVPR’17, pages
+5382–5390, 2017. 7
+[44] M. Opitz, G. Waltner, H. Possegger, and H. Bischof. Deep
+metric learning with BIER: Boosting independent embeddings robustly. IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 2018. 7
+[45] Y. Rao, D. Lin, J. Lu, and J. Zhou. Learning globally
+optimized object detector via policy gradient. In IEEE
+Conference on Computer Vision and Pattern Recognition,
+CVPR’18, pages 6190–6198, 2018. 2
+[46] J. Redmon and A. Farhadi. Yolov3: An incremental improvement. arXiv preprint arXiv:1804.02767, 2018. 2
+[47] J. Redmon, S. Divvala, R. Girshick, and A. Farhadi. You
+only look once: Unified, real-time object detection. In IEEE
+Conference on Computer Vision and Pattern Recognition,
+CVPR’16, 2016. 2
+[48] S. Ren, K. He, R. Girshick, and J. Sun. Faster r-cnn: Towards real-time object detection with region proposal networks. In Advances in Neural Information Processing Systems, NIPS’15, pages 91–99, 2015. 2, 8
+[49] J. Revaud, J. Almazan, R. S. de Rezende, and C. R. de Souza.
+Learning with Average Precision: Training image retrieval
+with a listwise loss. In IEEE International Conference on
+Computer Vision, ICCV’19, 2019. 1, 2, 5
+[50] H. Rezatofighi, N. Tsoi, J. Gwak, A. Sadeghian, I. Reid,
+and S. Savarese. Generalized intersection over union: A
+metric and a loss for bounding box regression. In IEEE
+Conference on Computer Vision and Pattern Recognition,
+CVPR’19, 2019. 2
+[51] K. Roth and B. Brattoli.
+Easily extendable basic
+deep metric learning pipeline.
+https://github.
+com/Confusezius/Deep-Metric-LearningBaselines, 2019. Commit: 59d48f9. 1, 7
+
+[52] F. Schroff, D. Kalenichenko, and J. Philbin. Facenet: A
+unified embedding for face recognition and clustering. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’15, pages 815–823, 2015. 2, 5
+
+[62] P. Welinder, S. Branson, T. Mita, C. Wah, F. Schroff, S. Belongie, and P. Perona. Caltech-UCSD Birds 200. Technical
+Report CNS-TR-2010-001, California Institute of Technology, 2010. 6, 7
+
+[53] K. Simonyan and A. Zisserman. Very deep convolutional
+networks for large-scale image recognition. In International
+Conference on Learning Representations, ICLR’15, 2015. 7
+
+[63] C.-Y. Wu, R. Manmatha, A. J. Smola, and P. Krahenbuhl.
+Sampling matters in deep embedding learning. In IEEE
+International Conference on Computer Vision, ICCV’17,
+pages 2840–2848, 2017. 2, 7
+
+[54] K. Sohn. Improved deep metric learning with multi-class npair loss objective. In Advances in Neural Information Processing Systems, NIPS’16, pages 1857–1865, 2016. 7
+[55] H. O. Song, Y. Xiang, S. Jegelka, and S. Savarese. Deep
+metric learning via lifted structured feature embedding. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’16, 2016. 6, 7
+[56] Y. Song, A. Schwing, R. Urtasun, et al. Training deep neural
+networks via direct loss minimization. In International Conference on Machine Learning, ICML’16, pages 2169–2177,
+2016. 1, 2
+[57] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed,
+D. Anguelov, D. Erhan, V. Vanhoucke, and A. Rabinovich.
+Going deeper with convolutions. In IEEE Conference on
+Computer Vision and Pattern Recognition, CVPR’15, 2015.
+7
+[58] M. Taylor, J. Guiver, S. Robertson, and T. Minka. Softrank:
+optimizing non-smooth rank metrics. In 2008 International
+Conference on Web Search and Data Mining, pages 77–86.
+ACM, 2008. 2
+[59] E. Ustinova and V. Lempitsky. Learning deep embeddings
+with histogram loss. In Advances in Neural Information Processing Systems, NIPS’16, pages 4170–4178, 2016. 7
+[60] M. Vlastelica, A. Paulus, V. Musil, G. Martius, and
+M. Rolı́nek. Differentiation of blackbox combinatorial
+solvers. In International Conference on Learning Representations, ICLR’20, 2020. 2, 3, 4, 8, 13, 14
+[61] J. Wang, F. Zhou, S. Wen, X. Liu, and Y. Lin. Deep metric
+learning with angular loss. In IEEE International Conference
+on Computer Vision, ICCV’17, pages 2593–2601, 2017. 7
+
+[64] Y. Wu, A. Kirillov, F. Massa, W.-Y. Lo, and R. Girshick.
+Detectron2.
+https://github.com/
+facebookresearch/detectron2, 2019.
+Commit: dd5926a. 1
+[65] S. Xie, R. Girshick, P. Dollár, Z. Tu, and K. He. Aggregated residual transformations for deep neural networks. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’17, pages 5987–5995, 2017. 8
+[66] H. Xuan, R. Souvenir, and R. Pless. Deep randomized ensembles for metric learning. In European Conference on
+Computer Vision, ECCV’18, pages 723–734, 2018. 7
+[67] Y. Yuan, K. Yang, and C. Zhang. Hard-aware deeply cascaded embedding. In IEEE International Conference on
+Computer Vision, ICCV’17, pages 814–823, 2017. 7
+[68] Y. Yue, T. Finley, F. Radlinski, and T. Joachims. A support
+vector method for optimizing average precision. In ACM SIGIR Conference on Research and Development in Information Retrieval, pages 271–278. ACM, 2007. 1, 2, 4
+[69] S. Zhang, L. Wen, X. Bian, Z. Lei, and S. Z. Li. Singleshot refinement neural network for object detection. In IEEE
+Conference on Computer Vision and Pattern Recognition,
+CVPR’18, pages 4203–4212, 2018. 8
+[70] Y. Zhao, Z. Jin, G.-j. Qi, H. Lu, and X.-s. Hua. An adversarial
+approach to hard triplet generation. In European Conference
+on Computer Vision, ECCV’18, pages 501–517, 2018. 2
+[71] B. Zoph, V. Vasudevan, J. Shlens, and Q. V. Le. Learning
+transferable architectures for scalable image recognition. In
+IEEE Conference on Computer Vision and Pattern Recognition, CVPR’18, 2018. 2
+
+A. Parameters of retrieval experiments
+In all experiments we used the ADAM optimizer with a
+weight decay value of 4 × 10−4 and batch size 128. All
+experiments ran at most 80 epochs with a learning rate drop
+by 70% after 35 epochs and a batch memory of length 3.
+We used higher learning rates for the embedding layer as
+specified by defaults in Cakir et al. [5].
+We used a super-label batch preparation strategy in
+which we sample a consecutive batches for the same superlabel pair, as specified by Cakir et al. [5]. For the In-shop
+Clothes dataset we used 4 batches per pair of super-labels
+and 8 samples per class within a batch. In the Online Products dataset we used 10 batches per pair of super-labels
+along with 4 samples per class within a batch. For CUB200,
+there are no super-labels and we just sample 4 examples
+per classes within a batch. These values again follow Cakir
+et al. [5]. The remaining settings are in Table 9.
+Online Products
+
+In-shop
+
+−6
+
+lr
+margin
+λ
+
+−5
+
+3 × 10
+0.02
+4
+
+Proof. Taking the complement of the set rel(y∗ ) in the definition of L@K , we get
+L@K (y, y∗ ) =
+
+∞
+
+Lrec (y, y∗ ) =
+
+Equation (27) then follows by Lemma 1.
+proof of Lemma 1. Observe that wk = W (k) − W (k − 1)
+and W (0) = 0. Then
+n
+X
+
+W (ri ) =
+
+i=1
+
+CUB200
+
+=
+
+5 × 10
+0.02
+0.2
+
+=
+
+Lemma 1. Let {wk } be a sequence of nonnegative weights
+and let r1 , . . . , rn be positive integers. Then
+
+k=1
+∞
+X
+
+W (k)|{i : ri ≥ k}|
+
+=
+
+W (k − 1)|{i : ri ≥ k}|
+
+k=1
+∞
+X
+
+
+W (k) − W (k − 1) |{i : ri ≥ k}|
+
+k=1
+∞
+X
+
+W (ri ),
+
+wk |{i : ri ≥ k}|
+
+(24)
+
+and (24) follows.
+
+(25)
+
+Proof of (20). Let us set wk = log(1 + 1/k) for k ∈ N.
+Then from Taylor’s expansion of log we have the desired
+wk ≈ k1 and
+
+k
+X
+
+wi
+
+for k ∈ N.
+
+i=1
+
+Note that the sum on the left hand-side of (24) is finite.
+
+Lrec (y, y∗ ) =
+
+∞
+X
+
+wK L@K (y, y∗ ).
+
+(26)
+
+K=1
+
+If we set
+log 1 + k1
+wk = log 1 +
+1 + log k
+
+Then
+1
+| rel(y∗ )|
+
+k
+X
+
+
+
+1
+log 1 +
+i
+i=1
+!
+k
+Y
+1+i
+= log
+= log(1 + k).
+i
+i=1
+
+W (k) =
+
+Proposition 2. Let wK be nonnegative weights for K ∈ N
+and assume that Lrec is given by
+
+where W is as in (25).
+
+W (k) {i : ri ≥ k} \ {i : ri ≥ k + 1}
+
+k=1
+
+where
+
+Lrec (y, y∗ ) =
+
+W (k)|{i : ri = k}|
+
+i=1
+
+k=1
+
+W (k) =
+
+k=1
+∞
+X
+
+−
+=
+
+n
+X
+
+∞
+X
+
+k=1
+∞
+X
+
+B. Proofs
+
+wk |{i : ri ≥ k}| =
+
+X
+1
+wK |{i : ri ≥ K}|.
+∗
+| rel(y )|
+k=1
+
+Table 9: Hyperparameter values for retrieval experiments.
+
+∞
+X
+
+(28)
+
+whence (26) reads as
+
+−6
+
+10
+0.05
+0.2
+
+|{i ∈ rel(y∗ ) : ri ≥ K}|
+,
+| rel(y∗ )|
+
+X
+i∈rel(y∗ )
+
+W (ri ),
+
+(27)
+
+!
+,
+
+for k ∈ N
+
+then, using Taylor’s expansions again,
+
+log 1 + k1
+1
+wk ≈
+≈
+1 + log k
+k log k
+
+and
+!
+log 1 + k1
+W (k) =
+log 1 +
+1 + log k
+i=1
+!
+k
+Y
+1 + log(1 + i)
+= log
+1 + log i
+i=1
+
+= log 1 + log(1 + k) .
+k
+X
+
+The conclusion then follows by Proposition 2.
+
+C. Ranking surrogates visualization
+For the interested reader, we additionally present visualizations of smoothing effects introduced by different approaches for direct optimization of rank-based metrics. We
+display the behaviour of our approach using blackbox differentiation [60], of FastAP [4], and of SoDeep [10].
+In the following, we fix a 20-dimensional score vector
+w ∈ R20 and a loss function L which is a (random but fixed)
+linear combination of the ranks of w. We plot a (random but
+
+fixed) two-dimensional section of R20 of the loss landscape
+L(w). In Fig. 6a we see the true piecewise constant function. In Fig. 6b, Fig. 6c and Fig. 6d the ranking is replaced
+by interpolated ranking [60], FastAP soft-binning ranking
+[4] and by pretrained SoDeep LSTM [10], respectively. In
+Fig. 5a and Fig. 5b the evolution of the loss landscape with
+respect to parameters is displayed for the blackbox ranking
+and FastAP.
+
+Acknowledgement
+We thank the International Max Planck Research School
+for Intelligent Systems (IMPRS-IS) for supporting Marin
+Vlastelica and Claudio Michaelis. We acknowledge the
+support from the German Federal Ministry of Education
+and Research (BMBF) through the Tbingen AI Center
+(FKZ: 01IS18039B). Claudio Michaelis was supported by
+the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) via grant EC 479/1-1 and the Collaborative Research Center (Projektnummer 276693517 – SFB
+1233: Robust Vision).
+
+(a) Ranking interpolation by [60] for λ = 0.2, 0.5, 1.0, 2.0.
+
+(b) FastAp [4] with bin counts 5, 10, 20, 40.
+
+Figure 5: Evolution of the ranking-surrogate landscapes with respect to their parameters.
+
+(a) Original piecewise constant landscape
+
+(b) Piecewise linear interpolation scheme of [60] with λ = 0.5
+
+(c) SoDeep LSTM-based ranking surrogate [10]
+
+(d) FastAP [4] soft-binning with 10 bins.
+
+Figure 6: Visual comparison of various differentiable proxies for piecewise constant function.
+
+

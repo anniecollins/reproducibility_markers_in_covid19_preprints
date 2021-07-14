@@ -1,0 +1,1470 @@
+Provable Certificates for Adversarial Examples:
+Fitting a Ball in the Union of Polytopes
+
+arXiv:1903.08778v2 [cs.LG] 4 Jun 2019
+
+Matt Jordan
+University of Texas at Austin
+mjordan@cs.utexas.edu
+
+Justin Lewis
+University of Texas at Austin
+justin94lewis@utexas.edu
+
+Alexandros G. Dimakis
+University of Texas at Austin
+dimakis@austin.utexas.edu
+
+Abstract
+We propose a novel method for computing exact pointwise robustness of deep
+neural networks for all convex `p norms. Our algorithm, GeoCert, finds the largest
+`p ball centered at an input point x0 , within which the output class of a given neural
+network with ReLU nonlinearities remains unchanged. We relate the problem
+of computing pointwise robustness of these networks to that of computing the
+maximum norm ball with a fixed center that can be contained in a non-convex
+polytope. This is a challenging problem in general, however we show that there
+exists an efficient algorithm to compute this for polyhedral complices. Further
+we show that piecewise linear neural networks partition the input space into a
+polyhedral complex. Our algorithm has the ability to almost immediately output a
+nontrivial lower bound to the pointwise robustness which is iteratively improved
+until it ultimately becomes tight. We empirically show that our approach generates
+distance lower bounds that are tighter compared to prior work, under moderate
+time constraints.
+
+1
+
+Introduction
+
+The problem we consider in this paper is that of finding the `p -pointwise robustness of a neural net
+with ReLU nonlinearities with respect to general `p norms. The pointwise robustness of a neural net
+classifier, f , for a given input point x0 is defined as the smallest distance from x0 to the decision
+boundary [1]. Formally, this is defined as
+ρ(f, x0 , p) := inf { ≥ 0 | f (x) 6= f (x0 ) ∧ ||x − x0 ||p = }.
+x
+
+(1)
+
+Computing the pointwise robustness is the central problem in certifying that neural nets are robust to
+adversarial attacks. Exactly computing this quantity this problem has been shown to be NP-complete
+in the `∞ setting [12], with hardness of approximation results under the `1 norm [31]. Despite these
+hardness results, multiple algorithms have been devised to exactly compute the pointwise robustness,
+though they may require exponential time in the worst case. As a result, efficient algorithms have
+also been developed to give provable lower bounds to the pointwise robustness, though these lower
+bounds may be quite loose.
+In this work, we propose an algorithm that initially outputs a nontrivial lower bound to the pointwise
+robustness and continually improves this lower bound until it becomes tight. Although our algorithm
+has performance which is theoretically poor in the worst case, we find that in practice it provides a
+fundamental compromise between the two extremes of complete and incomplete verifiers. This is
+Preprint. Under review.
+
+useful in the case where a lower-bound to the pointwise robustness is desired under a moderate time
+budget.
+The central mathematical problem we address is how to find the largest `p ball with a fixed center
+contained in the union of convex polytopes. We approach this by decomposing the boundary of such
+a union into convex components. This boundary may have complexity exponential in the dimension
+in the general case. However, if the polytopes form a polyhedral complex, an efficient boundary
+decomposition exists and we leverage this to develop an efficient algorithm to compute the largest `p
+ball with a fixed center contained in the polyhedral complex. We connect this geometric result to the
+problem of computing the pointwise robustness of piecewise linear neural networks by proving that
+the linear regions of piecewise linear neural networks indeed form a polyhedral complex. Further, we
+leverage the lipschitz continuity of neural networks to both initialize at a nontrivial lower bound, and
+guide our search to tighten this lower bound more quickly.
+Our contributions are as follows:
+• We provide results on the boundary complexity of polyhedral complices, and use these
+results to motivate an algorithm to compute the the largest interior `p ball centered at x0 .
+• We prove that the linear regions of piecewise linear neural networks partition the input space
+into a polyhedral complex.
+• We incorporate existing incomplete verifiers to improve our algorithm and demonstrate that
+under a moderate time budget, our approach can provide tighter lower bounds compared to
+prior work.
+
+2
+
+Related Work
+
+Complete Verifiers: We say that an algorithm is a complete verifier if it exactly computes the
+pointwise robustness of a neural network. Although this problem is NP-Complete in general under
+an `∞ norm [12], there are two main algorithms to do so. The first leverages formal logic and
+SMT solvers to generate a certificate of robustness [12], though this approach only works for `∞
+norms. The second formulates certification of piecewise linear neural networks as mixed integer
+programs and relies on fast MIP solvers to be scalable to reasonably small networks trained on
+MNIST [25, 9, 15, 7, 5]. This approach extends to the `2 domain so long as the mixed integer
+programming solver utilized can solve linearly-constrained quadratic programs [25]. Both of these
+approaches are fundamentally different than our proposed method and do not provide a sequence of
+ever-tightening lower bounds. Certainly each can be used to certify any given lower bound, or provide
+a counterexample, but the standard technique to do so is unable to reuse previous computation.
+Incomplete Verifiers: There has been a large body of work on algorithms that output a certifiable
+lower bound on the pointwise robustness. We call these techniques incomplete verifiers. These
+approaches employ a variety of relaxation techniques. Linear programming approaches admit efficient
+convex relaxations that can provide nontrivial lower bounds [33, 31, 20, 8]. Exactly computing the
+Lipschitz constant of neural networks has also been shown to be NP-hard [28], but overestimations
+of the Lipschitz constant have been shown to provide lower bounds to the pointwise robustness
+[18, 31, 24, 10, 27]. Other relaxations, such as those leveraging semidefinite programming, or
+abstract representations with zonotopes are also able to provide provable lower bounds [19, 17]. An
+equivalent formulation of this problem is providing overestimations on the range of neural nets, for
+which interval arithmetic has been shown useful [29, 30]. Other approaches generate lower bounds by
+examining only a single linear region of a PLNN [22, 6], though we extend these results to arbitrarily
+many linear regions. These approaches, while typically more efficient, may provide loose lower
+bounds.
+
+3
+
+Centered Chebyshev Ball
+
+Notations and Assumptions
+Before we proceed, some notation. A convex polytope is a bounded subset of Rn that can be described
+as the intersection of a finite number of halfspaces. The polytopes we study are described succinctly
+by their linear inequalities (i.e., they are H-polytopes), which means that the number of halfspaces
+2
+
+Figure 1: Three potential configurations of a nonconvex polytope. Note that only the rightmost
+nonconvex polytope forms a polyhedral complex.
+
+defining the polytope, denoted by m, is at most O(poly(n)), i.e. polynomial in the ambient dimension.
+If a polytope P is described as {x | Ax ≤ b}, an (n − k)-face of P is a nonempty subset of P defined
+as the set {x | x ∈ P ∧ A= x = b= } where A= is a matrix of rank k composed of a subset of the
+rows of A, and b= is the corresponding subset of b. We use the term facet to refer to an (n − 1) face
+of P. We define the boundary δP of a polytope as the union of the facets of P. We use the term
+nonconvex polytope to describe a subset of Rn that can be written as a union of finitely many convex
+polytopes, each with nonempty interior. The `p -norm ball of size t centered at point x0 is denoted
+by Btp (x0 ) := {x | ||x − x0 ||p ≤ t}. The results presented hold for `p norms for p ≥ 1. When the
+choice of norm is arbitrary, we use || · || to denote the norm and Bt (x0 ) to refer to the corresponding
+norm ball.
+Centered Chebyshev Balls: Working towards the case of a union of polytopes, we first consider the
+simple case of fitting the largest `p -ball with a fixed center inside a single polytope. The uncentered
+version of this problem is typically referred to as finding the Chebyshev center of a polytope and
+can be computed via a single linear program [3, 2]. When the center is fixed, this can be viewed as
+computing the projection to the boundary of the polytope. In fact, in the case for a single polytope,
+it suffices to compute the projection onto the hyperplanes containing each facet. See Appendix A
+for further discussion computing projections onto polytopes. Ultimately, because of the polytope’s
+geometric structure, the problem’s decomposition is straightforward. This theme of efficient boundary
+decomposition will prove to hold true for polyhedral complices as shown in the following sections.
+Now, we turn our attention to the case of finding a centered Chebyshev ball inside a general nonconvex
+polytope. This amounts to computing the projection to the boundary of the region. The key idea
+here is that the boundary of a nonconvex polytope can be described as the union of finitely many
+(n − 1)-dimensional polytopes; however, the decomposition may be quite complex. We define this
+set formally as follows:
+Definition 1. The boundary of a non-convex polytope P is the largest set T ⊆ P such that every
+point x ∈ T satisfies the following two properties:
+(i) There exists an 0 and a direction u such that for all  ∈ (0, 0 ), there exists a neighborhood
+centered around x + u that is contained in P .
+(ii) There exists an η0 and a direction v such that for all η ∈ (0, η0 ), x + ηv ∈
+/ P.
+The boundary is composed of finitely many convex polytopes, and computing the projection to a
+single convex polytope is an efficiently computable convex program. If there exists an efficient
+decomposition of the boundary of a nonconvex polytope into convex sets, then a viable algorithm
+is to simply compute the minimal distance from x0 to each component of the boundary and return
+the minimum. Unfortunately, for general nonconvex polytopes, there may not be an efficient convex
+decomposition. See Theorem B.1 in Appendix B.
+However, there do exist classes of nonconvex polytopes that admit a convex decomposition with size
+that is no larger than the description of the nonconvex polytope itself. To this end, we introduce the
+following definition (see also Ch. 5 of [34]):
+Definition 2. A nonconvex polytope, described as the union of elements of the set P = {P1 , ..., Pk }
+forms a polyhedral complex if, for every Pi , Pj ∈ P with nonempty intersection, Pi ∩ Pj is a face
+of both Pi and Pj . Additionally, for brevity, if a pair of polytopes P, Q, form a polyhedral complex,
+we say they are PC. (See Figure 1 for examples.)
+3
+
+We can now state our main theorem concerning the computation of the centered Chebyshev ball
+within polyhedral complices:
+Theorem 3.1. Given a polyhedral complex,
+P P = {P1 , . . . Pk }, where Pi is defined as the intersection of mi closed halfspaces.
+S Let M = i mi , and let x0 be a point contained by at least one such
+Pi . Then the boundary of i∈[k] Pi is represented by at most M (n − 1)-dimensional polytopes.
+There exists an algorithm that can compute this boundary in O(poly(n, M, k)) time.
+Returning to our desired application, we now prove a corollary about the centered Chebyshev ball
+contained in a union of polytopes.
+Corollary 3.2. Given a collection, P = {P1 , . . . Pk } that meets all the conditions outlined in
+theorem 3.1, with the boundary of P computed as in theorem 3.1, the centered Chebyshev ball
+around x0 has size
+t := inf ||x − x0 ||
+(2)
+x∈T
+
+This can be solved by at most M linear programs in the case of `∞ norm, or at most M linearly
+constrained quadratic programs in the case of the `2 -norm.
+Graph Theoretic Formulation: Theorem 3.1 and its corollary provide a natural algorithm to
+computing the centered Chebyshev ball of a polyhedral complex: compute the convex components
+of the boundary and then compute the projection to each component. However one can hope to
+do better; one may not have to compute the distance to every boundary facet. In the absence of
+other information, one must at least compute the projection to every facet intersecting the centered
+Chebyshev ball.
+A more natural way to view this problem is as a search problem along a bipartite graph, composed of
+a set of left vertices F , right vertices P and edges E connecting them. The left vertices represent all
+facets inside the polyhedral complex, and the right vertices represent all n-dimensional polytopes of
+the polyhedral complex. An edge between a face F and a polytope P exists iff F is a facet of P. In
+other words, the graph of interest is composed of the terminal elements of the face lattice and their
+direct ancestors. For any polyhedral complex, the left-degree of this graph is at most 2.
+The boundary facets, T , are some subset of F and our algorithm aims only to return the minimal
+distance between x0 and T . Since x0 exists in at least one polytope P0 ∈ P, we can search
+locally outward starting at P0 . For reasons that will become clear later, we rephrase distances as
+‘potentials’ and aim to find the element of T which has the lowest potential. We define the pointwise
+potential, some function mapping Rn → R as φ(y), and the facet-wise potential, mapping facets to
+R as Φ(F) := miny∈F φ(y). For now, one can view φ as the distance function under an `p norm,
+φ(y) := ||x0 − y||.
+Algorithm 1 presents a technique to compute the centered Chebyshev ball as a search algorithm. The
+idea is to maintain a set of ‘frontier facets’ in a priority queue, ordered by their potential Φ. At each
+iteration we pop the frontier facet with minimal potential. Since this facet has left degree 2, at most
+one of its neighboring polytopes must not have yet been explored. If such a polytope exists, for each
+of its facets we add the facet and its potential Φ to the priority queue. A formal proof of correctness
+for using the distance function as a potential can be found in Corollary C.3 in Appendix C.
+Iteratively Constructing Polyhedral Complices
+Finally, we note an approach by which polyhedral complices may be formed that will become useful
+when we discuss PLNN’s in the following section. We present the following three lemmas which
+relate to iterative constructions of polyhedral complices. Informally, they state that given any polytope
+or pair of polytopes which are PC, a slice with a hyperplane or a global intersection with a polytope
+generates a set that is still PC.
+Lemma 3.3. Given an arbitrary polytope P := {x | Ax ≤ b} and a hyperplane H := {x | cT x =
+d} that intersects the interior of P, the two polytopes formed by the intersection of P and the each of
+closed halfpsaces defined by H are PC.
+
+Lemma 3.4. Let P, Q be two PC polytopes and let HP , HQ be two hyperplanes that define two
++
+−
+closed halfspaces each, HP+ , HP− , HQ
+, HQ
+. If P ∩ Q ∩ HP = P ∩ Q ∩ HQ then the subset of the
++
+−
++
+−
+four resulting polytopes {P ∩ HP , P ∩ HP , Q ∩ HQ
+, Q ∩ HQ
+} with nonempty interior forms a
+polyhedral complex.
+4
+
+: Algorithm 1: GeoCert
+Input: point x0 , potential Φ;
+Initialization: ;
+// Setup priority queue, seen-polytope set;
+Q ← [ ]; C ← {P(x0 )};
+// Handle first polytope’s facets;
+for Facet F ∈ N (P(x0 )) do
+Q.push((Φ(F), F));
+end
+// Loop until boundary is popped;
+while Q 6= ∅ do
+F ← Q.pop();
+if F is boundary then
+Return F;
+else
+for P ∈ N (F) \ C do
+for F ∈ N (P ) do
+Q.push((Φ(F), F);
+end
+end
+end
+end
+b
+
+b
+
+b
+
+Figure 2: Pseudocode for GeoCert (left) and a pictorial representation of the algorithm’s behavior
+on a simple example (right). The facets colored belong to the priority queue, with red and black
+denoting adversarial facets and non-adversarial facets respectively. Once the minimal facet in the
+queue is adversarial, the algorithm stops.
+
+And the following will be necessary when we handle the case where we wish to compute the pointwise
+robustness for the image classification domain, where valid images are typically defined as vectors
+contained in the hypercube [0, 1]n .
+Lemma 3.5. Let P = {P1 , . . . Pk } be a polyhedral complex and let D be any polytope. Then the
+set {Pi ∩ D | Pi ∈ P} also forms a polyhedral complex.
+
+4
+
+Piecewise Linear Neural Networks
+
+We now demonstrate an application of the geometric results described above to certifying robustness
+of neural nets. We only discuss networks with fully connected layers and ReLU nonlinearities, but
+our results hold for networks with convolutional and skip layers as well as max and average pooling
+layers. Let f be an arbitrary L-layer feed forward neural net with fully connected layers and ReLU
+nonlinearities, where each layer f (i) : Rni−1 → Rni has the form
+f
+
+(i)
+
+
+(x) =
+
+W i x + bi ,
+if i = 1
+(i−1)
+Wi σ(f
+(x)) + bi , if i > 1
+
+(3)
+
+where σ refers to the element-wise ReLU operator. And we denote the final layer output f (L) (x) as
+f (x). We typically use the capital F (x) to refer to the maximum index of f : F (x) := arg maxi fi (x).
+We define the decision region of f at x0 as the set of points for which the classifier returns the same
+label as it does for x0 : {x | F (x) = F (x0 )}.
+It is important to note is that f (i) (x) refers to the pre-ReLU activations of the ith layer of f . Let m be
+PL−1
+the number of neurons of f , that is m = i=1 ni . We describe a neuron configuration as a ternary
+vector, A ∈ {−1, 0, 1}m , such that each coordinate of A corresponds to a particular neuron in f . In
+5
+
+particular, for neuron j,
+
++1, if neuron j is ‘on’
+Aj = −1, if neuron j is ‘off’
+
+0,
+if neuron j is both ‘on’ and ‘off’
+
+(4)
+
+Where a neuron being ‘on’ corresponds to the pre-ReLU
+activation is at least zero, ‘off’ corresponds to the preReLU being at most zero, and if a neuron is both on and
+off its pre-ReLU activation is identically zero. Further
+each neuron configuration corresponds to a set
+PA = {x | f (x) has neuron activation consistent with A}
+The following have been proved before, but we include
+them to introduce notational familiarity:
+Lemma 4.1. For a given neuron configuration A, the
+following are true about PA ,
+(i) f (i) (x) is linear in x for all x ∈ PA .
+(ii) PA is a polytope.
+This lets us connect the polyhedral complex results from
+the previous section towards computing the pointwise robustness of PLNNs. Letting the potential φ be the `p
+distance, we can apply Algorithm 1 towards this problem.
+Theorem 4.2. The collection of PA for all A, such that
+PA has nonempty interior forms a polyhedral complex.
+Further, the decision region of F at x0 also forms a polyhedral complex.
+
+Figure 3: Pictorial reference for proof of
+Theorem 4.2. (Top Left) A single Relu
+activation partitions the input space into
+two PC polytopes (Top Right) as additional activations are added at the first
+layer, the collection is still PC by Lemma
+3.4. (Bottom Left) as the next layer of
+activations are added, the partitioning is
+linear within each region created previously and PC at the previous boundaries,
+thus still PC. (Bottom Right) the partitioning due to all subsequent layers preserves PC-ness by induction.
+
+In fact, except for a set of measure zero over the parameter
+space, the facets of each such linear region correspond to
+exactly one ReLU flipping configurations:
+Corollary 4.3. If the network parameters are in general
+position and A, B are neuron configurations such that
+dim(PA ) = dim(PB ) = n and their intersection is of dimension (n − 1), then A, B have hamming
+distance 1 and their intersection corresponds to exactly one ReLU flipping signs.
+
+5
+
+Speedups
+
+While our results in section 3 hold for general polyhedral complices, we can boost the performance
+of GeoCert by leveraging additional structure of PLNNs. As the runtime of GeoCert hinges upon the
+total number of iterations and time per iteration, we discuss techniques to improve each.
+Improving Iteration Speed Via Upper Bounds
+At each iteration, GeoCert pops the minimal element from the priority queue of ‘frontier facets’
+and, using the graph theoretic lens, considers the facets in its two-hop neighborhood. Geometrically
+this corresponds to popping the minimal-distance facet seen so far, considering the polytope on the
+opposite side of that facet and computing the distan1ce to each of its facets. In the worst case, the
+number of facets of each linear region is the number of ReLU’s in the PLNN. While computing
+the projection requires a linear or quadratic program, as we will show, it is usually not necessary to
+compute a convex program for each every nonlinearity at every iteration.
+If we can quickly guarantee that a potential facet is infeasible within the domain of interest then
+we avoid computing the projection exactly. In the image classification domain, the domain of valid
+images is usually the unit hypercube. If an upper bound on the pointwise robustness, U , is known,
+then it suffices to restrict our domain to D0 := BU (x0 ) ∩ D. This aids us in two ways: (i) if the
+6
+
+hyperplane containing a facet does not intersect D0 then the facet also does not intersect D0 ; (ii) a
+tighter restriction on the domain allows for tighter bounds on pre-ReLU activations. For point (i), we
+observe that computing the feasibility of the intersection of a hyperplane and hyperbox is linear in
+the dimension and hence many facets can very quickly be deemed infeasible. For point (ii), if we
+can guarantee ReLU stability, by Corollary 4.3, then we can deem the facets corresponding to the
+each stable ReLU as infeasible. ReLU stability additionally provides tighter upper bounds on the
+Lipschitz constants of the network.
+Any valid adversarial example provides an upper bound
+on the pointwise robustness. Any point on any facet on
+the boundary of the decision region also provides an upper
+bound. In Appendix F, we describe a novel tweak that
+can be used to generate adversarial examples tailored to
+be close to the original point. Also, during the runtime of
+Geocert, any time a boundary facet is added to the priority
+queue, we update the upper bound based on the projection
+magnitude to this facet.
+Improving Number of Iterations Via Lipschitz Overestimation
+When one uses distance as a potential function, if the true
+pointwise robustness is ρ, then GeoCert must examine
+Figure 4: Piecewise Linear Regions of a every polytope that intersects B (x ). This is necessary
+ρ 0
+2D toy network. The dotted line repre- in the case when no extra information is known about the
+sents the decision boundary.
+polyhedral complex of interest. However one can incorporate the lipschitz-continuity of a PLNN into the potential
+function φ to reduce on the number of linear regions examined. The main idea is that as the network
+has some smoothness properties, any facet for which the classifier is very confident in its answer
+must be very far from the decision boundary.
+Theorem 5.1. Letting F (x0 ) = i, and gj (x) = fi (x)−fj (x) and an upper bound Lj on the lipschitz
+g (y)
+continuity of gj , using φlip (y) := ||x0 − y|| + minj6=i jLj as a potential for GeoCert maintains its
+correctness in computing the pointwise robustness.
+The intuition behind this choice of potential is that it biases the set of seen polytopes to not expand
+too much in directions for which the distance to the decision boundary is guaranteed to be large. This
+effectively is able to reduce the number of polytopes examined, and hence the number of iterations
+of geocert, while still maintaining complete verification. A critical bonus of this approach is that
+it allows one to ’warm-start’ GeoCert with a nontrivial lower bound that will only increase until
+becoming tight at termination. A more thorough discussion on upper-bounding the lipschitz constant
+of each gj can be found in [31].
+
+6
+
+Experiments
+
+Exactly Computing the Pointwise Robustness: Our first experiment compares the average pointwise robustness bounds provided by two complete verification methods, GeoCert and MIP, as well as
+an incomplete verifier, Fast-Lip. The average `p distance returned by each method and the average
+required time (in seconds) to achieve this bound are provided in Table 1. Verification for `2 and `∞
+robustness was conducted for 128 random validation images for two networks trained on MNIST.
+Networks are divided into binary and non-binary examples. Binary networks were trained to distinguish a subset of 1’s and 7’s from the full MNIST dataset. All networks were trained with `1 weight
+regularization with λ set to 2 × 10−3 . All networks are composed of fully connected layers with
+ReLU activations. The layer-sizes for the two networks are as follows: i) [784, 10, 50, 10, 2] termed
+70NetBin and ii) [784, 20, 20, 2] termed 40NetBin.
+From Table 1, it is clear that Geocert and MIP return the exact robustness value while Fast-Lip
+provides a lower bound. While the runtimes for MIP are faster than those for GeoCert, they are
+within an order of magnitude. In these experiments, we record the timing when each method is left
+to run to completion; however, in the experiment to follow we demonstrate that GeoCert provides a
+non-trivial lower bound faster than other methods.
+7
+
+Table 1: (Left) Times (seconds) to compute exact pointwise robustness on binary MNIST networks for
+both the `2 and `∞ settings over 128 random examples. Boldface corresponds to the exact pointwise
+robustness. (Right) Provable lower bounds for a binary MNIST network under a fixed 300s time limit.
+Note that GeoCert initializes at the bound provided by Fast-Lip and continually improves. Boldface
+here corresponds to the tightest lower bound found. Note that our algorithm outperforms all previous
+methods for this task.
+70NetBin
+40NetBin
+Method
+Method `p
+Dist.
+Time
+Dist.
+Time
+Ex. Fast-Lip GeoCert MIP
+Fast-Lip
+0.136 0.010 0.132
+0.007
+1
+1.782
+2.251
+2.0
+GeoCert `∞ 0.191 1.300 0.187
+4.031
+2
+1.319
+1.356
+1.0
+0.191 0.947 0.187
+0.689
+MIP
+1.501
+1.620
+1.0
+3
+Fast-Lip
+1.289 0.010 1.319
+0.013
+4
+1.975
+2.499
+2.0
+GeoCert `2
+1.555 4.789 1.607 21.852
+5
+1.871
+2.402
+2.0
+MIP
+1.555 4.030 1.607
+5.831
+
+Figure 5: Original MNIST images (top) compared to their minimal distance adversarial examples as
+found by GeoCert (middle) and the minimal distortion adversarial attacks found by Carlini-Wagner
+`2 attack. The average `2 distortion found by GeoCert is 31.6% less that found by Carlini-Wagner.
+Best Lower Bound Under a Time Limit: To demonstrate the ability of GeoCert to provide a
+lower bound greater than those generated by incomplete verifiers and other complete verifiers under
+a fixed time limit we run the following experiment. On the binary MNIST dataset, we train a
+network with layer sizes [784, 20, 20, 20, 2] using Adam and a weight decay of 0.02 [13]. We
+allow a time limit of 5 minutes per example, which is not sufficient for either GeoCert or MIP to
+complete. As per the codebase associated with [25], for MIP we use a binary search procedure
+of  = [0.5, 1.0, 2.0, 4.0, . . . ] to verify increasingly larger lower bounds. We also compare against
+the lower bounds generated by Fast-Lip [31], noting that using the Lipschitz potential described in
+Section 5 allows GeoCert to immediately initialize to the bound produced by Fast-Lip. We find that in
+all examples considered, after 5 minutes, GeoCert is able to generate larger lower-bounds compared
+to MIP. Table 1 demonstrates these results for 5 randomly chosen examples.
+
+7
+
+Conclusion
+
+This paper presents a novel approach towards both bounding and exactly computing the pointwise
+robustness of piecewise linear neural networks for all convex `p norms. Our technique differs
+fundamentally from existing complete verifiers in that it leverages local geometric information to
+continually tighten a provable lower bound. Our technique is built upon the notion of computing the
+centered Chebyshev ball inside a polyhedral complex. We demonstrate that polyhedral complices
+have efficient boundary decompositions and that each decision region of a piecewise linear neural
+network forms such a polyhedral complex. We leverage the Lipschitz continuity of PLNN’s to
+immediately output a nontrivial lower bound to the pointwise robustness and improve this lower
+bound until it ultimately becomes tight.
+8
+
+We observe that mixed integer programming approaches are typically faster in computing the exact
+pointwise robustness compared to our method. However, our method provides intermediate valid
+lower bounds that are produced significantly faster. Hence, under a time constraint, our approach is
+able to produce distance lower bounds that are typically tighter compared to incomplete verifiers and
+faster compared to MIP solvers. An important direction for future work would be to optimize our
+implementation so that we can scale our method to larger networks. This is a critical challenge for all
+machine learning verification methods.
+
+References
+[1] Osbert Bastani, Yani Ioannou, Leonidas Lampropoulos, Dimitrios Vytiniotis, Aditya Nori, and
+Antonio Criminisi. Measuring neural net robustness with constraints. May 2016.
+[2] N D Botkin and V L Turova-Botkina. An algorithm for finding the chebyshev center of a convex
+polyhedron. Appl. Math. Optim., 29(2):211–222, March 1994.
+[3] Stephen Boyd and Lieven Vandenberghe. Convex Optimization. Cambridge University Press,
+March 2004.
+[4] Nicholas Carlini and David A. Wagner. Towards evaluating the robustness of neural networks.
+CoRR, abs/1608.04644, 2016.
+[5] Chih-Hong Cheng, Georg Nührenberg, and Harald Ruess. Maximum resilience of artificial
+neural networks. April 2017.
+[6] Francesco Croce, Maksym Andriushchenko, and Matthias Hein. Provable robustness of relu
+networks via maximization of linear regions. arXiv preprint arXiv:1810.07481, 2018.
+[7] Souradeep Dutta, Susmit Jha, Sriram Sankaranarayanan, and Ashish Tiwari. Output range
+analysis for deep feedforward neural networks. In NASA Formal Methods Symposium, pages
+121–138. Springer, 2018.
+[8] Ruediger Ehlers. Formal verification of Piece-Wise linear Feed-Forward neural networks. May
+2017.
+[9] Matteo Fischetti and Jason Jo. Deep neural networks and mixed integer linear optimization.
+Constraints, 23:296–309, 2018.
+[10] Matthias Hein and Maksym Andriushchenko. Formal guarantees on the robustness of a classifier
+against adversarial manipulation. May 2017.
+[11] N Karmarkar. A new polynomial-time algorithm for linear programming. Combinatorica,
+4(4):373–395, December 1984.
+[12] Guy Katz, Clark Barrett, David Dill, Kyle Julian, and Mykel Kochenderfer. Reluplex: An
+efficient SMT solver for verifying deep neural networks. February 2017.
+[13] Diederik P Kingma and Jimmy Ba. Adam: A method for stochastic optimization. arXiv preprint
+arXiv:1412.6980, 2014.
+[14] Alexey Kurakin, Ian Goodfellow, and Samy Bengio. Adversarial machine learning at scale.
+arXiv preprint arXiv:1611.01236, 2016.
+[15] Alessio Lomuscio and Lalit Maganti. An approach to reachability analysis for feed-forward
+relu neural networks. arXiv preprint arXiv:1706.07351, 2017.
+[16] Aleksander Madry, Aleksandar Makelov, Ludwig Schmidt, Dimitris Tsipras, and Adrian Vladu.
+Towards deep learning models resistant to adversarial attacks. arXiv preprint arXiv:1706.06083,
+2017.
+[17] Matthew Mirman, Timon Gehr, and Martin Vechev. Differentiable abstract interpretation for
+provably robust neural networks. In Jennifer Dy and Andreas Krause, editors, Proceedings of
+the 35th International Conference on Machine Learning, volume 80 of Proceedings of Machine
+Learning Research, pages 3578–3586, Stockholmsmässan, Stockholm Sweden, 2018. PMLR.
+9
+
+[18] Aditi Raghunathan, Jacob Steinhardt, and Percy Liang. Certified defenses against adversarial
+examples. arXiv preprint arXiv:1801.09344, 2018.
+[19] Aditi Raghunathan, Jacob Steinhardt, and Percy Liang. Certified defenses against adversarial
+examples. January 2018.
+[20] Hadi Salman, Greg Yang, Huan Zhang, Cho-Jui Hsieh, and Pengchuan Zhang. A convex
+relaxation barrier to tight robustness verification of neural networks. CoRR, abs/1902.08722,
+2019.
+[21] Alexander Schrijver. Theory of Linear and Integer Programming. John Wiley & Sons, July
+1998.
+[22] Sahil Singla and Soheil Feizi. Robustness certificates against adversarial examples for relu
+networks. CoRR, abs/1902.01235, 2019.
+[23] Richard P Stanley. An introduction to hyperplane arrangements. Geometric combinatorics,
+13:389–496, 2004.
+[24] Christian Szegedy, Wojciech Zaremba, Ilya Sutskever, Joan Bruna, Dumitru Erhan, Ian Goodfellow, and Rob Fergus. Intriguing properties of neural networks. December 2013.
+[25] Vincent Tjeng, Kai Xiao, and Russ Tedrake. Evaluating robustness of neural networks with
+mixed integer programming. November 2017.
+[26] Florian Tramèr, Alexey Kurakin, Nicolas Papernot, Ian Goodfellow, Dan Boneh, and Patrick McDaniel. Ensemble adversarial training: Attacks and defenses. arXiv preprint arXiv:1705.07204,
+2017.
+[27] Yusuke Tsuzuku, Issei Sato, and Masashi Sugiyama. Lipschitz-Margin training: Scalable
+certification of perturbation invariance for deep neural networks. February 2018.
+[28] Aladin Virmaux and Kevin Scaman. Lipschitz regularity of deep neural networks: analysis and
+efficient estimation. In Advances in Neural Information Processing Systems, pages 3835–3844,
+2018.
+[29] Shiqi Wang, Kexin Pei, Justin Whitehouse, Junfeng Yang, and Suman Jana. Efficient formal
+safety analysis of neural networks. CoRR, abs/1809.08098, 2018.
+[30] Shiqi Wang, Kexin Pei, Justin Whitehouse, Junfeng Yang, and Suman Jana. Formal security
+analysis of neural networks using symbolic intervals. In 27th {USENIX} Security Symposium
+({USENIX} Security 18), pages 1599–1614, 2018.
+[31] Tsui-Wei Weng, Huan Zhang, Hongge Chen, Zhao Song, Cho-Jui Hsieh, Duane Boning,
+Inderjit S Dhillon, and Luca Daniel. Towards fast computation of certified robustness for relu
+networks. arXiv preprint arXiv:1804.09699, 2018.
+[32] Yinyu Ye and Edison Tse. An extension of karmarkar’s projective algorithm for convex quadratic
+programming. Math. Program., 44(1):157–179, May 1989.
+[33] J Zico Kolter and Eric Wong. Provable defenses against adversarial examples via the convex
+outer adversarial polytope. November 2017.
+[34] Günter M Ziegler. Lectures on Polytopes. Graduate Texts in Mathematics. Springer-Verlag New
+York, 1 edition, 1995.
+
+10
+
+Ax ≤ b
+{x | kxkp ≤ t}
+x0
+b
+
+b
+
+Figure 6: Pictorial examples of computing the centered Chebyshev ball for the `2 , `∞ norms.
+
+A
+A.1
+
+Further discussion on Centered Chebyshev Balls
+Centered Chebyshev Ball of a Single Polytope
+
+Here we present a more thorough discussion of the case of computing a centered Chebyshev ball for
+a single polytope, as well as general formulations for projections onto polytopes under various `p
+norms.
+Consider a polytope P := {x | Ax ≤ b}. The problem of finding the the centered Chebyshev ball
+under an `p norm can written as the following optimization problem:
+max
+
+t
+
+(5)
+
+sup
+
+s.t.
+
+||v||≤1
+
+aTi (x0
+
++ tv) ≤ bi ∀i ∈ [m].
+
+As a brief aside, note that if the center x0 is not fixed, it is introduced as a variable in the optimization,
+and in general this requires a linear program to be solved. With a fixed center, each constraint can be
+rewritten as t||ai ||∗ ≤ bi − aTi x0 , for || · ||∗ being the dual norm of || · ||. Thus the program becomes
+max
+s.t.
+
+t
+
+t≤
+
+(6)
+aTi x0
+
+bi −
+||ai ||∗
+
+∀i ∈ [m]
+
+b −aT x
+
+which can be solved as taking the minimum over all i of i||ai i||∗ 0 . Understanding what is occurring
+here will be central to our theorems, so we decompose the above problem. Note that each constraint
+b −aT x
+aTi x ≤ bi defines a hyperplane, and i||ai i||∗ 0 denotes the `p distance from x0 to that hyperplane. In
+other words, this provides a lower bound on the `p distance to the facet of P generated by constraint i
+being tight. However, the minimum of these lower bounds must be tight for the constraint that bounds
+the centered Chebyshev ball and therefore it suffices to compute this lower bound everywhere. Finding
+the centered Chebyshev ball is equivalent to finding the minimum distance to each component of the
+boundary of P. An alternative, albeit more laborious, solution to finding the centered Chebyshev ball
+is to consider the minimal `p distance to δP directly by computing the `p distance to each facet of P
+and taking the minimum.
+A.2
+
+Projections onto Polytopes
+
+As our algorithm heavily relies on the ability to efficiently compute the projection to a facet, which
+is itself a polytope, we describe the general formulation here. Formally, provided a polytope
+11
+
+P := {x | Ax ≤ b} and a point x0 ∈
+/ P, we wish to compute minx∈P ||x0 − x||p . To compute this
+exactly, we decompose x in the minimum to x0 + v and optimize over v. This is a linear program in
+the `1 case, and a linearly constrained quadratic program in the `2 case. For `∞ we introduce n + 1
+auxiliary variables and 2n additional constraints:
+min
+
+t
+
+t,v
+
+(7)
+
+A(x0 + v) ≤ b
+t≥0
+−t · 1 ≤ v ≤ t · 1
+
+s.t.
+
+In the `1 case, we require 2n auxiliary variables:
+X
+min
+ti
+
+(8)
+
+(9)
+
+t,v
+
+s.t. A(x0 + v) ≤ b
+t≥0
+−ti ≤ vi ≤ ti
+
+∀i ∈ [n]
+
+(10)
+
+And in the case of the `2 -norm, the objective becomes quadratic while the constraints remain linear:
+X
+min
+vi2
+(11)
+v
+
+i
+
+s.t. A(x0 + v) ≤ b
+In both cases there exist polynomial time algorithms to solve these exactly and efficient implementations to solve these quickly in practice [11, 32]. Thus, we can solve the problem of finding the
+centered Chebyshev ball of a single polytope by solving the minimum distance to each facet, each
+formulated as an efficient LP or QP.
+A.3
+
+Notes on Hyperplanes
+
+Additionally we mention some cheap tricks that are useful when the polytopes of interest are (n − 1)dimensional. This implies that they lie entirely in some (n − 1)-dimensional affine subspace, say
+P ⊆ H for H := {x | aT x = b}. To compute a lower-bound on the projection of x0 onto P, one
+can compute the projection of x0 onto H, which can be done in linear time in the dimension:
+min
+t,v
+
+s.t.
+
+t
+
+(12)
+
+at (x0 + v) ≤ b
+||v|| = 1
+T
+
+x0
+Reformulating the first constraint, one has t = b−a
+. This quantity is minimzed when aT v is
+aT v
+maximized, and max||v||=1 aT v is, by definition, the dual norm || · ||∗ of a. Hence the projection
+
+onto a hyperplane is
+
+b−aT x0
+||a||∗ .
+
+In section 5, we mention that it is efficient to compute the feasibility of H ∩ B for B being some
+hyperbox defined by coordinate lower and upper bound vectors, l and u as {x | l ≤ x ≤ u}. We
+can decompose a into its nonnegative components a+ and its negative components a− such that
+H = {x | (a+ +a− )T x = b}. Then, by interval arithmetic, we notice that the set {c | aT x ∀x ∈ B}
+is the interval [(a+ )T l + (a− )T u, (a− )T l + (a+ )T u]. Iff b is contained in this interval, then the
+intersection H ∩ B is nonempty.
+12
+
+P1
+P2
+
+P3
+
+Pk
+
+Figure 7: Pictorial aid for Theorem B.1
+
+B
+
+Proofs about Boundary Decompositions
+
+Here we prove our theorems about efficient boundary decomposotions of polyhedral complices. First
+we state a hardness result that claims that for arbitrary nonconvex polytopes, the size of the smallest
+convex decomposition of the boundary may be exponential in the dimension.
+Theorem B.1. There exists a collection of polytopes P = {P1 , . . . Pk }Seach with dimension n
+and 2 constraints (for a total of 2k constraints) such that the boundary of i∈[k] Pi is composed of
+Ω(k n−1 ) convex components.
+Proof. We prove this by construction. We rely crucially on a result from hyperplane arrangements.
+It is a classical result that given a choice in placement of m hyperplanes in Rn , the P
+maximum
+n
+number of regions that can be generated is given, in closed form as R(n, m) := 1 + j=1 m
+j
+[23]. Leveraging this, we construct our polytopes. Let P1 = {x | 0 ≤ x1 ≤ 1} such that it has
+exactly two facets, where each facet is an (n − 1) flat. Let A be an arrangement of k − 1 hyperplanes
+in Rn−1 that generates a maximal number of regions. Each one of the regions generated by A
+is certainly a polytope contained in Rn−1 , so since there are finitely many polytopes each with
+finitely many vertices, let  be the minimal distance between any two vertices within the same
+polytope. Let the ith hyperplane in A be defined as {x ∈ Rn−1 | aTi x = bi }. Then we can define
+Pi+1 := {x ∈ Rn | bi − /3 ≤ (0, ai )T x ≤ bi + /3}. Thus the (n − 1)-flat that describes each
+facet of P1 remains broken up into R(n − 1, k − 1) = Ω(k n−1 ) disjoint convex components. Each
+of these exists on the boundary of the union of P.
+Now we can restate and prove our theorems regarding the efficient boundary decompositions of
+polyhedral complices.
+Theorem 3.1. Given a polyhedral complex,
+P P = {P1 , . . . Pk }, where Pi is defined as the intersection of mi closed halfspaces.
+Let
+M
+=
+i mi , and let x0 be a point contained by at least one such
+S
+Pi . Then the boundary of i∈[k] Pi is represented by at most M (n − 1)-dimensional polytopes.
+There exists an algorithm that can compute this boundary in O(poly(n, M, k)) time.
+S
+Proof. Let Z = i∈[k] Pi . Let Fi,j refer to the j th facet of Pi , and let Fi be the set of facets of Pi
+S
+that are not facets of any other Pj . Then, letting T = i∈[k] Fi . We claim that the boundary of Z is
+exactly T .
+Without loss of generality, assume that Z is a single connected component, in the topological sense. If
+Z were multiple connected components, then we could handle each of them in turn. To demonstrate
+that T is the boundary of Z we need to show that for any x ∈ T that points (i), (ii) of definition 1
+hold, and that condition (ii) fails for any point y ∈ Z \ T .
+13
+
+To demonstrate point (i) above, we note that x ∈ Pi for at least one Pi . By assumption each Pi has
+a nonempty interior, and thus contains some point y ∈ Pi for which a neighborhood N (y) ⊂ Pi .
+Thus if Pi is given as an H-polytope of the form {x | Ax ≤ b}, then Ay < b. Since Pi is
+convex, then any convex combination between x, y is contained in Pi , and in fact for all λ ∈ [0, 1),
+A(λx + (1 − λ)y) < b. Certainly any point z such that Az < b has a neighborhood N (z) contained
+in P1 .
+Proving that x ∈ T satisfies point (ii) is more complicated. Let Q be a facet containing x, and let
+Pi be a polytope containing Q. Let H be the hyperplane containing Q. Then for all j 6= i, Pi ∩ Pj
+is either the empty set or resides in a face of Pj of dimension at most (n − 2). A standard result
+about polytopes states that if Q is an (n − 1) dimensional polytope, it can be defined by the set
+{x | A= x = b= ∧ A− x ≤ b− } where A= has rank 1. Additionally there exists a point y ∈ Q such
+that A− y < b [21]. Then every point along the open line segment (x, y) is contained in the relative
+interior of Q, and by definition cannot be contained in any face of Pj for j 6= i. Further, since the
+relative interior of Q is open, every point w along (x, y) is contained in a neighborhood N (w), with
+restriction to H N (w)|H . Then certainly N (w)|H ⊆ relInt(Q) ⊂ Q , which implies that N (w)|H
+is disjoint from ∪j6=i Pj .
+
+Let H − be the closed halfspace defined by H containing Pi , then N (w) ∩ (H − )c is both open and
+disjoint from Pi in addition to being disjoint from Pj for all j 6= i. Let c be a point in N (w) ∩ Z c ,
+such that the open line segment between (w, c) is contained in N (w) ∩ Z c . We now restrict our
+attention to the 2-dimensional linear subspace of Rn containing x, w, c, denoted as V . Each Pj|V is
+either the emptyset or a polytope containing x. Let Uj|V be the set of these 2-d restricted polytopes
+containing x, and note that each Uj|V intersects with Pi|V only at x. Because each element of U|V
+intersects with Pi|V only at x, there must a hyperplane Hj , (line in V ) passing through x separating
+each element of U|V and c. Let Hj+ be the closed halfspace defined by Hj containing c. Then ∩Hj
+defines a polytope S that only intersects with Pi at x. The line segment between (x, c) lies inside S
+and thus does not intersect any Pj|V for j 6= i. (x, c) also lies strictly on one side of the hyperplane
+H that Q resides in, and thus every point along (x, c) is not contained in Pi . Hence, (x, c) is not
+contained in Z, as desired.
+Finally, to show that there is no point y in the boundary of Z that not contained in T . It suffices
+to show that Z \ T is open, as if this were the case, then any y ∈ Z \ T would be contained in a
+neighborhood N (y) ⊆ Z \ T and thus fail to meet condition (ii) of the definition of the boundary.
+Let x ∈ Z \ T . Then x is contained in the interior of some Pi or it is contained in a facet contained in
+both Pi , Pj , for some i, j. This follows from the fact that x either is contained in a facet of some Pi
+or not. If not, x is strictly in the interior of some Pi and is contained in a neighborhood N (x) ⊂ Pi .
+If so, then x needs to be contained in a facet, Fi,j of Pi and Pj , else x ∈ T . Either x is contained in
+the relative interior of Fi,j or not. If so, then a neighborhood of x, N (x), is bisected by Fi,j , where
+each half is contained in either Pi or Pj . If not, then x needs to be contained in a facet of some Pm ,
+for m 6= i, j, because it needs to be contained in some other facet of Pi . This other facet needs to be
+a facet of some Pm because otherwise it would be contained in T and certainly Pi ∩ Pj = Fi,j such
+that m 6= j. We
+ repeat this process until we have enumerated all facets containing x, of which there
+are at most k2 . There are then at most k polytopes containing N (x), and their union contains N (x).
+Thus Z \ T is open.
+To demonstrate that T is represented by at most M polytopes and that T can be computed in
+O(poly(n, M, k)) time, note that each polytope Pi has at most mi facets, and not all P
+of these are
+included in T . Thus the number of facets, and hence polytopes, that define T is at most mi = M .
+Enumerating each of these polytopes can be done in time linear in M . To compare if two facets are
+equivalent, one can find a point y ∈ Fi,j such that it is in the relative interior of Fi,j . Such a point can
+be found in polynomial time using a linear program. Since P is a polyhedral
+complex, if such a y is
+
+contained in Fi,j and Fi0 ,j 0 then Fi,j = Fi0 ,j 0 . There are at most M
+facets,
+so
+T can be determined
+2
+in time polynomial in n, M, k.
+
+14
+
+C
+
+Proofs of Correctness for GeoCert
+
+In this section we expand upon the graph theoretic interpretation of GeoCert and prove its correctness.
+Recall the setup: given a polyhedral complex P, which can be viewed as a bipartite graph of ndimensional polytopes and their (n − 1)-dimensional faces, some of which are labeled as ‘boundary’
+facets, our goal is to return the boundary facet which admits minimal distance to a fixed point x0 .
+In our primary discussion we replaced ’distance’ with a ‘potential’ function. Formally, we let our
+pointwise potential to be some function φ : Rn → R, and the facetwise potential, Φ : P(Rn ) →
+(R ∪ {+∞}) to be defined as
+(
++∞,
+if F = ∅
+Φ(F) = min φ(y), otherwise
+(13)
+y∈F
+
+Certainly, letting φ(y) := ||y − x0 || and finding the boundary facet with minimal potential Φ is
+equivalent to finding the facet with minimal distance to x0 . However, this choice of φ is not the
+only valid one for which GeoCert will provide the corect answer to the centered Chebyshev ball
+problem. To this end, we provide a sufficient condition on a pointwise potential function φ such that
+GeoCert will still provide the correct answer. We can then demonstrate that any potential function
+satisfying this property will cause GeoCert to return the correct answer. Finally we can show that the
+`p -distance potential satisfies these properties, and that the lipschitz potential described in Section 5
+also satisfies this property.
+Definition 3. Given a potential function φ defined only on the set of points contained in a polyhedral
+complex P, we let ηv (t) := φ(x0 + t · v) for any vector v and any positive scalar t > 0. Then we
+δη
+say that φ is ray monotonic if for every v, t > 0,
+(t) ≥ 0.
+δt
+With this definition in hand, we can prove a structural invariant of the operation of GeoCert that will
+directly prove the claim of correctness.
+Lemma C.1. For any polyhedral complex P point x0 , and ray-monotonic potential φ, let Fi be the
+facet popped at the ith iteration of GeoCert. Then for all i < j, Φ(Fi ) ≤ Φ(Fj ).
+Proof. We proceed by induction. In the base case we only consider the first and second iteration.
+Supposing without loss of generality that x0 is contained in exactly one polytope P ∈ P. Then the
+initial set of facets added to the priority queue is exactly the set of facets of P, which we denote as
+{FP (1), FP (2), . . . , FP (k)} which are ordered by potential, without loss of generality.
+
+At the first iteration, FP (1) is popped, and a new polytope S is opened. The set of facets of added
+to the priority queue Q, also ordered by potential, is {FS (1), FS (2), . . . , FS (k)}. We would like
+to show that whichever facet F2 , is popped at iteration 2 must have that Φ(F2 ) ≥ Φ(FP (1)). As,
+by definition, for all i > 1, Φ(FP (1)) ≤ Φ(FP (i)) it suffices to show that any facet FS of S
+added to the priority queue must have Φ(FP (1)) ≤ Φ(FS ). For any facet of FS , we have that
+Φ(FS ) := min φ(y). Letting ymin be an element of the argmin of this minimum, we utilize the
+y∈FS (1))
+
+ray-monotonic property of φ. We let v = ymin − x0 and note that Φ(FS ) = φ(x0 + v). As ymin is
+not contained in the interior of P, there must exist some t ∈ [0, 1] such that x0 + tv lies in a facet of
+P. By definition Φ(FP (1)) ≤ φ(x0 + tv) ≤ φ(x0 + v), where the first inequality comes from the
+definition of Φ, and the second inequality comes from the ray-monotonicity of φ. This concludes the
+base case.
+The inductive step follows by a similar argument. Suppose the claim holds up to iteration i − 1. At
+the ith iteration we pop facet Fi , open up a previously-unseen polytope S, and add a set of facets
+each corresponding to another unseen polytope: hence no potential facet added has been previously
+added to the priority queue. Again, considering any new facet FS and the argmin of its potential
+ymin ∈ arg min φ(y)
+y∈FS
+
+we note that ymin is not contained in the interior of any of the set of seen polytopes C. Then again
+letting ymin = x0 + v, there exists some t ∈ (0, 1] such that x0 + tv lies in some facet G that is
+contained in the priority queue at iteration (i − 1). Since Φ(F(i−1) ) ≤ Φ(G) ≤ φ(ymin ) = Φ(FS ),
+we maintain our structural invariant and the proof is complete.
+15
+
+Theorem C.2. For a fixed polyhedral complex P, a fixed input point x0 and a potential function φ
+that is ray-monotonic, GeoCert returns a boundary facet with minimal potential Φ.
+Proof. Leveraging Lemma C.1, we note that since we only pop facets in non-decreasing order, the
+first ‘boundary facet’ that is popped will be a boundary facet with minimal potential.
+Now we simply need to show that both choices of potential function discussed satisfy the raymonotonicity property.
+Corollary C.3. The distance potential, φlp (y) := ||y − x0 || satisfies ray-monotonicity and Geocert
+using this as a potential returns the minimal distance boundary facet.
+Proof. We fix a vector v and any scalar t > 0. We define
+ηv (t) := ||(x0 + tv) − x0 || = |t| · ||v|| = t · ||v||
+Then
+
+(14)
+
+δηv
+= ||v|| ≥ 0 for all t > 0, v.
+δt
+
+Corollary C.4. For a PLNN f : Rn → Rk and a point x0 , let i := arg maxj fj (x0 ). Let DR(x0 ) =
+{x | arg maxj f (z) = i}. Define gj (x) = fi (x) − fj (x) for all j 6= i, and let Lj be a bound on the
+`q lipschitz constant of gj :
+|gj (x) − gj (y)| ≤ Lj ||x − y||p
+
+∀x, y ∈ DR(x0 )
+
+(15)
+
+then the potential
+φlip,j (y) := ||y − x0 ||p +
+
+gj (y)
+Lj
+
+φlip (y) := min φlip,j (y)
+j
+
+(16)
+(17)
+
+satisfies ray-monotonicity and Geocert using this as a potential returns the minimal distance boundary
+facet.
+Proof. We prove the ray-monotonicity for each φj and then demonstrate that this holds for their
+minimum as well. First we note that for every point x ∈ DR(x0 ) has that gj (x) ≥ 0. Fixing some
+φj , v, and t > 0 such that x0 + tv ∈ DR(x0 ), we consider
+ηj,v (t) := φlip,j (x0 + tv) = t||v||p +
+
+gj (x0 + tv) − gj (x0 )
+Lj
+
+(18)
+
+which has derivative
+1 δgj
+δηj,v
+(x0 + tv) = ||v||p +
+(x0 + tv)
+δt
+Lj δt
+1
+= ||v||p +
+hv, ∇gj (x0 + tv)i
+Lj
+1
+≥ ||v||p −
+||V ||p |||∇gj (x0 + tv)||q
+Lj
+≥ ||v||p (1 − 1)
+≥0
+
+(19)
+(20)
+(21)
+(22)
+(23)
+
+Where the first inequality comes from Hölder’s inequality, and the second inequality comes from
+the fact that the norm of the gradient is bounded by the lipschitz constant. And since the minimum
+of monotonically increasing functions is also monotonically increasing, φ is ray-monotonic. This
+implies that GeoCert returns the minimal potential facet. However, note that along any boundary facet
+Fbound , there exists a j such that gj (y) = 0∀y ∈ Fbound . Since each gj (y) ≥ 0 for all y ∈ DR(x0 )
+for any y ∈ Fbound , φ(y) = ||x0 − y||p . In other words, this potential function is equivalent to the `p
+potential along the decision boundary. Hence the first ‘boundary facet’ popped is the boundary facet
+with minimal `p distance, as desired.
+16
+
+Remarks: Recall that as a subroutine, GeoCert using φlip as a potential, must compute Φlip (F)
+for each possible facet F to be added to the priority queue. This amounts to solving the following
+optimization problem
+
+gj (y) 
+Φlip (F) := min ||y − x0 ||p + min
+(24)
+y∈F
+j6=i Lj
+Along each piecewise linear region of a PLNN, certainly f is a linear function, as is gj . Hence,
+computing the minimum of φlip,j across a facet requires as much computation time as computing
+the `p projection to a facet. Since minj6=i gj (y) is a pointwise minimum and hence not convex,
+computing Φlip is no longer computable by a single convex program. However one can minimize
+this for each φlip,j and return the overall minimum. This now requires multiple convex programs
+per facet. We find that (i) using a warm-start for our optimizations allows the second-through-final
+to finish much more quickly than the initial optimization, and (ii) a variant of GeoCert can be used
+where the facet-wise potential is replaced with a polytope-wise potential. Under this formulation, the
+number of optimizations per polytope with m constraints goes from m, in the case of the `p potential,
+to m + (k − 1) where k is the number of logits: we simply need to compute the feasibility of each
+facet (m linear programs), to determine the neighbors of the right vertices in the graph, and (k − 1)
+optimizations to compute the polytope-wise potential.
+Finally, we remark about the efficient computation of Lj . Under a fixed domain D, if a lower and
+upper bound to each input to each ReLU of the neural net is known, a nontrivial upper bound to each
+Lj can be computed with as much computation as is required by eight forward passes through the
+PLNN [31]. Indeed, by leveraging φlip as a potential, one can effectively propagate the lower-bound
+to pointwise robustness as computed by Fast-Lip: instead of computing a certifiable lower bound
+only on f evaluated at x0 , as Fast-Lip does, the certifiable lower bound is now computed across
+every facet in the ‘frontier set’ which expands outwards as GeoCert runs. This allows for Fast-Lip to
+converted into continually increasing lower bound.
+
+D
+
+Polyhedral Complex Properties
+
+Here we will restate and prove the lemmas regarding iterative construction of polyhedral complices,
+and other useful tools when considering the centered Chebyshev ball contained in a polyhedral
+complex.
+Lemma 3.3. Given an arbitrary polytope P := {x | Ax ≤ b} and a hyperplane H := {x | cT x =
+d} that intersects the interior of P, the two polytopes formed by the intersection of P and the each of
+closed halfpsaces defined by H are PC.
+Proof. Let H+ := {x | cT x ≥ d} and H− := {x | cT x ≤ d}, with P + := P ∩ H+ and
+P − := P ∩ H− . Then each of P + , P − are polytopes with nonempty interior and their intersection
+is exactly P ∩ H, which is a face of both P + , P − .
+Lemma 3.4. Let P, Q be two PC polytopes and let HP , HQ be two hyperplanes that define two
++
+−
+closed halfspaces each, HP+ , HP− , HQ
+, HQ
+. If P ∩ Q ∩ HP = P ∩ Q ∩ HQ then the subset of the
++
++
++
+four resulting polytopes {P ∩ HP , P ∩ HP+ , Q ∩ HQ
+, Q ∩ HQ
+} with nonempty interior forms a
+polyhedral complex.
+Proof. Let F = P ∩ Q, which by definition is a face of both P, Q. Without loss of generality we
++
+can align the hyperplanes HP , HQ such that F ∩ HQ
+= F ∩ HP+ . For ease of notation, we’ll let
++
++
+−
++
+−
+P denote P ∩ HP , and similarly for P , Q , Q . If HP does not intersect the interior of P, then
+exactly one of P + , P − has empty interior and can be ignored. Otherwise, by lemma 3.3, P + , P − are
+PC, and likewise for Q+ , Q− . To handle the cross-terms we proceed by cases. Letting S = F ∩ HP ,
+we handle the following four cases: (i) S = ∅, (ii) S is a face of F , (iii) S = F , or (iv) none of the
+above.
+(i): In the case that S = ∅, then either P + ∩ F or P − ∩ F is empty. Likewise for Q+ ∩ F, Q− ∩ F .
+Assume without loss of generality that P + ∩ F = Q+ ∩ F = ∅. Then certainly P + is disjoint from
+Q and therefore both Q+ , Q− . Likewise for the interaction between Q+ and P − , P + . Finally, since
+S = ∅, F is a face of both P − and Q− and P − ∩ Q− = F , hence they are PC.
+17
+
+Q
+P
+
+HP
+
+HQ
+
+HQ+
+
+HP+
+
+HQ−
+
+HP−
+
+Figure 8: Pictorial aid for Lemma 3.4.
+(ii): In the case that S is a face of F , we label this face G. First note that F needs to be fully contained
+by either F ∩ HP+ or F ∩ HP− . Thus F is either a face of P + or P − , where we can assume without
+loss of generality that it is a face of P − . Similarly, assume F is a face of Q− , implying that P − and
+Q− are PC. By this assumption, P + ∩ F = G. Note that G is a face of P + .Since G is a face of F , it
+is also a face of Q− , and P + ∩ Q− = G, which is a face of each of them and therefore P + and Q−
+are PC. Likewise for Q+ and P − . Finally note that since P + ∩ F = Q+ ∩ F = G, implying that
+P + ∩ Q+ = G, hence P + and Q+ are PC.
+
+(iii): If S = F , then we can assume without loss of generality that P − = P and P + = F , and
+similarly for Q. Then since Q+ = P + = F they do not have nonempty interior and can be ignored.
+By definition P − and Q− are PC, and P − , Q+ are as well. (iv): In the final case, S is neither the
++
+−
+emptyset, F , nor a face of F . Then F ∩ HQ
+and F ∩ HQ
+are both nonempty polytopes with the
++
++
+same dimensionality as F . Letting S = F ∩ HQ , and defining S − likewise, note that S is a face of
+S + , S − , by the same argument used in 3.3. Since F is a face of P, S + is a face of P + and likewise
+for Q+ . And since P + ⊆ P, P + ∩ Q+ ⊆ P ∩ Q = F . But P + ∩ F = S + and Q+ ∩ F = S + , thus
+P + ∩ Q+ = S + . Hence P + and Q+ are PC. Likewise for P − and Q− . Since P + ∩ Q− = S and S
+is a face of S + , S − , it is a face of both P + , Q− and the two are PC. Likewise for P − and Q+ .
+Lemma 3.5. Let P = {P1 , . . . Pk } be a polyhedral complex and let D be any polytope. Then the
+set {Pi ∩ D | Pi ∈ P} also forms a polyhedral complex.
+T
+Proof. Letting Hj be the hyperplanes that compose D, i.e., D = j Hj . Then it suffices to show
+that {Pi ∩ Hj | Pi ∈ P} is a polyhedral complex, as we can repeat this iteratively for each Hj . This
+is equivalent to stating that for each Pi , Pj ∈ P with nonempty intersection, Pi ∩ Hj and Pj ∩ Hj
+are PC. This follows from a direct application of Lemma 3.4.
+Lemma D.1. Let P, Q be polytopes whose intersection is (n − d) dimensional, for some d ≥ 2, and
+let x0 ∈ P, with Bt (x0 ) the largest `p -norm ball centered at x0 contained in P ∪ Q. Then Bt (x0 ) is
+contained entirely in P.
+Proof. First we state an equivalent representation of Bt (x0 ),
+[
+Bt (x0 ) =
+Bd (z) for d = (t − ||x0 − z||)
+
+(25)
+
+{z | ||x0 −z||≤t}
+
+Certainly the ⊆ inclusion holds by setting z = x0 and the ⊇ inclusion holds by the triangle inequality.
+Now let’s assume that P ∩ Q is nonempty and contained in an (n − 2)-dimensional linear subspace,
+H. Suppose for the sake of contradiction that r > 0 for
+r := sup t − ||x − x0 ||
+x∈P∩Q
+
+and z is defined as some point in P ∩ Q that attains this supremal distance. Such a z must exist
+because P ∩ Q is closed. Then Br (z) ⊆ Bt (x0 ) ⊆ (P ∪ Q) ⊆ H. But Br (z) is contains some `2
+ball, regardless of our choice of norm, contradicting the previous chain of inclusions. Thus r ≤ 0,
+indicating that Bt (x0 ) ⊆ P.
+18
+
+E
+
+Geometry of Piecewise Linear Neural Networks
+
+In this appendix we restate and prove our theorems regarding the geometry of PLNN’s. Specifically,
+we prove our lemma which describes that each ReLU configuration defines a polytope and, in general
+position, its facets correspond to exactly one ReLU being flipped. Then we prove that the decision
+region forms a polyhedral complex.
+E.1
+
+Computing the linear region of neural networks
+
+First we prove this lemma:
+Lemma 4.1. For a given neuron configuration A, the following are true about PA ,
+(i) Unless PA = Rn or ∅, there exists a neuron configuration B such that PA ∩ PB 6= ∅.
+(ii) PA is a polytope, and for all layers i, f (i) (x) is linear in x for all x ∈ PA .
+Proof. Item (i): This is trivial as certainly every point in the domain corresponds to at least one
+c
+neuron configuration. If both PA and PA
+are not the empty set, then their intersection is nonempty.
+c
+But PA is composed of a union of at least one piecewise linear region, at least one of which must
+intersect PA .
+Item (ii): This is easy to see by simply writing down the polytope PA and its corresponding linear
+function. For neuron configuration A, we partition A into A1 , A2 , . . . Al−1 , with Ai corresponding
+to the neuron configuration at the ith layer. Then letting Λi be a fixed matrix to replace each ReLU in
+the network, defined as Λi := diag(Ai ) we note that
+
+W i x + bi ,
+if i = 1
+(i)
+f (x) =
+Wi σ(Λi )(f (i−1) (x)) + bi , if i > 1
+
+Hence, as σ(Λi ) is constant across all points with neuron configuration A, f is a composition of linear
+functions and must be linear everywhere with that neuron configuration. To define the polytope PA ,
+we note that each neuron adds one linear constraint to the polytope. Let us write down each of these
+constraints exactly. Since each f (i) (x) is linear, it can be written as Vi x+ci for some Vi , ci . Recalling
+that f (i) (x) is the input to the ith ReLU layer, the constraints are of the form f (i) (x) ? 0 where
+? is the comparator ≥, ≤, = for Ai,j being 1, −1, 0 respectively. This can be encoded efficiently
+by multiplying the lefthand side by −Λi , so the total constraint becomes Λi (Vi x + ci ) ≥ 0. We
+remark that Λi can be computed with a single forward pass of the network, and each Vi and ci can be
+computed with a two matrix multiplications, one of which is a diagonal matrix.
+
+E.2
+
+PLNN’s Form Polyhedral Complices
+
+We can now prove our main theorem regarding the linear regions of a PLNN.
+Theorem 4.2. The collection of PA for all A, such that PA has nonempty interior forms a polyhedral
+complex. Further, the decision region of F at x0 also forms a polyhedral complex.
+Proof. Let Pi,j denote the set of polytopes generated by neuron configurations of all neurons in
+layer k < i, and the first j neurons in layer i. Let Pi,0 refer to the set of polytopes generated by
+neuron configurations from all neurons in layer k < i. We’ll prove the theorem by induction across i,
+with an inner induction on j.
+As a base case, consider only the first layer f (1) (x). Examining only neuron j of the first layer,
+note that f (1) (x)j = W1,j x + b1,j implying that the, unless W1,j = 0, the set of inputs x for which
+f (1) (x)j = 0 is exactly a hyperplane, which we shall denote Hj . Then we can perform a second,
+interior, induction across the neurons of the first layer of f .
+The first neuron in the first layer separates Rn into two closed halfspaces, such that P1,1 is PC. Now
+assume that P1,k is PC. Consider now the addition of the (k + 1)th neuron to generate P1,k+1 .
+In particular, if P1,k is generated by considering the arrangement of hyperplanes H1 , . . . Hk , then
+19
+
+P1,k+1 is P1,k with the addition of hyperplane Hk+1 . Letting PQ be two PC polytopes in P1,k ,
+we can let Hk+1 define HP and HQ and apply lemma 3.4 to demonstrate that the polytopes generated
+by this intersection remain PC. This concludes the base case of the outer induction.
+Now let’s assume that for any layer k, Pk,0 is a polyhedral complex. Consider the difference between
+(k)
+Pk,0 and Pk,1 . Let G1 refer to the set of points x for which f1 (x) = 0, i.e. the first neuron of
+(k)
+layer k has pre-ReLU value exactly zero. Now by 4.1 part ??, f (x)1 is linear in each PA ∈ Pk,0 .
+Thus for each such PA , G1 ∩ PA is either the emptyset or a hyperplane, HA . Any two polytopes
+PA , PB contained in Pk,0 with nonempty intersection, by inductive assumption, must be PC. If
+HA ∩ F 6= ∅, then certainly G1 ∩ PB 6= ∅ and thus there must be some hyperplane HB such that
+HB = PB ∩ G1 . Since F ∩ G1 = HA ∩ F and F ∩ G1 = HB ∩ F , we meet the criteria to apply
+lemma 3.4 and thus the polytopes generated by the addition of G1 remain PC.
+To conclude the proof of the first statement in the theorem, assume that Pk,j is PC. Then consider
+the addition of the (j + 1)th neuron of layer k. Let Gj+1 refer to the set of points for which
+(k)
+(k)
+fj+1 (x) = 0. Note that fj+1 is linear across each PA ∈ Pk,0 , since we just as well could have
+initially incorporated the (j + 1)th neuron of this layer instead of the first one. Consider any pair
+of polytopes PA , PB ∈ Pk,j with nonempty intersection. These must be PC, and in particular
+their union must either be fully contained in some PC ∈ Pk,0 or not. If so, then there exists some
+hyperplane HC such that Gj+1 ∩ PC = HC ∩ PC and thus PA ∩ PB ∩ Gi = PA ∩ PB ∩ HC so we
+satisfy the criteria to apply lemma 3.4. If there is no such PC , then PA ∩ PB must be a facet of each
+of them, F . Then we can mimic the argument in the previous paragraph to show that the polytopes
+generated by the addition of Gj+1 remain PC.
+Finally, we need to prove that the decision region of F at x0 forms a polyhedral complex. Let Q
+be the collection of linear regions of F that have a nonempty intersection with the decision region
+of F at x0 . As any subset of a polyhedral complex is also a polyhedral complex, Q is certainly a
+polyhedral complex. Let F (x0 ) = i and let gj = {x|fi (x) ≥ fj (x)}.
+T For each linear region of f , gj
+is a halfspace. The decision region of F at x0 is exactly {Qi ∩ ( j6=i gj | Qi ∈ Q}. It suffices to
+show that for a single j, {Qi ∩ gj (x)) | Qi ∈ Q} is still a polyhedral complex, as we can iterate over
+all j 6= i. Then for a fixed j and any Qi , Qk ∈ Q with nonempty intersection, and letting gj (P) be
+the hyperplane defining gj (x) for the linear region P, we note that P ∩ Q ∩ gj (P) = P ∩ Q ∩ gj (Q).
+This is exactly the criteria required to apply lemma 3.4, which maintains that the pair of polytopes P
+and Q lying in the decision region are PC. This holds for every pair of polytopes in Q with nonempty
+intersection, so Q ∩ gj is a polyhedral complex, and hence so is the entire decision region of F at
+x0 .
+In fact, the following corollary demonstrates that except in extreme cases, the facets of each linear
+region correspond to exactly one neuron flipping configurations.
+Corollary 4.3. If the network parameters are in general position and A, B are neuron configurations
+such that dim(PA ) = dim(PB ) = n and their intersection is of dimension (n − 1), then A, B have
+hamming distance 1 and their intersection corresponds to exactly one ReLU flipping signs.
+Proof. As both PA and PB are of full dimension, no coordinate of the neuron configurations A, B
+can be zero. Under the assumption of general position of the network parameters, the halfspace
+that defines each polytope constraint lies in a different (n − 1)-dimensional affine subspace, hence
+each facet corresponds to exactly one neuron. Indeed, each facet of each linear region’s polytope
+corresponds to at exactly one ReLU constraint being set to equality. Since dim(PA ∩ PB ) = n − 1
+and since PA , PB are PC, PA , PB must be a facet of each of them. This facet is a linear region of
+the network as well, corresponding to a neuron configuration C that is identical to A, B, but with
+some coordinate set to zero. As A 6= B, and the neuron configuration C has exactly one zero, it must
+be the case that the hamming distance between A and B is exactly one, corresponding to exactly one
+ReLU flipping signs.
+
+F
+
+An Approach For Computing Tighter Upper Bounds
+
+As mentioned in Section 5, maintaining a nontrivial upper bound on the pointwise robustness
+accelerates the runtime of GeoCert by restricting the domain we have to search. This has a twofold
+20
+
+benefit as (i) this allows us to quickly reject potential facets as infeasible by checking if their
+containing hyperplane intersects the restricted domain, and (ii) allows for tighter pre-ReLU activation
+bounds to be computed. This latter point allows for potential facets to be rejected without the
+computation of their projection as Corollary 4.3 implies that neurons that are stable within a domain
+do not correspond to any facets inside that domain.
+Fortunately, there has been an explosion in the field of computing upper bounds to the pointwise
+robustness, typically described as adversarial examples. In this section we present a variant of the
+attack techniques presented in [14, 26, 16, 4]. Our goal is to be able to compute a reasonably tight
+upper bound for a single example in a very short amount of time. In general, attack techniques are
+viewed as optimizations over some perturbation that aims to maximize a loss that is large when the
+classifier makes a mistake. We discuss two popular existing adversarial attacks from an .
+One attack, known as PGD performs gradient ascent directly on the loss ands projects at each iteration
+back onto a set of allowable perturbations. Letting the allowable set of perturbations be Bp (0) and
+the domain of valid images be D, then the allowable set of adversarial perturbations for image x0 is
+D0 := Bp (0) ∩ {x − x0 | x ∈ D}. PGD seeks to solve the maximization problem
+max0 L(x0 + δ, y)
+(26)
+δ∈D
+
+where L(·, y) is some loss that is small when the network classifies its argument as class y, and large
+otherwise. The PGD iterations become 
+
+δ + = ΠD0 δ + η∇δ L(x0 + δ, y)
+(27)
+Notice that the goal of PGD is not to induce a minimal distortion adversarial example, but simply to
+minimize classifier accuracy within a fixed threat model. We also note several tricks that are useful
+in practice such as a random initialization of δ ∈ D0 and repeated restarts to find more successful
+adversarial examples.
+An alternative attack, pioneered by Carlini and Wagner [4] does aim to produce low-distortion
+adversarial examples by simply letting D0 := {x − x0 | x ∈ D} and solving the optimization
+min0 ||δ||
+(28)
+δ∈D
+
+s.t.F (x0 + δ) 6= F (x0 )
+
+(29)
+Where the adversarial constraint is typically put into the lagrangified form with the best multiplier
+found via binary search:
+min
+
+δ∈D 0
+
+||δ|| + λG(x0 + δ)
+
+(30)
+
+Where G is a function that is zero everywhere where the classifier makes a mistake, and positive
+elsewhere. This is then solved with a standard gradient descent algorithm. The main critique of this
+method is that the binary search over the hyperparameter λ dictates the runtime be several times
+longer than PGD. Note that during this optimization, once the intermediate iterate is outside x0 ’s
+decision region, the gradient steps push the intermediate iterate radially inwards. However, unless
+step sizes are tuned nicely, many iterations with the radially-inward direction may be taken.
+We provide a tweak to PGD that allows one to quickly generate adversarial examples that are
+optimized to have minimal distortion. This technique is as follows: for example image x0 , compute
+many random perturbations on x0 , and run PGD with a large domain on each of these randomly
+perturbed starting points. Once complete, collect each of the examples for which the classifier makes
+a mistake. Run a binary search along the line connecting the example and the starting point x0 , in
+an attempt to ‘project’ onto the decision boundary. Return the minimal-distance of these projected
+adversarial attacks as the adversarial example for x0 .
+The binary search step requires only forward passes and is significantly faster than the several gradient
+steps required by CW to ‘project’ back to the decision boundary. This allows one to effectively
+perform a quick PGD attack, which is almost always successful under a sufficiently large threat
+model, but also attain a successful adversarial attack with small distortion.
+We note, the emphasis here is not on attaining the minimal distortion adversarial example, but
+on speed and guaranteed success. Our goal is to very quickly find an adversarial example that is
+incentivized to be close to the original point and will almost always succeed.
+21
+
+Algorithm 1: Fast Upper Bound
+Input classifier f , input x0 , initSize ν, ballSize 
+lr η, numIter n, numRand r
+numBin k
+for i ∈ [r] do
+ui = ∞
+δi ← RandBall(ν)
+for iter ∈ [numIter] do
+δi ← Π (δi + η∇f (x + δi ))
+end for
+if f (x + δi ) 6= f (x) then
+δi ← BinSearch(f, x0 , δi , k)
+ui ← ||δi ||p
+end if
+end for
+RETURN mini ui
+Algorithm 2: BinSearch
+Input classifier f , point x0
+perturbation δ, numIter n
+lo ← 0, hi ← 1
+for i ∈ [n] do
+if f (x0 + (lo + hi)/2 · δ) 6= f (x0 ) then
+hi ← (lo + hi)/2
+else
+lo ← (lo + hi)/2
+end if
+end for
+RETURN hi · δ
+
+G
+
+Extra Experiments
+
+G.1
+
+Extra Experiment 1:
+
+To reiterate, in the worst case our algorithm may need to explore an exponential number of polytopes.
+Here, we provide results which seem to suggest that for PLNNs trained on MNIST the number of
+polytopes is well removed from the worst case. Figure 9 shows the number of polytopes encountered
+in an `∞ ball of size t around several random images. (Note that the relevant network in this case
+is the 70NetBin network described previously.) The distance t is increased until the region around
+each of the sampled points includes the entire domain for MNIST (i.e. [0, 1] hypercube). Thus, the
+maximum number of polytopes that could be encountered for this problem is very loosely upper
+bounded by 73. On average, the number of polytopes encountered for this example would be closer to
+6 as the average distance is 0.19. This plot seems to suggest that the number of polytopes encountered
+is much smaller than the worst case possibility.
+G.2
+
+Extra Experiment 2:
+
+Additionally, we run experiments to investigate the benefit of using a Lipschitz overapproximation
+based potential versus the standard `p distance. Table ?? demonstrates the average number of
+encountered polytopes when verifying pointwise robustness.
+
+22
+
+Figure 9: Evidence that verification for trained nets does not follow worst case behavior
+
+Table 2: Average number of polytopes explored until computing exact pointwise robustness across
+binary (1’s and 7’s only) MNIST, and full MNIST, and two architectures. The average is over 50
+random examples. This demonstrates the benefit of leveraging the Lipschitz upper bound in the
+potential function.
+Binary MNIST Full MNIST
+Potential
+φlip
+φp
+
+70Net
+
+40Net
+
+70Net
+
+40Net
+
+4.2
+5.1
+
+15.3
+25.6
+
+9.7
+17.1
+
+27.5
+90.3
+
+23
+
+

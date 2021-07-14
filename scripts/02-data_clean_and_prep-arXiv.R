@@ -46,3 +46,35 @@ write_csv(arxiv_open_data_results, 'outputs/data/arxiv_open_data_results.csv')
 arxiv_open_data_results %>% 
   count(is_open_data, is_open_code)
 
+
+#### Pre-pandemic data ####
+
+# Read in the raw data. 
+arxiv_2019_text_sentences <- 
+  oddpub::pdf_load(here::here("outputs/control-data/text-arXiv/")) # Requires closing backslash
+arxiv_2019_sample <- 
+  read_csv("outputs/control-data/arxiv_2019_sample.csv")
+
+
+#### Identify open data markers ####
+arxiv_2019_open_data_results <- 
+  oddpub::open_data_search(arxiv_2019_text_sentences)
+
+# Join the dataset with the metadata with the dataset with the open markers
+arxiv_2019_open_data_results <- 
+  arxiv_2019_open_data_results %>% 
+  mutate(id = str_remove(article, "\\.txt"))
+
+arxiv_2019_open_data_results <- left_join(arxiv_2019_sample, arxiv_2019_open_data_results, by = "id")
+
+# Convert TRUE/FALSE in ODDPub output to 1/0
+arxiv_2019_open_data_results$is_open_code <- as.integer(arxiv_2019_open_data_results$is_open_code)
+arxiv_2019_open_data_results$is_open_data <- as.integer(arxiv_2019_open_data_results$is_open_data)
+
+# Save it 
+write_csv(arxiv_2019_open_data_results, 'outputs/control-data/arxiv_2019_open_data_results.csv')
+
+
+# Counts
+arxiv_2019_open_data_results %>% 
+  count(is_open_data, is_open_code)

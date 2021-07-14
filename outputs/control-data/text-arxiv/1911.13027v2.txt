@@ -1,0 +1,1490 @@
+Using performance analysis tools for
+parallel-in-time integrators
+Does my time-parallel code do what I think it does?
+
+arXiv:1911.13027v2 [cs.PF] 28 Aug 2020
+
+Robert Speck1 , Michael Knobloch1 , Sebastian Lührs1 , and Andreas Gocht2
+1
+
+2
+
+Jülich Supercomputing Centre
+Forschungszentrum Jülich GmbH
+52425 Jülich, Germany
+{m.knobloch, s.luehrs, r.speck}@fz-juelich.de
+Center of Information Services and High Performance Computing
+Zellescher Weg 12
+01069 Dresden, Germany
+andreas.gocht@tu-dresden.de
+
+Abstract. While many ideas and proofs of concept for parallel-in-time
+integration methods exists, the number of large-scale, accessible timeparallel codes is rather small. This is often due to the apparent or subtle
+complexity of the algorithms and the many pitfalls awaiting developers of
+parallel numerical software. One example of such a time-parallel code is
+pySDC, which implements, among others, the parallel full approximation
+scheme in space and time (PFASST). Inspired by nonlinear multigrid
+ideas, PFASST allows to integrate multiple time-steps simultaneously
+using a space-time hierarchy of spectral deferred corrections. In this paper we demonstrate the application of performance analysis tools to the
+PFASST implementation pySDC. Tracing the path we took for this work,
+we highlight the obstacles encountered, describe remedies and explain
+the sometimes surprising findings made possible by the tools. Although
+focusing only on a single implementation of a particular parallel-in-time
+integrator, we hope that our results and in particular the way we obtained them are a blueprint for other time-parallel codes.
+
+1
+
+Motivation
+
+With million-way concurrency at hand, the efficient use of modern high-performance computing systems has become one of the key challenges in computational
+science and engineering. New mathematical concepts and algorithms are needed
+to fully exploit these massively parallel architectures. For the numerical solution
+of time-dependent processes, recent developments in the field of parallel-in-time
+integration have opened new ways to overcome both strong and weak scaling
+limit of classical, spatial parallelization techniques. In [14], many of these techniques and their properties are presented and the community website3 provides
+3
+
+https://www.parallel-in-time.org
+
+2
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+a comprehensive list of references and we refer to both sources for a detailed
+overview of time-parallel methods and their applications. While many ideas,
+algorithms and proofs of concept exist in this domain, the number of actual
+large-scale time-parallel application codes or even stand-alone parallel-in-time
+libraries showcasing performance gains is still small. In particular, codes which
+can deal with parallelization in time as well as in space are rare. At the time
+of this writing, three main, accessible projects targeting this area are xbraid, a
+C/C++ time-parallel multigrid solver [23], RIDC, a C++ implementation of the
+revisionist integral deferred correction method [27], and at least two different implementations of PFASST, the “parallel full approximation scheme in space and
+time”. One major PFASST implementation is written in Fortran (libpfasst),
+another one in Python (pySDC).
+When running parallel simulations, benchmarks or just initial tests, one key
+question is whether the code actually does what it is supposed to do and/or
+what the developer thinks it does. While this may seem obvious to the developer, complex codes (like PFASST implementations) tend to introduce complex
+bugs. To avoid these, one may ask for example: How many messages were send,
+how many were received? Is there a wait for each non-blocking communication?
+Are the number of solves/evaluations/iterations reasonable? Moreover, even if
+the workflow itself is correct and verified, the developer or user may wonder
+whether the code is as fast as it can be: Is the communication actually nonblocking or blocking, when it should be? Is the waiting time of the processes as
+expected? Does the algorithm spend reasonable time in certain functions or are
+there inefficient implementations causing delays? Then, if all runs well, performing comprehensive parameter studies like benchmarking requires a solid workflow management and it can be quite tedious to keep track of what ran where,
+when and with what result. In order to address questions like these, advanced
+performance analysis tools can be used.
+The performance analysis tools landscape is manifold. Tools range from nodelevel analysis tools using hardware counters like LIKWID [37] and PAPI [36]
+to tools intended for large-scale, complex applications like Scalasca [16]. There
+are tools developed by the hardware vendors, e.g. Intel VTune [29] or NVIDIA
+nvprof [5] as well as community driven open source tools and tool-sets like ScoreP [22], TAU [33] or HPCToolkit [1]. Choosing the right tool depends on the task
+at hand and of course on the familiarity of the analyst with the available tools.
+It is the goal of this paper to present some of these tools and show their capabilities for performance measurements, workflows and bug detection for timeparallel codes like pySDC. Although we will, in the interest of brevity, solely focus
+on pySDC for this paper, our results and in particular the way we obtained them
+with the different tools can serve as a blueprint for many other implementations
+of parallel-in-time algorithms. While there are a lot of studies using these tools
+for classical parallelization strategies, their application in the context of parallelin-time integration techniques is new. Especially when different parallelization
+strategies are mixed, these tools can provide an invaluable help. We would like
+to emphasize that this paper is not about the actual results of pySDC, PFASST
+
+Using performance analysis tools for parallel-in-time integrators
+
+3
+
+or parallel-in-time integration, like the application, the parallel speedup or the
+time-to-solution, but on the benefits of using performance tools and workflow
+managers for the development and application of a parallel-in-time integrator.
+Thus, this paper is meant as a community service to showcase what can be done
+with a few standard tools from the broad field of HPC performance analysis. One
+specific challenge in this regard, however, is the programming language of pySDC.
+Most tools focus on more standard HPC languages like Fortran or C/C++. With
+the new release of Score-P used for this work, Python codes can now be analyzed
+as well, as we will show in this paper.
+In the next section we will briefly introduce the PFASST algorithm and
+describe its implementation in somewhat more detail. While the math behind a
+method may not be relevant for performance tools, understanding the algorithms
+at least in principle is necessary to give more precise answers to the questions
+the method developers may have. Section 3 is concerned with a more or less
+brief and high-level description of the performance analysis tools used for this
+project. Section 4 describes the endeavor of obtaining reasonable measurements
+from their application to pySDC, interpreting the results and learning from them.
+Section 5 contains a brief summary and an outlook.
+
+2
+
+A Parallel-in-Time Integrator
+
+In this section we briefly review the collocation problem, being the basis for
+all problems the algorithm presented here tries to solve in one way or another.
+Then, spectral deferred corrections (SDC, [9]) are introduced, which then lead to
+the time-parallel integrator PFASST [10]. This section is largely based on [4,34].
+2.1
+
+Spectral deferred corrections
+
+For ease of notation we consider a scalar initial value problem on the interval
+[t` , t`+1 ]
+ut = f (u),
+
+u(t` ) = u0 ,
+
+with u(t), u0 , f (u) ∈ R. We rewrite this in Picard formulation as
+Z
+
+t
+
+u(t) = u0 +
+
+f (u(s))ds,
+
+t ∈ [t` , t`+1 ].
+
+t`
+
+Introducing M quadrature nodes τ1 , ..., τM with t` ≤ τ1 < ... < τM = t`+1 , we
+can approximate the integrals from t` to these nodes τm using spectral quadrature like Gauss-Radau or Gauss-Lobatto quadrature, such that
+um = u0 + ∆t
+
+M
+X
+j=1
+
+qm,j f (uj ),
+
+m = 1, ..., M,
+
+4
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+where um ≈ u(τm ), ∆t = t`+1 − t` and qm,j represent the quadrature weights
+for the interval [t` , τm ] with
+∆t
+
+M
+X
+
+Z
+
+τm
+
+qm,j f (uj ) ≈
+
+f (u(s))ds.
+t`
+
+j=1
+
+We can now combine these M equations into one system of linear or non-linear
+equations with
+(IM − ∆tQf ) (u` ) = u0
+
+(1)
+
+where u` = (u1 , ..., uM )T ≈ (u(τ1 ), ..., u(τM ))T ∈ RM , u0 = (u0 , ..., u0 )T ∈ RM ,
+Q = (qi,j ) ∈ RM ×M is the matrix gathering the quadrature weights, IM is the
+identity matrix of dimension M and the vector function f is given by f (u) =
+(f (u1 ), ..., f (uM ))T ∈ RM . This system of equations is called the “collocation
+problem” for the interval [t` , t`+1 ] and it is equivalent to a fully implicit RungeKutta method, where the matrix Q contains the entries of the corresponding
+Butcher tableau. We note that for f (u) ∈ RN , we need to replace Q by Q ⊗ IN .
+Using SDC, this problem can be solved iteratively and we follow [18,38,30] to
+present SDC as preconditioned Picard iteration for the collocation problem (1).
+The standard approach to preconditioning is to define an operator which is easy
+to invert but also close to the operator of the system. One very effective option
+is the so-called ”LU trick”, which uses the LU decomposition of QT to define
+Q ∆ = UT
+
+for QT = LU,
+
+see [38] for details. With this we write
+(IM − ∆tQ∆ f ) (uk+1
+) = u0 + ∆t(Q − Q∆ )f (uk` )
+`
+
+(2)
+
+or, equivalently,
+uk+1
+= u0 + ∆tQ∆ f (uk+1
+) + ∆t(Q − Q∆ )f (uk` )
+`
+`
+
+(3)
+
+and the operator I − ∆tQ∆ f is then called the SDC preconditioner. Writing (3)
+line by line recovers the classical SDC formulation found in [9].
+2.2
+
+Parallel full approximation scheme in space and time
+
+We can assemble the collocation problem (1) for multiple time-steps, too. Let
+T
+u1 , ..., uL be the solution vectors at time-steps 1, ..., L and u = (u1 , ..., uL ) the
+full solution vector. We define a matrix H ∈ RM ×M such that Hu` provides
+the initial value for the ` + 1-th time-step. Note that this initial value has to
+be used at all nodes, see the definition of u0 above. The matrix depends on
+the collocation nodes and if the last node is the right interval boundary, i.e.
+τM = t`+1 as it is the case for Gauss-Radau or Gauss-Lobatto nodes, then it is
+simply given by
+H = (0, ..., 0, 1) ⊗ (1, ..., 1)
+
+T
+
+Using performance analysis tools for parallel-in-time integrators
+
+5
+
+Otherwise, H would contain weights for extrapolation or the collocation formula
+for the full interval. Note that for f (u) ∈ RN , we again need to replace H by H⊗
+IN . With this definition, we can assemble the so-called ”composite collocation
+problem” for L time-steps as
+C(u) := (ILM − IL ⊗ ∆tQF − E ⊗ H) (u) = u0 ,
+
+(4)
+
+T
+
+with u0 = (u0 , 0, ..., 0) ∈ RLM , the vector of vector functions F (u) = (f (u1 ),
+..., f (uL ))T ∈ RLM and where the matrix E ∈ RL×L has ones on the lower subdiagonal and zeros elsewhere, accounting for the transfer of the solution from
+one step to another.
+For serial time-stepping each step can be solved after another, i.e. SDC iterations (now called ”sweeps”) are performed until convergence on u1 , move to
+step 2 via H, do SDC there and so on. In order to introduce parallelism in time,
+the ”parallel full approximation scheme in space in time” (PFASST) makes use
+of an full approximation scheme (FAS) multigrid approach for solving (4). We
+present this idea using two levels only, but the algorithm can be easily extended
+to multiple levels. First, a parallel solver on the fine level and a serial solver on
+the coarse level are defined as
+Ppar (u) := (ILM − IL ⊗ ∆tQ∆ F ) (u),
+Pser (u) := (ILM − IL ⊗ ∆tQ∆ F − E ⊗ H) (u).
+Omitting the term E ⊗ H in Ppar decouples the steps, enabling simultaneous
+SDC sweeps on each step.
+PFASST uses Ppar as smoother on the fine level and Pser as approximative
+h
+solver on the coarse level. Restriction and prolongation operators IH
+h and IH
+allow to transfer information between the fine level (indicated with h) and the
+coarse level (indicated with H). The approximate solution is then used to correct
+the solution of the smoother on the finer level. Typically, only two levels are used,
+although the method is not restricted to this choice. PFASST in its standard
+implementation allows coarsening in the degrees-of-freedom in space (i.e. use
+N/2 instead of N unknowns per spatial dimension), a reduced collocation rule
+(i.e. use a different Q on the coarse level), a less accurate solver in space (for
+solving (2) on each time-step) or even a reduced representation of the problem.
+The first two strategies directly influence the definition of the restriction and
+prolongation operators.
+Since the right-hand side of the ODE can be a non-linear function, a τ correction stemming from the FAS is added to the coarse problem. One PFASST
+iteration then comprises the following steps:
+1. Compute τ -correction as
+
+
+k
+H
+k
+τ = CH IH
+h u h − I h Ch u h .
+2. Compute uk+1
+from
+H
+H k
+Pser (uk+1
+H ) = u0,H + τ + (Pser − CH ) (Ih uh ).
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+t0
+
+coarse
+sweep
+
+coarse
+sweep
+
+ﬁne
+sweep
+coarse
+comm.
+
+ﬁne
+sweep
+coarse
+comm.
+
+P0
+
+t1
+
+P1
+
+t2
+
+P2
+
+t3
+
+P3
+
+t4
+
+t0
+
+ﬁne
+comm.
+predictor
+
+predictor
+
+ﬁne
+comm.
+
+computation time
+
+computation time
+
+6
+
+P0
+
+t1
+
+P1
+
+t2
+
+P2
+
+t3
+
+P3
+
+t4
+
+(a) Original algorithm with overlap as de- (b) Algorithm as described in [3] and imscribed in [10]
+plemented in pySDC
+
+Fig. 1: Two slightly different workflows of PFASST, on the left with (theoretically) overlapping fine and coarse communication, on the right with multigridlike communication.
+k+1/2
+
+3. Compute uh
+
+from
+k+1/2
+
+uh
+
+
+k
+= ukh + IhH uk+1
+− IH
+h uh .
+H
+
+4. Compute uk+1
+from
+h
+k+1/2
+
+Ppar (uk+1
+h ) = u0,h + (Ppar − Ch ) (uh
+
+).
+
+We note that this ”multigrid perspective” [3] does not represent the original idea
+of PFASST as described in [25,10]. There, PFASST is presented as a coupling
+of SDC with the time-parallel method Parareal, augmented by the τ -correction
+which allows to represent find-level information on the coarse level.
+While conceptually the same, there is a key difference in the implementation of these two representations of PFASST. The workflow of the algorithm
+is depicted in Figure 1, showing the original approach in 1a and the multigrid
+perspective in 1b. They differ in the way the fine level communication is done.
+As described in [11], under certain conditions it is possible to introduce overlap
+of sending/receiving updated values on the fine level and the coarse level computation. More precisely, the ”window” for finishing fine level communication
+is as long as two coarse level sweeps: one from the current iteration, one from
+the predictor which already introduces a lag of later processors (see Figure 1a).
+In contrast, the multigrid perspective requires updated fine level values whenever the term Ch (ukh ) has to be evaluated. This is the case in step 1 and step
+2 of the algorithm as presented before. Note that due to the serial nature of
+k+1/2
+step 3, the evaluation of CH (IH
+) already uses the most recent values on
+h uh
+the coarse level in both approaches. Therefore, overlap of communication and
+computation is somewhat limited: only during the time-span of a single coarse
+level sweep (introduced by the predictor) the fine level communication has to
+finish in order to avoid waiting times (see Figure 1b). However, the advantage
+of the multigrid perspective, besides its relative simplicity and ease of notation,
+
+Using performance analysis tools for parallel-in-time integrators
+
+7
+
+is that multiple sweeps on the fine level for speeding up convergence, as shown
+in [4], are now effectively possible. This is one of the reasons this implementation
+strategy has been chosen for pySDC, while the original Fortran implementation
+libpfasst uses the classical workflow. Yet, while the multigrid perspective may
+alleviate the formal description of the PFASST algorithm, the implementation
+of PFASST can still be quite challenging.
+
+2.3
+
+pySDC
+
+The purpose of the Python code pySDC is to provide a framework for testing,
+evaluating and applying different variants of SDC and PFASST without worrying
+too much about implementation details, communication structures or lower-level
+language peculiarities. Users can simply set up an ODE system and run standard
+versions of SDC or PFASST spending close to no thoughts on the internal structure. In particular, it provides an easy starting point to see whether collocation
+methods, SDC, and parallel-in-time integration with PFASST are useful for the
+problem under consideration. Developers, on the other hand, can build on the
+existing infrastructure to implement new iterative methods or to improve existing methods by overriding any component of pySDC, from the main controller
+and the SDC sweeps to the transfer routines or the way the hierarchy is created.
+pySDC’s main features are [34]:
+–
+–
+–
+–
+–
+–
+
+available implementations of many variants of SDC, MLSDC and PFASST,
+many ordinary and partial differential equations already pre-implemented,
+tutorials to lower the bar for new users and developers,
+coupling to FEniCS and PETSc, including spatial parallelism for the latter
+automatic testing of new releases, including results of previous publications
+full compatibility with Python 3.6+, runs on desktops and HPC machines
+
+The main website for pySDC4 provides all relevant information, including links
+to the code repository on Github, the documentation as well as test coverage
+reports. pySDC is also described in much more detail in [34].
+The algorithms within pySDC are implemented using two ”controller” classes.
+One only emulates parallelism in time, while the other one uses mpi4py [7] for
+parallelization in the time dimension with the Message Passing Interface (MPI).
+Both can run the same algorithms and yield the same results, but while the first
+one is primarily used for theoretical purposes and debugging, the latter makes
+actual performance tests and time-parallel applications possible.
+We will use the MPI-based controller for this paper in order to address the
+questions posed at the beginning. To do that, a number of HPC tools are available
+which helps users and developers of HPC software to evaluate the performance
+of their codes and to speed up their workflows.
+4
+
+https://www.parallel-in-time.org/pySDC
+
+8
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 2: Performance Engineering Workflow
+
+3
+
+Performance Analysis Tools
+
+Performance analysis plays a crucial part in the development process of an HPC
+application. It usually starts with simply timing the computational kernels to
+see where the time is spend. To access more information and to determine tuning
+potential, more sophisticated tools are required. The typical performance engineering workflow when using performance analysis tools is an iterative process
+as depicted in Figure 2.
+First, the application needs to be prepared and some hooks to the measurement system need to be added. These can be debug symbols, compiler instrumentation or even code changes by the user. Then, during execution of the
+application, performance data is collected and, if necessary, aggregated. The
+analysis tools then calculate performance metrics to pinpoint performance problems to the developer. Finally, the hardest part: the developer has to to modify
+the application to eliminate or at least reduce the performance problems found
+by the tools, ideally without introducing new ones. Unfortunately, tools can only
+provide little help in this step.
+Several performance analysis tools exist, for all kinds of measurement at all
+possible scales, from a desktop computer to the largest supercomputers in the
+world. We distinguish two major measurement techniques with different levels of
+accuracy and overhead – “profiling”, which aggregates the performance metrics
+at runtime and present statistical results, e.g. how often a function was called
+and how much time was spend there, and “event-based tracing”, where each
+event of interest, like function enter/exit, messages sent/ received etc. are stored
+together with a timestamp. Tracing conserves temporal and spatial relationships
+of events and is the more general measurement technique, as a profile can always
+be generated from a trace. The main disadvantage of tracing is that trace files
+can quickly become extremely large (in the order of terabytes) when collecting
+every event. So usually the first step is a profile to determine the hot-spot of the
+
+Using performance analysis tools for parallel-in-time integrators
+
+9
+
+application, which then is analyzed in detail using tracing to keep trace-size and
+overhead manageable.
+However, performance analysis tools can not only be used to identify optimization potential but also to assess the execution of the application on a given
+system with a specific tool-chain (compiler, MPI library, etc.), i.e. to answer the
+question ”Is my application doing what I think it is doing?”. More often then
+not the answer to that question is ”No”, as it was in the case we present in this
+work. Tools can pinpoint the issues and help to identify possible solutions.
+For our analysis we used the tools of the Score-P ecosystem, which are presented in this section. A similar analysis is possible with other tools as well, e.g.
+with TAU [33], Paraver [28], or Intels VTune [29].
+
+3.1
+
+Score-P and the Score-P ecosystem
+
+The Score-P measurement infrastructure [22] is an open source, highly scalable
+and easy-to-use tool suite for profiling, event tracing, and online analysis of HPC
+applications. It is a community project to replace the measurement systems
+of several performance analysis tools and to provide common data formats to
+improve interoperability between different analysis tools build on top of Score-P.
+Figure 3 shows a schematic overview of the Score-P ecosystem. Most common
+HPC programming paradigms are supported by Score-P: MPI (via the PMPI
+interface), OpenMP (via OPARI2 or the OpenMP tools interface (OMPT) [13])
+as well as GPU programming with CUDA, OpenACC or OpenCL. Score-P offers
+three ways to measure application events:
+1. Compiler instrumentation, where compiler interfaces are used to insert calls
+to the measurement system at each function enter and exit,
+2. a user instrumentation API, that enables the application developer to mark
+specific regions, e.g. kernels, functions or even loops, and
+3. a sampling interface which records the state of the program at specific intervals.
+All this data is handled in the Score-P measurement core where it can be enriched
+with hardware counter information from PAPI [36], perf or rusage. Further,
+Score-P provides a counter plugin interface that enables the user to define its own
+metric sources. The Score-P measurement infrastructure supports two modes of
+operation, it can generate event traces in the OFT2 format [12] and aggregated
+profiles in the CUBE4 format [31].
+Usage of Score-P is quite straightforward – the compile and link command
+have to be prepended by scorep, e.g. mpicc app.c becomes scorep mpicc
+app.c. However, Score-P can be extensively configured via environment variables, so that Score-P can be used in all analysis steps from a simple call-path
+profile to a sophisticated tracing experiment enriched with hardware counter
+information. Listing 11 in Section 4.2 will show an example job script where
+several Score-P options are used.
+
+10
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 3: Overview of the Score-P ecosystem. The green box represents the measurement infrastructure with the various ways of data acquisition. This data is
+processed by the Score-P measurement infrastructure and stored either aggregated in the CUBE4 profile format or as an event trace in the OTF2 format. On
+top are the various analysis tools working with these common data formats.
+
+Score-P Python bindings Traditionally the main programming languages for
+HPC application development have been C, C++ and Fortran. However, with
+the advent of high-performance Python libraries in the wake of the rise of AI
+and deep learning, pure Python HPC applications are now a feasible possibility,
+as pySDC shows. Python has two built-in Performance Analysis Tools, called
+profile and cProfile. Though they allow profiling Python code, they do not
+support as detailed application analyses as Score-P does. Therefore, the ScoreP Python bindings have been introduced [17], which allow to profile and trace
+Python applications using Score-P.
+The bindings use the Python built-in infrastructure that generates events for
+each enter and exit of a function. It is the same infrastructure that is used by the
+profile tool. As the bindings utilize Score-P itself, the different paradigms listed
+above can be combined and analyzed even if they are used from within a Python
+application. Especially the MPI support of Score-P is of interest, as pySDC uses
+mpi4py for parallelization in time. Moreover, as not each function might be of
+interest for the analysis of an application, it is possible to manually enable and
+
+Using performance analysis tools for parallel-in-time integrators
+
+11
+
+Fig. 4: The Scalasca approach for a scalable parallel trace analysis. The entire
+trace date is analyzed and only a high-level result is stored in the form of a Cube
+report.
+
+disable the instrumentation or to instrument regions manually, see Listing 13 in
+Section 4.2 for an example. These techniques can be used to control the detail
+of recorded information and therefore to control the measurement overhead.
+3.2
+
+Cube
+
+Cube is the performance report explorer for Score-P as well as for Scalasca (see
+below). The CUBE data model is a three-dimensional performance space consisting of the dimensions (i) performance metric, (ii) call-path, and (iii) system
+location. Each dimension is represented in the GUI as a tree and shown in three
+coupled tree browsers, i.e. upon selection of one tree item the other trees are
+updated. Non-leaf nodes of each tree can be collapsed or expanded to achieve
+the desired level of granularity. We will see the graphical user interface of Cube
+in Figure 17. The metrics that are recorded by default contain the time per call,
+the number of calls to each function and the bytes transferred in MPI calls. Additional metrics depend on the measurement configuration. The CubeGUI is highly
+customizable and extendable. It provides a plugin interface to add new analysis
+capabilities [20] and an integrated domain-specific language called CubePL to
+manipulate CUBE metrics [32], enabling completely new kinds of analysis.
+3.3
+
+Scalasca
+
+Scalasca [16] is an automatic analyzer of OTF2 traces generated by Score-P. The
+idea of Scalasca, as outlined in Figure 4, is to perform an automatic search for
+patterns indicating inefficient behavior. The whole low-level trace data is considered and only a high-level result in the form of a CUBE report is generated. This
+report has the same structure as a Score-P profile report, but contains additional
+metrics for the patterns that Scalasca detected. Scalasca performs three major
+tasks: (i) an identification of wait states, like the Late Receiver pattern shown
+in Figure 5 and their respective root-causes [40], (ii) a classification of the behaviour and a quantification of its significance and (iii) a scalable identification
+of the critical path of the execution [2]. As Scalasca is primarily targeted at largescale applications, the analyzer is a parallel program itself, typically running on
+the same resources as the original application. This enables a unique scalability to the largest machines available [15]. Scalasca offers convenience commands
+
+12
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 5: Example of the Late Receiver pattern as detected by Scalasca. Process 0
+post the Send before process 1 posts the Recv. The red arrow indicates waiting
+time and thus a performance inefficiency.
+to start the analysis right after measurement in the same job. Unfortunately,
+this does not work with Python yet, in this case the analyzer has to be started
+separately, see line 21 in Listing 11.
+3.4
+
+Vampir
+
+Complementary to the automatic trace analysis with Scalasca - and often more
+intuitive to the user - is a manual analysis with Vampir. Vampir [21] is a powerful
+trace viewer for OTF2 trace files. In contrast to traditional profile viewers, which
+only visualize the call hierarchy and function runtimes, Vampir allows the investigation of the whole application flow. Any metrics collected by Score-P, from
+PAPI or counter plugins, can be analyzed across processes and time with either
+a timeline or as a heatmap in the Performance Radar. Recently added was the
+functionality to visualize I/O-events like reads and writes from and to the hard
+drive [26]. It is possible to zoom into any level of detail, which automatically
+updated all views and shows the information from the selected part of the trace.
+Besides opening an OTF2 file directly, Vampir can connect to VampirServer,
+which uses multiple MPI processes on the remote system to load the traces.
+This approach improves scalability and removes the necessity to copy the trace
+file. VampirServer allows the visualisation of traces from large-scale application
+runs with multiple thousand processes. The size of such traces is typically in the
+order of several Gigabyte.
+3.5
+
+JUBE
+
+Managing complex workflows of HPC applications can be a complex and errorprone task and often results in significant amounts of manual work. Application parameters may change at several steps in these workflows. In addition,
+reproducibility of program results is very important but hard to handle when
+parametrizations change multiple times during the development process. Usually application-specific, hardly documented script based solutions are used to
+accomplish these tasks.
+
+Using performance analysis tools for parallel-in-time integrators
+
+13
+
+In contrast, the JUBE benchmarking environment provides a lightweight,
+command line based, configurable framework to specify, run and monitor the
+parameter handling and the general workflow execution. This allows a faster
+integration process and easier adoption of necessary workflow mechanics [24].
+Parameters are the central JUBE elements and can be used to configure the
+application, to replace parts of the source code or to be even used within other
+parameters. Also the workflow execution itself is managed through the parameter
+setup by automatically looping through all available parameter combinations in
+combination with a dependency driven step structure. For reproducibility, JUBE
+also takes care of the directory management to provide a sandbox space for each
+execution. Finally, JUBE allows to extract relevant patterns from the application
+output to create a single result overview to combine the input parametrization
+and the the extracted output results.
+To port an application workflow into the JUBE framework, its basic compilation (if requested) and execution command steps have to be listed within
+a JUBE configuration file. To allow the sandbox directory handling, all necessary external files (source codes, input data and configuration files) have to be
+listed as well. On top, the user can add the specific parametrization by introducing named key/value pairs. These pairs can either provide a fixed one to
+one key/value mapping or, in case of a parameter study, multiple values can
+be mapped to the same key. In such a case JUBE starts to spawn a decision
+tree, by using every available value combination for a separate program step execution. Figure 6 shows a simple graph example where three different program
+steps (pre-processing, compile and execution) are executed in a specific order and
+three different parameters (const, p1 and p2) are defined. Once the parameters
+are defined, they can be used to substitute parts of the original source files or to
+directly define certain options within the individual program configuration list.
+Typically, an application-specific template file is designed to be filled by JUBE
+parameters afterwards. Once the templates and the JUBE configuration file is
+in place, the JUBE command line tools are used to start the overall workflow
+execution. JUBE automatically spawns the necessary parameter tree, creates the
+sandbox directories and executes the given commands multiple times based on
+the parameter configuration.
+To take care of the typical HPC environment, JUBE also helps with the job
+submission part by providing a set of job scheduler-specific script templates. This
+is especially helpful for scaling tests by easily varying the amount of compute
+devices using a single parameter within the JUBE configuration file. JUBE itself
+is not aware of the different types of HPC schedulers, therefore it uses a simple
+marker file mechanic to recognize if a specific job was finally executed. In Sect. 4.1
+we show detailed examples for a configuration file and a jobscript template.
+The generic approach of JUBE allows it to easily replace any manual workflow. For example, to use JUBE for an automated performance analysis, using
+the highlighted performance tools, the necessary Score-P and Scalasca command
+line options can be directly stored within a parameter, which can then be used
+during compilation and job submission. After the job execution, even the per-
+
+14
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 6: JUBE workflow example
+
+formance metric extraction can be automated, by converting the profiling data
+files within an additional performance tool specific post-processing step into a
+JUBE parsable output format. This approach allows to easily rerun a specific
+analysis or even combine performance analysis together with a scaling run, to
+determine individual metric degradation towards scaling capabilities.
+
+4
+
+Results and Lessons Learned
+
+In the following we consider the two-dimensional Allen-Cahn equation
+2
+u(1 − u)(1 − 2u)
+2
+L X
+L
+X
+u(x, 0) =
+ui,j (x)
+ut = ∆u −
+
+(5)
+
+i=1 j=1
+
+with periodic boundary conditions and scaling parameter  > 0. The domain in
+space [−L/2, L/2]2 , L ∈ N, consists of L2 patches of size 1 × 1 and in each patch
+we start with a circle
+
+
+
+Ri,j − |x|
+1
+√
+1 + tanh
+,
+ui,j (x) =
+2
+2
+of initial radius Ri,j > 0 which is chosen randomly between 0.5 and 3 for
+each patch. For L = 1 this is precisely the well-known shrinking circle, where
+
+Using performance analysis tools for parallel-in-time integrators
+1.0
+
+0.6
+0
+0.4
+−1
+
+concentration
+
+0.8
+
+1
+
+−2
+
+2
+
+0.2
+
+0.0
+−2
+
+−1
+
+0
+
+1
+
+2
+
+(a) Initial conditions
+
+1.0
+
+0.8
+
+1
+
+0.6
+0
+0.4
+−1
+
+−2
+
+concentration
+
+2
+
+15
+
+0.2
+
+0.0
+−2
+
+−1
+
+0
+
+1
+
+2
+
+(b) System at time-step 24
+
+Fig. 7: Evolution of the Allen-Cahn problem used for this analysis.
+
+the dynamics is known and which can be used to verify the simulation [39]. By
+increasing the parameter L, the simulation domain can be increased without
+changing the evolution of the simulation fundamentally. Figure 7 shows the evolution of the system with L = 4 from the initial condition in 7a to the 24th
+time-step in 7b.
+We split the right-hand side of (5) and treat the linear diffusion part implicitly using the LU trick [38] and the nonlinear reaction part explicitly using the
+explicit Euler preconditioner. This has been shown to be the fastest SDC variant
+in [34] and allows us to use the mpi4py-fft library [8] for solving the implicit
+system, for applying the Laplacian and for transferring data between coarse and
+fine levels in space.
+For the test shown here we use L = 4, N = 576 and  = 0.04, so that
+initially about 6 points resolve the interfaces, which have a width of about 7.
+We furthermore use M = 3 Gauss-Radau nodes and ∆t = 0.001 < 2 for the
+collocation problem and stop the simulation after 24 time-steps at T = 0.024.
+The iterations are stopped when a residual tolerance of 10−8 is reached. For
+coarsening, only 96 points in space were used on the coarse level and, following [4], 3 sweeps are done on the fine level and 1 on the coarse one. All tests
+were run on the JURECA cluster at JSC [19] using Python 3.6.8 with the Intel
+compiler and (unless otherwise stated) Intel MPI. The code can be found in the
+projects/Performance folder of pySDC [35].
+4.1
+
+Scalability test with JUBE
+
+In Figure 8 the scalability of the code in space and time is shown. While spatial
+parallelization stagnates at about 24 cores, adding temporal parallelism with
+PFASST allows to use 12 times more processors for an additional speedup of
+about 4. Note that using even more cores in time increases the runtime again
+due to a much higher number of iterations. Also, using more than 48 cores in
+space is not possible due to the size of the problem. We do not consider largerscale problems and parallelization here, since a detailed a performance analysis in
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Time [s]
+
+16
+
+10
+
+1
+
+10
+
+0
+
+10
+
+ideal
+parallel-in-space
+parallel-in-space-time
+
+−1
+
+10
+
+0
+
+10
+
+1
+
+10
+
+2
+
+Number of cores
+
+Fig. 8: Time vs. number of cores in space and time.
+
+this case is currently work in progress together with the EU Centre of Excellence
+”Performance Optimisation and Productivity” (POP CoE, see [6] for details).
+The runs were set up and executed using JUBE. The corresponding XML file
+is shown in Listings 9 and 10. The first listing contains the input and operations
+part of the file and consists of four blocks:
+1. the parameter set (lines 7-17),
+2. the rules for substituting the parameter values in the template to build the
+executable (lines 19-29),
+3. the list of files to copy over to the run directory (lines 31-35),
+4. and the operations part, where the shell command for submitting the job is
+given (lines 37-44).
+While the last two are rather straightforward and do not require too much of
+the user’s attention, the first two are the ones where the simulation and run
+parameters find their way into the actual execution. In lines 8-12, the number of
+compute nodes and the number of tasks (or cores) are set up. Using the python
+mode in lines 9 and 11, the variable i from line 8 is taken to step simultaneously through the number of nodes and tasks. Without this, for each number of
+nodes, all number of tasks would be used in separate runs, i.e. instead of 10 runs,
+we would end up with 100 runs, most of them irrelevant. Then, in lines 13-14,
+the simulation parameter space size is defined as being equal to the number
+of tasks. This specifies the number of cores for the spatial parallelization. In
+line 15, two different MPI versions are requested, where the parameter mpi is
+then handled appropriately in the jobscript. For each combination of these parameters, JUBE creates a separate directory with all necessary files and folders.
+The template jobscript run pySDC AC.tmpl is replaced by an actual jobscript
+run pySDC AC.exe, see line 21, with all parameters in place. An example of a
+template jobscript can be found in Listing 11.
+
+Using performance analysis tools for parallel-in-time integrators
+
+17
+
+<?xml v e r s i o n =”1.0” e n c o d i n g=”UTF−8”?>
+<jube>
+<benchmark name=”pySDC AC s c a l i n g t e s t ” outpath=”bench run SPxTP”>
+<comment>S c a l i n g t e s t with pySDC</comment>
+<!−− Parameters −−>
+<p a r a m e t e r s e t name=”p a r a m s e t”>
+<parameter name=” i ” >0 , 1 , 2 , 3 , 4 , 5 , 6 , 7 , 8 , 9</parameter>
+<parameter name=”nnodes ” mode=”python ” type=” i n t ”>
+[1 , 1 , 1 , 1 , 1 , 1 , 2 , 4 ,
+6 , 1 2 ] [ $ i ] </ parameter>
+<parameter name=”n t a s k s ” mode=”python ” type=” i n t ”>
+[ 1 , 2 , 4 , 6 , 1 2 , 2 4 , 2 4 , 2 4 , 2 4 , 2 4 ] [ $ i ] </ parameter>
+<parameter name=” s p a c e s i z e ” mode=”python ” type=” i n t ”>
+$ n t a s k s </parameter>
+<parameter name=”mpi” type=” s t r ”> i n t e l , p a r a s t a t i o n </parameter>
+</p a r a m e t e r s e t >
+<!−− S u b s t i t u t e −−>
+< s u b s t i t u t e s e t name=” s u b s t i t u t e ”>
+<!−− S u b s t i t u t e f i l e s −−>
+< i o f i l e i n=”run pySDC AC . tmpl ” out=”run pySDC AC . exe ” />
+<!−− S u b s t i t u t e commands −−>
+<sub s o u r c e=”#NNODES#” d e s t=”$nnodes ” />
+<sub s o u r c e=”#NTASKS#” d e s t=”$ n t a s k s ” />
+<sub s o u r c e=”#SPACE SIZE#” d e s t=” $ s p a c e s i z e ” />
+<sub s o u r c e=”#MPI#” d e s t=”$mpi” />
+</ s u b s t i t u t e s e t >
+<!−− F i l e s −−>
+< f i l e s e t name=” f i l e s ”>
+<copy>run pySDC AC . tmpl</copy>
+<copy>run benchmark . py</copy>
+</ f i l e s e t >
+<!−− O p e r a t i o n −−>
+<s t e p name=” s u b s t e p ”>
+<use>param set </use>
+<!−−
+<use>f i l e s </use>
+<!−−
+<use>s u b s t i t u t e </use>
+<!−−
+<!−− s h e l l command −−>
+<do d o n e f i l e =”ready”>s b a t c h
+</s t e p >
+
+u s e e x i s t i n g p a r a m e t e r s e t −−>
+u s e e x i s t i n g f i l e s e t −−>
+u s e e x i s t i n g s u b s t i t u t e s e t −−>
+run pySDC AC . exe </do>
+
+...
+
+Fig. 9: XML input file for JUBE running space-parallel and space-and-timeparallel runs (part 1, input and operations).
+
+18
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+...
+<!−− Regex p a t t e r n −−>
+<p a t t e r n s e t name=”p a t t e r n ”>
+<p a t t e r n name=” t i m i n g p a t ” type=” f l o a t ”>
+Time t o s o l u t i o n : $ j u b e p a t f p s e c . </ p a t t e r n >
+<p a t t e r n name=” n i t e r p a t ” type=” f l o a t ”>
+Mean number o f i t e r a t i o n s : $ j u b e p a t f p </p a t t e r n >
+</ p a t t e r n s e t >
+<!−− Analyze −−>
+<a n a l y s e r name=”a n a l y z e ”>
+<use>p a t t e r n </use> <!−− u s e e x i s t i n g p a t t e r n s e t −−>
+<a n a l y s e s t e p=” s u b s t e p ”>
+< f i l e >run . out </ f i l e > <!−− f i l e which s h o u l d be scanned −−>
+</a n a l y s e >
+</ a n a l y s e r >
+<!−− C r e a t e r e s u l t t a b l e −−>
+<r e s u l t >
+<use>a n a l y z e </use> <!−− u s e e x i s t i n g a n a l y s e r −−>
+<t a b l e name=” r e s u l t ” s t y l e =” p r e t t y ” s o r t =” s p a c e s i z e ”>
+<column>nnodes </column>
+<column>n t a s k s </column>
+<column>s p a c e s i z e </column>
+<column>mpi</column>
+<column>t i m i n g p a t </column>
+<column>n i t e r p a t </column>
+</ t a b l e >
+</ r e s u l t >
+</benchmark>
+</jube>
+
+Fig. 10: XML input file for JUBE running space-parallel and space-and-timeparallel runs (part 2, output and analysis).
+
+Using performance analysis tools for parallel-in-time integrators
+
+19
+
+The second listing 10 continues the XML file with the output and analysis
+blocks. We have:
+1. the pattern block (lines 3-9), which will be used to extract data from the
+output files of the simulation,
+2. the analyzer (lines 11-17), which simply applies the pattern to the output
+file,
+3. and the result block (lines 19-30) to create a “pretty” table with the results,
+based on the parameters and the extracted results.
+Using a simple Python script, this table can be read in again and processed into
+Figure 8. With JUBE, this workflow can be completely automated using only
+a few configuration files and a post-processing script. All relevant configuration
+files can be found in the project folder.
+4.2
+
+Performance analysis with Score-P, Scalasca and Vampir
+
+Performance analysis of a parallel application is not an easy task in general
+and with non-traditional HPC applications in particular. Python applications
+are still very rare in the HPC landscape and performance analysis tools (and
+performance analysts for that matter) are often not yet fully prepared for this
+scenario. In this section we present the challenges we faced and the solutions
+we found to show what tools can do. We also would like to encourage other
+application developers not to resign on the first obstacles encountered when
+using these tools, but seek assistance from the tool developers and their system
+administrators in order to get reasonable and satisfactory results.
+First measurement attempts The first obstacle we encountered was that the
+Score-P Python bindings did not build for the tool-chain of Intel compilers and
+IntelMPI due to an issue with the Intel compiler installation on JURECA. We
+thus switched to GNU compilers and ParaStationMPI5 . Using that we were able
+to obtain a first analysis result.
+The workflow to get these results is as follows: After setting up the runs with
+JUBE XML files as described above, the job is submitted via JUBE using the
+jobscript generated from the template.
+Listing 11 shows such a template, where all variables with of the form #NAME#
+will be replaced by actual values for the specific run. Lines 2-7 provide the
+allocation and job information for the Slurm Workload Manager. In lines 9-13,
+the distinction between different MPI libraries is implemented, using different
+modules and virtual Python environments (not shown here). Lines 15-18 define
+flags for the Score-P infrastructure, e.g. tracing is enabled (line 17). Then, line 20
+contains the run command, where the Score-P infrastructure is passed using the
+-m switch. This generates both a profile report (profiling is enabled by default)
+for an analysis with CUBE and OTF2 trace files, which can be analyzed manually
+5
+
+https://www.par-tec.com/products/parastation-mpi.html
+
+20
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+#!/ b i n / bash −x
+#SBATCH −−nodes=#NNODES#
+#SBATCH −−n t a s k s −per−node=#NTASKS#
+#SBATCH −−output=run . out
+#SBATCH −−e r r o r=run . e r r
+#SBATCH −−time = 0 0 : 0 5 : 0 0
+#SBATCH −−p a r t i t i o n=batch
+e x p o r t MPI=#MPI#
+i f [ ”$MPI” = ” i n t e l ” ] ;
+. . . # l o g i c t o d i s t i g u i s h MPI l i b r a r i e s
+fi
+export
+export
+export
+export
+
+SCOREP EXPERIMENT DIRECTORY=data / s c o r e p −$MPI
+SCOREP PROFILING MAX CALLPATH DEPTH=90
+SCOREP ENABLE TRACING=1
+SCOREP METRIC PAPI=PAPI TOT INS
+
+s r u n python −m s c o r e p −−mpp=mpi run benchmark . py −n #SPACE SIZE#
+s r u n s c o u t . mpi −−time−c o r r e c t $SCOREP EXPERIMENT DIRECTORY/ t r a c e s . o t f 2
+touch ready
+
+Fig. 11: Jobscript template to run the simulation with profiling and tracing enabled.
+
+Using performance analysis tools for parallel-in-time integrators
+
+21
+
+Fig. 12: Vampir visualization: view of the whole run with all methods (4 processes
+in time, 1 in space).
+
+with Vampir or automatically with Scalasca. The Scalasca trace analyzer is called
+on line 21. As pySDC is a pure MPI application, scout.mpi is used here (there
+is also a scout.omp for OpenMP and a scout.hyb for hybrid programs). Note
+that tracing is enabled manually here, but could be part of the parameter input
+as described in Sect. 3.5. Finally, line 22 marks this particular run as completed
+for JUBE. The resulting files can then be read by tools like Vampir and CUBE.
+This first run revealed an incomplete recording of MPI point-to-point communication. The measurement showed the MPI send operations, but no receive
+operations. After digging into the source code of mpi4py we discovered that
+mpi4py uses matched probes and receives (MPI Mprobe and MPI Mrecv), which
+ensures thread safety. However, Score-P did not have support for Mprobe/Mrecv
+in the released version, so we had to switch to a development version of Score-P,
+where the support was added for this project. Full support for matched communication is expected in an upcoming release of Score-P.
+Using this setup we were able to get a first usable measurement. A Vampir
+screenshot of the entire application execution is shown in Figure 12.
+Even when enlarged properly, this can be a very discouraging view, as very
+little can be seen at a first glance (beside that around one third of the runtime
+is initialization).
+All the tiny Python functions are shown and mapping them to the actual
+program execution is not straightforward. To mitigate this we used filtering
+to reduce the unwanted Python routines and Score-P’s manual instrumentation API, which allowed us to mark the interesting parts of the application. In
+Listing 13, a mock-up of a PFASST implementation is shown. Here, after importing the Python module scorep.user, separate regions can be defined using
+region start and region end, see e.g. lines 14 and 16. This information will
+then be available e.g. for filtering in Vampir.
+Analysis then showed that the algorithm outlined in Figure 1b worked as
+expected, at least in principle. This can be seen in Figure 14: the bottom part
+shows exactly a transposed version of the original communication and workflow
+
+22
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+from mpi4py import MPI
+from pySDC . c o r e . C o n t r o l l e r import c o n t r o l l e r
+import s c o r e p . u s e r a s spu
+...
+d e f r u n p f a s s t ( ∗ a r g s , ∗∗ kwargs ) :
+...
+w h i l e not done :
+...
+name = f ’REGION −− IT FINE −− { my rank } ’
+spu . r e g i o n b e g i n ( name )
+controller . do fine sweep ()
+spu . r e g i o n e n d ( name )
+...
+name = f ’REGION −− IT DOWN −− { my rank } ’
+spu . r e g i o n b e g i n ( name )
+c o n t r o l l e r . transfer down ()
+spu . r e g i o n e n d ( name )
+...
+name = f ’REGION −− IT COARSE −− { my rank } ’
+spu . r e g i o n b e g i n ( name )
+c o n t r o l l e r . do coarse sweep ()
+spu . r e g i o n e n d ( name )
+...
+name = f ’REGION −− IT UP −− { my rank } ’
+spu . r e g i o n b e g i n ( name )
+controller . transfer up ()
+spu . r e g i o n e n d ( name )
+...
+name = f ’REGION −− IT CHECK −− { my rank } ’
+spu . r e g i o n b e g i n ( name )
+c o n t r o l l e r . check convergence ()
+spu . r e g i o n e n d ( name )
+...
+...
+...
+
+Fig. 13: Pseudo code of a PFASST implementation using Score-P regions
+
+Using performance analysis tools for parallel-in-time integrators
+
+23
+
+Fig. 14: Vampir visualization: user-defined regions, only a single iteration (ParaStation MPI, 4 processes in time, 1 in space).
+
+structure as expected from Figure 1b. The middle part shows the amount of
+time spend in the different regions: the vast majority of the computation time
+(70 %) is spent in the fine sweep, and only about 3 % in the coarse sweep.
+Another, more high-level overview of the parallel performance can be gained
+with the Advisor plugin of Cube [20]. This prints the efficiency metrics developed
+in the POP project6 for the entire execution or an arbitrary phase of the application. Figure 15a shows a screenshot of the Advisor result for the computational
+part of pySDC, i.e. omitting initialization and finalization.
+The main value to look for is “Parallel Efficiency”, which reveals the inefficiency in splitting computation over processes and then communicating data
+between processes. In this case the “Parallel Efficiency”, which is defined as the
+product of “Load Balance” and “Communication Efficiency”, is 79 %, which is
+quite good, but worse than what we expected for this small test case. We know
+from Sect. 2.2 that due to the sequential coarse level and the predictor, PFASST
+runs will always show slight load imbalances, so the “Load Balance” value of
+89 % is understood.
+However, the “Communication Efficiency” of 88 % is way below our expectations. A “Serialisation Efficiency” of 98 % indicates that there is hardly any
+waiting time. The “Transfer Efficiency” of 90 % means we lose significant time
+due to data transfers. This was not expected so we assumed either an issue with
+the implementation of the algorithm or the system environment. A Scalasca
+analysis showed that the slight serialisation inefficiency originates from a “Late
+Receiver pattern” (see Figure 5) in the fine sweep phase and a “Late Broadcast”
+after each time step, but did not reveal the reason for the loss in transfer efficiency. A closer look with Vampir at just a single iteration, as shown in Figure 14,
+finally reveals the issue.
+6
+
+https://pop-coe.eu/node/69
+
+24
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+The implementation of pySDC uses non-blocking MPI communication in order
+to overlap computation and communication. However, Figure 14 clearly shows
+that this does not work as expected.
+In the time of the analysis of the ParaStationMPI runs there was an update
+of the JURECA software environment which finally enabled the support of the
+Score-P Python wrappers for the Intel compilers and IntelMPI. So naturally we
+performed the same analysis again for this constellation, the one we originally
+intended to analyze anyway. Surprisingly, the results looked much better now.
+The Cube Advisor analysis now showed nearly perfect Transfer Efficiency and
+subsequently a much improved Parallel Efficiency, see Figure 15b.
+Vampir further confirms a very good overlap of computation and communication, the way the implementation intended it to be, see Figure 16.
+
+Eye for the detail Thus, the natural question to ask is where these differences
+between the exactly same code running on two different tool-chains come from.
+Further investigation showed that the installation of ParaStationMPI provided
+on JURECA does not provide an MPI progress thread, i.e. MPI communication cannot be performed asynchronously and thus overlapping computation
+and communication is not possible. IntelMPI on the other hand always uses a
+progress thread if not explicitly disabled via an environment variable. With a
+newly installed test version of ParaStationMPI, where an MPI progress thread
+has been enabled, the overlap of computation and communication is possible
+there, too. We then see an on-par performance of pySDC using the new ParaStationMPI and IntelMPI.
+Even though the overlap problem does not seem to be that much of an issue
+for this small test case, where just 8% efficiency could be gained, we want to
+emphasize that these little issues can become severe ones when scaling up. Figure 17 shows the average time per call of the fine sweep, as calculated by CUBE.
+In the Intel case with overlap we see that the fine sweep time is very balanced
+across the processes (Figure 17b). In the ParaStationMPI case we see that the
+fine sweep time increases with the process number (Figure 17a). This problem
+will likely become worse when the problem size is increased, thus limiting the
+maximum number of processes that can be utilized.
+The scaling tests as well as the performance analysis made for this work
+are rather small compared to what joined space and time parallelism can do.
+The difference when using space-parallel solvers can be quite substantial for the
+analysis ranging from larger datasets for the analysis and visualization to more
+complex communication patterns. In addition, the issues experienced can differ,
+as we already see for the test case at hand. In Figure 18, we now use 2 processes
+in space and 4 in time. There is still unnecessary waiting time, but its impact
+is much smaller. This is because progress of MPI calls do not depend on the
+communicator and for each application of the spatial FFT solver, many MPI
+calls are made so that progress does happen even in the time-communicator. A
+more thorough and in-depth analysis of large-scale runs is currently under way
+
+Using performance analysis tools for parallel-in-time integrators
+
+(a) Cube Advisor showing the POP metrics for pySDC with ParaStationMPI.
+
+(b) Cube Advisor showing the POP metrics for pySDC with IntelMPI.
+
+Fig. 15: Cube Advisor showing the POP metrics for pySDC
+
+25
+
+26
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 16: Vampir visualization: user-defined regions, only a single iteration (Intel
+MPI, 4 processes in time, 1 in space).
+
+together with the POP CoE and we will report on the outcome of this in a future
+publication.
+
+5
+
+Conclusion and Outlook
+
+In this paper we performed and analyzed parallel runs of the PFASST implementation pySDC using the performance tools Score-P, CUBE, Scalasca and Vampir
+as well as the benchmarking environment JUBE. While the implementation complexity of a time-parallel method may vary, with standard Parareal being on the
+one side of the spectrum and methods like PFASST on the other, it is crucial to
+check and analyze the actual performance of the code. This is particularly true
+for most time-parallel methods with their theoretically grounded low parallel
+efficiency, since here problems in the communication can easily be mistaken for
+method-related shortcomings.
+As we have shown, the performance analysis tools in the Score-P ecosystem
+can not only be used to identify tuning potential but also allow to easily check
+for bugs and unexpected behavior, without the need to do ”print”-debugging.
+While methods like Parareal may be straightforward to implement, PFASST is
+not, in particular due to many edge cases which the code needs to take care of.
+For example, in the standard PFASST implementation the residual is checked
+locally for each time-step individually, so that a process working on a later timestep could, erroneously, decide to stop although the iterations on previous timesteps still run. Vice versa, when previous time-steps did converge, the processes
+dealing with later ones should not expect to receive new data. Depending on
+the implementation, those cases could lead to deadlocks (the ”good” case) or to
+unexpected results (the ”bad” case), e.g. when one-sided communication is used,
+or other unwanted behavior. Many of these issues can be checked by looking at
+the gathered data after an instrumented run. This does not, however, replace a
+careful design of the code, testing, benchmarking, verification and, sometimes,
+rethinking.
+
+Using performance analysis tools for parallel-in-time integrators
+
+27
+
+(a) Cube screenshot showing the average time per call of the fine sweep for ParaStationMPI. Time increases with process number.
+
+(b) Cube screenshot showing the average time per call of the fine sweep for IntelMPI.
+Time is well balanced across the processes.
+
+Fig. 17: Cube screenshots showing the average time per call of the fine sweep
+
+28
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+
+Fig. 18: Vampir visualization: user-defined regions, only a single iteration (ParaStation MPI, 4 processes in time, 2 in space)
+
+We saw for pySDC that already the choice of the MPI implementation can
+influence the performance quite severely, let alone the unexpected deviation from
+the intended workflow of the method. Performance tools as the ones presented
+here help to verify (or falsify) that the implementation of an algorithm actually
+does what the developers thinks it does. While there is a lot of documentation
+on these tools available, it is extremely helpful and quite “accelerating” to get
+in touch with the core developers, either directly or by attending one of the
+tutorials e.g. provided by the VI-HPS through the Tuning Workshop series7 .
+This way, many of the pitfalls and sources of frustration can be avoided and the
+full potential of these tools becomes visible.
+In order to set up experiments using parallel codes in a structured way, be it
+for performance analysis, parameter studies or scaling tests, tools like JUBE can
+be used to ease the management of submission, monitoring and post-processing
+of the jobs. Again, time-parallel method make great candidates for such a tool
+due to their typically large number of parameters. Besides parameters for the
+model, the methods in space and time, the iteration and so on, the application
+of time-parallel methods in combination with spatial parallelism adds another
+level of complexity, which becomes manageable with tools like JUBE.
+
+Acknowledgements
+Parts of this work has received funding from the European Union’s Horizon
+2020 research and innovation programme under grant agreements No 676553
+and 824080. RS thankfully acknowledges the financial support by the German
+Federal Ministry of Education and Research through the ParaPhase project
+within the framework “IKT 2020 - Forschung für Innovationen” (project number
+01IH15005A).
+7
+
+https://www.vi-hps.org/training/tws/tuning-workshop-series.html
+
+Using performance analysis tools for parallel-in-time integrators
+
+29
+
+References
+1. Adhianto, L., Banerjee, S., Fagan, M., Krentel, M., Marin, G., Mellor-Crummey,
+J., Tallent, N.R.: Hpctoolkit: Tools for performance analysis of optimized parallel
+programs. Concurrency and Computation: Practice and Experience 22(6), 685–701
+(2010)
+2. Böhme, D., Wolf, F., de Supinski, B.R., Schulz, M., Geimer, M.: Scalable criticalpath based performance analysis. In: 2012 IEEE 26th International Parallel and
+Distributed Processing Symposium, pp. 1330–1340. IEEE (2012)
+3. Bolten, M., Moser, D., Speck, R.: A multigrid perspective on the parallel full
+approximation scheme in space and time. Numerical Linear Algebra with Applications 24(6), e2110–n/a (2017). DOI 10.1002/nla.2110. URL http://dx.doi.org/
+10.1002/nla.2110. E2110 nla.2110
+4. Bolten, M., Moser, D., Speck, R.: Asymptotic convergence of the parallel full
+approximation scheme in space and time for linear problems. Numerical linear
+algebra with applications 25(6), e2208 – (2018). DOI 10.1002/nla.2208. URL
+https://juser.fz-juelich.de/record/857114
+5. Bradley, T.: Gpu performance analysis and optimisation. NVIDIA Corporation
+(2012)
+6. Center, B.S.: Website for pop coe (2019). URL https://pop-coe.eu/. [Online;
+accessed August 13, 2019]
+7. Dalcin, L.D., Paz, R.R., Kler, P.A., Cosimo, A.: Parallel distributed computing using python. Advances in Water Resources 34(9), 1124 – 1139 (2011). DOI https://
+doi.org/10.1016/j.advwatres.2011.04.013. URL http://www.sciencedirect.com/
+science/article/pii/S0309170811000777. New Computational Methods and
+Software Tools
+8. Dalcin, Lisandro and Mortensen, Mikael and Keyes, David E: Fast parallel multidimensional FFT using advanced MPI. Journal of Parallel and Distributed Computing (2019). DOI 10.1016/j.jpdc.2019.02.006
+9. Dutt, A., Greengard, L., Rokhlin, V.: Spectral deferred correction methods for
+ordinary differential equations. BIT Numerical Mathematics 40(2), 241–266
+(2000). DOI 10.1023/A:1022338906936. URL http://dx.doi.org/10.1023/A:
+1022338906936
+10. Emmett, M., Minion, M.L.: Toward an efficient parallel in time method for partial differential equations. Communications in Applied Mathematics and Computational Science 7, 105–132 (2012). URL http://dx.doi.org/10.2140/camcos.
+2012.7.105
+11. Emmett, M., Minion, M.L.: Efficient implementation of a multi-level parallel in
+time algorithm. In: Domain Decomposition Methods in Science and Engineering
+XXI, Lecture Notes in Computational Science and Engineering, vol. 98, pp. 359–
+366. Springer International Publishing (2014). DOI 10.1007/978-3-319-05789-7 33.
+URL http://dx.doi.org/10.1007/978-3-319-05789-7_33
+12. Eschweiler, D., Wagner, M., Geimer, M., Knüpfer, A., Nagel, W.E., Wolf, F.: Open
+Trace Format 2 - The next generation of scalable trace formats and support libraries. In: Proc. of the Intl. Conference on Parallel Computing (ParCo), Ghent,
+Belgium, August 30 – September 2 2011, Advances in Parallel Computing, vol. 22,
+pp. 481–490. IOS Press (2012). DOI 10.3233/978-1-61499-041-3-481
+13. Feld, C., Convent, S., Hermanns, M.A., Protze, J., Geimer, M., Mohr, B.: Score-p
+and ompt: Navigating the perils of callback-driven parallel runtime introspection.
+In: X. Fan, B.R. de Supinski, O. Sinnen, N. Giacaman (eds.) OpenMP: Conquering
+
+30
+
+14.
+
+15.
+
+16.
+
+17.
+
+18.
+19.
+
+20.
+
+21.
+
+22.
+
+23.
+24.
+
+25.
+
+26.
+
+Robert Speck, Michael Knobloch, Sebastian Lührs, and Andreas Gocht
+the Full Hardware Spectrum, pp. 21–35. Springer International Publishing, Cham
+(2019)
+Gander, M.J.: 50 years of Time Parallel Time Integration. In: Multiple Shooting
+and Time Domain Decomposition. Springer (2015). URL http://dx.doi.org/10.
+1007/978-3-319-23321-5_3
+Geimer, M., Saviankou, P., Strube, A., Szebenyi, Z., Wolf, F., Wylie, B.J.N.: Further improving the scalability of the scalasca toolset. In: K. Jónasson (ed.) Applied
+Parallel and Scientific Computing, pp. 463–473. Springer Berlin Heidelberg, Berlin,
+Heidelberg (2012)
+Geimer, M., Wolf, F., Wylie, B.J.N., Ábrahám, E., Becker, D., Mohr, B.: The
+SCALASCA performance toolset architecture. In: International Workshop on Scalable Tools for High-End Computing (STHEC), Kos, Greece, pp. 51–65 (2008)
+Gocht, A., Schöne, R., , Frenzel, J.: Advanced Python Performance Monitoring
+with Score-P. In: Tools for High Performance Computing 2019, p. to appear.
+Springer International Publishing (2019)
+Huang, J., Jia, J., Minion, M.: Accelerating the convergence of spectral deferred
+correction methods. Journal of Computational Physics 214(2), 633 – 656 (2006)
+Jülich Supercomputing Centre: JURECA: General-purpose supercomputer at
+Jülich Supercomputing Centre.
+Journal of large-scale research facilities
+2(A62) (2016). DOI 10.17815/jlsrf-2-121. URL http://dx.doi.org/10.17815/
+jlsrf-2-121
+Knobloch, M., Saviankou, P., Schlütter, M., Visser, A., Mohr, B.: A picture is
+worth a thousand numbers – enhancing cube’s analysis capabilities with plugins.
+In: Tools for High Performance Computing 2019 (tbp)
+Knüpfer, A., Brunst, H., Doleschal, J., Jurenz, M., Lieber, M., Mickler, H., Müller,
+M.S., Nagel, W.E.: The Vampir Performance Analysis Tool-Set. In: M. Resch,
+R. Keller, V. Himmler, B. Krammer, A. Schulz (eds.) Tools for High Performance Computing, pp. 139–155. Springer Berlin / Heidelberg (2008). DOI
+10.1007/978-3-540-68564-7 9
+Knüpfer, A., Rössel, C., an Mey, D., Biersdorff, S., Diethelm, K., Eschweiler, D.,
+Geimer, M., Gerndt, M., Lorenz, D., Malony, A.D., Nagel, W.E., Oleynik, Y.,
+Philippen, P., Saviankou, P., Schmidl, D., Shende, S.S., Tschüter, R., Wagner,
+M., Wesarg, B., Wolf, F.: Score-P – A joint performance measurement run-time
+infrastructure for Periscope, Scalasca, TAU, and Vampir. In: Proc. of the 5th Int’l
+Workshop on Parallel Tools for High Performance Computing, September 2011,
+Dresden, pp. 79–91. Springer (2012). DOI 10.1007/978-3-642-31476-6 7. URL
+http://dx.doi.org/10.1007/978-3-642-31476-6_7
+LLNL: Website for XBraid (2018). URL https://www.llnl.gov/casc/xbraid.
+[Online; accessed July 30, 2018]
+Lührs, S., Rohe, D., Schnurpfeil, A., Thust, K., Frings, W.: Flexible and Generic
+Workflow Management. In: Parallel Computing: On the Road to Exascale, Advances in parallel computing, vol. 27, pp. 431 – 438. International Conference
+on Parallel Computing 2015, Edinburgh (United Kingdom), 1 Sep 2015 - 4 Sep
+2015, IOS Press, Amsterdam (2016). DOI 10.3233/978-1-61499-621-7-431. URL
+http://juser.fz-juelich.de/record/808798
+Minion, M.L.: A hybrid parareal spectral deferred corrections method. Communications in Applied Mathematics and Computational Science 5(2), 265–301 (2010).
+URL http://dx.doi.org/10.2140/camcos.2010.5.265
+Mix, H., Herold, C., Weber, M.: Visualization of Multi-layer I/O Performance in
+Vampir. In: Parallel and Distributed Processing Symposium Workshop (IPDPSW),
+2018 IEEE International (2018)
+
+Using performance analysis tools for parallel-in-time integrators
+
+31
+
+27. Ong, B.W., Haynes, R.D., Ladd, K.: Algorithm 965: RIDC Methods: A Family
+of Parallel Time Integrators. ACM Trans. Math. Softw. 43(1), 8:1–8:13 (2016).
+DOI 10.1145/2964377. URL http://doi.acm.org/10.1145/2964377
+28. Pillet, V., Labarta, J., Cortes, T., Girona, S.: Paraver: A tool to visualize and
+analyze parallel code. In: Proceedings of WoTUG-18: transputer and occam developments, vol. 44, pp. 17–31. Citeseer (1995)
+29. Reinders, J.: Vtune performance analyzer essentials. Intel Press (2005)
+30. Ruprecht, D., Speck, R.: Spectral deferred corrections with fast-wave slow-wave
+splitting. SIAM Journal on Scientific Computing 38(4), A2535–A2557 (2016)
+31. Saviankou, P., Knobloch, M., Visser, A., Mohr, B.: Cube v4: From performance
+report explorer to performance analysis tool. In: Proceedings of the International
+Conference on Computational Science, ICCS 2015, Computational Science at the
+Gates of Nature, Reykjavı́k, Iceland, 1-3 June, 2015, pp. 1343–1352 (2015). DOI
+10.1016/j.procs.2015.05.320. URL https://doi.org/10.1016/j.procs.2015.05.
+320
+32. Saviankou, P., Knobloch, M., Visser, A., Mohr, B.: Cube v4: From performance
+report explorer to performance analysis tool. Procedia Computer Science 51, 1343–
+1352 (2015)
+33. Shende, S.S., Malony, A.D.: The tau parallel performance system. The International Journal of High Performance Computing Applications 20(2), 287–311 (2006)
+34. Speck, R.: Algorithm 997: pySDC - Prototyping Spectral Deferred Corrections.
+ACM Transactions on Mathematical Software 45(3) (2019). URL https://doi.
+org/10.1145/3310410
+35. Speck, R.: Parallel-in-time/pysdc: The performance release (2019). DOI 10.5281/
+zenodo.3407254. URL https://doi.org/10.5281/zenodo.3407254
+36. Terpstra, D., Jagode, H., You, H., Dongarra, J.: Collecting performance data with
+papi-c. In: Tools for High Performance Computing 2009, pp. 157–173. Springer
+(2010)
+37. Treibig, J., Hager, G., Wellein, G.: Likwid: A lightweight performance-oriented tool
+suite for x86 multicore environments. In: 2010 39th International Conference on
+Parallel Processing Workshops, pp. 207–216. IEEE (2010)
+38. Weiser, M.: Faster SDC convergence on non-equidistant grids by DIRK sweeps.
+BIT Numerical Mathematics 55(4), 1219–1241 (2014)
+39. Zhang, J., Du, Q.: Numerical studies of discrete approximations to the allen-cahn
+equation in the sharp interface limit. SIAM Journal on Scientific Computing 31(4),
+3042–3063 (2009). DOI 10.1137/080738398. URL https://doi.org/10.1137/
+080738398
+40. Zhukov, I., Feld, C., Geimer, M., Knobloch, M., Mohr, B., Saviankou, P.: Scalasca
+v2: Back to the future. In: Proc. of Tools for High Performance Computing 2014,
+pp. 1–24. Springer (2015). DOI 10.1007/978-3-319-16012-2 1
+
+

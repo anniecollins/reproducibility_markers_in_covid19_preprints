@@ -1,0 +1,1017 @@
+Accelerating Reinforcement Learning with
+Suboptimal Guidance
+Eivind Bøhn ∗ Signe Moe ∗,∗∗ Tor Arne Johansen ∗∗
+
+arXiv:1911.09391v1 [cs.LG] 21 Nov 2019
+
+∗
+SINTEF Digital, Oslo, Norway
+(e-mail: {eivind.bohn, signe.moe}@sintef.no).
+∗∗
+Norwegian University of Science and Technology, Trondheim,
+Norway (email: {signe.moe, tor.arne.johansen}@ntnu.no)
+
+Abstract: Reinforcement Learning in domains with sparse rewards is a difficult problem, and
+a large part of the training process is often spent searching the state space in a more or less
+random fashion for any learning signals. For control problems, we often have some controller
+readily available which might be suboptimal but nevertheless solves the problem to some degree.
+This controller can be used to guide the initial exploration phase of the learning controller
+towards reward yielding states, reducing the time before refinement of a viable policy can be
+initiated. In our work, the agent is guided through an auxiliary behaviour cloning loss which
+is made conditional on a Q-filter, i.e. it is only applied in situations where the critic deems
+the guiding controller to be better than the agent. The Q-filter provides a natural way to
+adjust the guidance throughout the training process, allowing the agent to exceed the guiding
+controller in a manner that is adaptive to the task at hand and the proficiency of the guiding
+controller. The contribution of this paper lies in identifying shortcomings in previously proposed
+implementations of the Q-filter concept, and in suggesting some ways these issues can be
+mitigated. These modifications are tested on the OpenAI Gym Fetch environments, showing
+clear improvements in adaptivity and yielding increased performance in all robotic environments
+tested.
+Keywords: Deep Reinforcement Learning, Non-Linear Control Systems, Robotics
+1. INTRODUCTION
+Reinforcement learning (RL) (Sutton and Barto, 2018)
+is a field of machine learning concerned with sequential
+decision making problems. The theory and methods in RL
+has produced some impressive results the last few years,
+ranging from high-level reasoning tasks such as gameplaying to control of fast dynamics such as actuation in
+robotics. RL has received much attention and interest due
+to its framework being very general, in theory capable of
+solving nearly any problem as long as one can define some
+notion of utility of different states of the system.
+This utility measure, called the reward function in the
+RL framework, is central to both the definition of the
+problem and the performance of the algorithm. Often, a
+sparse reward function 1 is preferable, as they are easier
+to formulate, easier to estimate, and more importantly,
+there is less room for ambiguity and misinterpreting the
+objective of the task. The obvious downside is however
+that only a small region of the problem space actually gives
+a learning signal to the agent, and a significant portion of
+the training time is spent exploring the state space (often
+in a random manner) until a minimally viable strategy
+? The first author is financed by ”PhD Scholarships at SINTEF”
+from the Research Council of Norway (grant no. 272402). The third
+author was supported by the Research Council of Norway (grant no.
+223254 NTNU AMOS).
+1 A sparse reward function is one that only yield signals in some
+subset of the state space, e.g. in the subset defined as the set of goal
+states, and is typically constant elsewhere.
+
+(i.e. one that consistently is able to reach reward-yielding
+states) is found, from which further progress can be made.
+Often in robotics and other control applications one already has a controller, which due to e.g. nonlinearities in
+the dynamics, uncertainties in model parameters, or strict
+computational requirements might be suboptimal. This
+controller could be used to guide the learning controller
+towards this minimally viable strategy, thereby reducing
+the long initial exploration phase. In the rest of this paper guiding controller and pre-existing controller is used
+interchangeably to refer to this controller.
+The most naive implementation of imitation learning (IL),
+that is, trying to directly copy the pre-existing controller
+is seldom successful, mainly due to a data distribution
+mismatch. Furthermore, the potential performance of the
+learning controller is bound by the performance of the
+existing controller. The data distribution problem arises
+as the data collected by the demonstrator will only consist
+of a subset of the state space, and will offer no guidance
+on how to course correct back into this subset when
+the learning controller inevitably makes a small deviation
+from the controller it is imitating. Small errors therefore
+tend to accumulate into trajectories that stray far from
+those produced by the demonstrator. Additionally, when
+combining IL with RL there needs to be some mechanism
+in place to allow the learning controller to make different
+choices than the original controller when appropriate, in
+order to exceed the performance of the existing controller.
+
+This work has been submitted to IFAC for possible publication
+
+The problem of leveraging information encoded in previous
+controllers or demonstration data and combining it with
+further learning such as RL has been widely studied. This
+has led to the development of several different approaches,
+such as inverse reinforcement learning, behaviour cloning
+(BC), and pretraining learning controllers with demonstration data. In our work, we tackle the problem of
+deciding when the learning controller should imitate the
+pre-existing controller, and when it should develop its
+own behaviour. We base our method in the concept of
+the Q-filter (Nair et al., 2017), which makes the learning
+controller imitate the pre-existing controller only when
+it is deemed to yield a higher reward than what the
+learning controller would achieve. In this work we identify
+issues with the original formulation of the Q-filter and
+propose modifications to mitigate these issues, resulting
+in improved adaptivity to the difficulty of the task and to
+the proficiency of the pre-existing controller, and thus also
+improved performance.
+The rest of the paper is organized as follows. First, related
+work is presented and discussed in Section 2, then the
+requisite background theory for RL and the algorithms
+used in this paper is presented in Section 3. Our method is
+outlined in Section 4, and the experiments used to evaluate
+the methods are outlined in Section 5. The results of the
+experiments are shown in Section 6, which also discusses
+the strengths and weaknesses of the proposed method.
+Finally, Section 7 concludes with our thoughts on the
+matter and suggestions for further work.
+2. RELATED WORK
+The DAGGER algorithm (Ross et al., 2011) is an approach
+to mitigating the data distribution mismatch problem. A
+learning controller is trained on a dataset of experience,
+and then this learning controller is used in the environment
+to collect more data. The newly collected data is appended
+to the training set, and the demonstrator is asked to label
+the new data with the appropriate outputs. Our method
+builds upon the DAGGER framework in the sense that we
+assume access to an online demonstrator, and iteratively
+expand the dataset with the demonstrators knowledge.
+However, our learning controller is only made to mimic the
+demonstrator in some selected states and this is only one
+of its optimization objectives. Deeply AggreVaTeD (Sun
+et al., 2017) is a further extension of DAGGER to continuous state and action spaces and nonlinear function
+approximation with neural networks (NNs). Both these
+approaches are pure IL methods and thus do not allow for
+the agent to surpass the demonstrator.
+Deep deterministic policy gradients from demonstrations
+(DDPGfD) (Vecerik et al., 2018) is a method for leveraging
+demonstration data for RL algorithms in domains with
+continuous state and action spaces. In this work, human
+generated demonstration are included in the replay buffer
+for which a prioritized sampling technique is used to
+ensure a suitable mix of demonstration data and self
+collected data in each training batch. They further use
+a mix of 1-step and n-step return losses for training the
+Q-networks. They show increased performance over the
+demonstrations, as well as over regular deep deterministic
+policy gradients (DDPG) even when the latter uses handcrafted shaped rewards and DDPGfD uses sparse rewards.
+
+Nair et al. (2017) propose to address the problem of
+choosing when the learning controller should emulate the
+demonstrator with the use of the Q-filter. The Q-filter is an
+indicator function used to select when to apply a behaviour
+cloning loss on the action chosen by the demonstrator. The
+filter evaluates to true when the estimated value from the
+Q-function is higher for the demonstrator action than it
+is for the action chosen by the learning controller. This
+provides a natural way to anneal behaviour cloning loss
+during the training process that is adaptive to the task
+at hand. Their demonstrations come in the form of a
+fixed set of trajectories collected by a human demonstrator
+in a virtual reality version of the environment. In each
+training batch, a portion of the data is sampled from
+the regular replay buffer and a portion is sampled from
+the demonstration buffer, on which BC is applied for
+the actions selected by the Q-filter. Our method borrows
+the concept of the Q-filter from this work, suggesting
+some important adjustments to the concept. Further, their
+source of demonstrations consists of a fixed dataset, while
+we assume online access to a demonstrator controller.
+In assisted deterministic policy gradients (AsDDPG) Xie
+et al. (2018) propose a novel architecture for incorporating
+a simple controller to guide the initial exploration phase.
+In their architecture, the critic module has an additional
+branch that estimates the Q-values of the pre-existing
+controllers action and the actors action for the state in
+question. Based on these estimates the method greedily
+chooses the one with the highest Q-value, and applies this
+action as the exploration action during training. In this
+way, the guiding controller is used to show the actor some
+primitives it can use to aid exploration. As in our method,
+online access to the guiding controller is assumed, but the
+Q-filter is applied to select actions for exploration instead
+of to shape the gradients of the optimization procedure.
+3. BACKGROUND
+3.1 Reinforcement Learning
+We consider the RL problem in a Markov decision process
+(MDP) framework. The MDP is defined by the tuple
+hS, A, R, T , γi, where S is the set of states, A is the set
+of actions, R(s, a) is the reward function, T is the state
+transition function describing the evolution of the states as
+a function of time and actions, and γ ∈ [0, 1] is the discount
+factor, weighing the relative importance of immediate and
+future rewards. We denote a trajectory τ as a sequence
+of state and actions, e.g. one episode
+of the problem
+P
+t
+task, and the return as R(τ ) =
+(st ,at )∼τ γ R(st , at ),
+where ∼ signifies that the left hand side is distributed
+according to the distribution of the right hand side. The
+RL objective is to find a policy π, i.e. a function that
+generates actions from states, which maximizes the sum of
+expected future rewards weighed by the discount factor γ,
+i.e. the expected return in an episodic setting. We denote
+this objective as maxθ J(θ) = Eτ ∼πθ [R(τ )], where θ is
+the parameterization of the policy. Central to many RL
+algorithm is the concept of the value of a state, given by the
+value function V π (s) = Eτ ∼π [R(τ ) | s0 = s]. The value
+function measures the expected return of being in a given
+state and from there always acting according to the policy
+π. If we further leave the first action in the trajectory
+free, we get the state-action value function, often called
+
+the Q-function Qπ (s, a) = Eτ ∼π [R(τ ) | s0 = s, a0 = a].
+We consider in this work a further extension to the MDP
+framework in the form of a specified goal state, from a set
+of possible goals G. Schaul et al. (2015) show that value
+functions conditioned on this additional goal parameter
+can successfully be trained to generalize to unseen goals.
+
+4. METHOD
+4.1 Problem Description
+
+3.2 Deep Deterministic Policy Gradients
+To address the challenges posed by tasks with continuous state and action spaces, Lillicrap et al. (2015) introduced DDPG. DDPG is an off-policy, model-free, policygradient, actor-critic algorithm which concurrently estimates the Q-function Qπθ and an actor that aims at solving for the actions which maximize the Q-function. These
+actor and critic functions are implemented as NNs, and are
+trained off-policy from experience collected by the actor
+interacting with the environment. This experience is stored
+in a replay buffer D, from which we sample minibatches
+B to train the actor and the critic. More concretely, the
+critic is trained in a supervised manner to regress on 1-step
+returns according to the Bellman optimality equation:
+yt = Rt + γQ(st+1 , π(st+1 |θQ ))
+
+
+L(θQ ) = E(st ,at ,Rt ,st+1 )∼B (yt − Q(st , at |θQ ))2
+
+that some state the actor was successful in achieving was
+the actual goal state, the algorithm receives more frequent
+learning signals and convergence is accelerated.
+
+In our setup we assume online access to a pre-existing suboptimal controller which is capable of achieving goal states
+from a non-zero share of initial states. We also assume
+that we have access to the Q-function of this controller,
+denoted by QG . However, we do not assume prior access
+to demonstration trajectories from this controller.
+4.2 Proposed Method
+We modify the actor objective function of DDPG style
+algorithms (5) by adding a BC loss term, and as in Nair
+et al. (2017) we only selectively apply this loss with the
+indicator function conditioned on the Q-filter:
+
+(1)
+
+LBC =
+
+(2)
+
+Nb
+X
+
+kai − πθ (si )k2 1QG (si ,ai )>Qπθ (si ,πθ (si ))
+
+
+where θQ is the parameterization of the Q-function. The
+actor attempts to find the optimal policy according to
+the critic through the relationship (3). Since this actor is
+deterministic, a stochastic behaviour policy (4) is used to
+collect experience in order to improve exploration, which
+is obtained by adding Gaussian noise with parameters
+selected to suit the problem. Finally, the actor is trained
+by optimizing the objective (5).
+π(s) = arg max Q(s, a)
+
+(3)
+
+b
+
+(4)
+(5)
+
+a
+
+π (s) = π(s) + N (µ, σ)
+L(θ) = max Es∼D [QθQ (s, πθ (s))]
+θ
+
+3.3 Twin Delayed Deep Deterministic Policy Gradients
+Twin delayed DDPG (TD3) (Fujimoto et al., 2018) improves upon DDPG in several ways, notably by alleviating
+sources of overestimation in the critic network, and introduces more robustness towards hyperparameters. It does
+this by maintaining two separate networks estimating the
+critic Q-function, and using the lesser of these two as the
+target for regression (1). Further they suggest updating the
+policy networks less frequently to allow the value functions
+more time to converge before they are used to update the
+policy.
+3.4 Hindsight Experience Replay
+The environments considered in this paper have sparse
+reward structures, requiring a directed effort over several
+actions to reach regions of the state space where any
+learning signal is received at all. To reach learning signals
+in such scenarios more quickly, Andrychowicz et al. (2017)
+proposed hindsight experience replay (HER), in which the
+experience contained in the replay buffer is retroactively
+fitted with a new goal state that was actually achieved
+sometime during the episode. In this way, by pretending
+
+(6)
+
+i=0
+
+where 1A>B =
+Qπθ0 ← QG
+
+1
+0
+
+if A > B
+otherwise
+
+(7)
+(8)
+
+Here Nb is the number of samples in each training batch,
+i.e. we use the online availability of the pre-existing controller to apply this term to all samples in the batch. This
+does not add considerable overhead, as the pre-existing
+controllers action can be evaluated once and then saved
+to the replay buffer alongside the other data. 2 In this
+work we suggest to modify the original formulation of
+the Q-filter by replacing the left hand side of the condition with the pre-existing controllers own estimated Qfunction, which is kept static throughout the training process. As the TD3 algorithm has two separate Q-networks,
+one can look at different ways of combining these to make
+up the Q-filter. In this work we have chosen to only use
+the Q-network that is used in the optimization objective
+(5) as a basis for the comparison.
+In order for the actors and the guiding controllers Qfunctions to have comparable magnitudes, the actors Qnetwork is initialized to that of the guiding controller (8).
+This also provides a starting point that should be closer
+to optimal than a random initialization.
+The motivation behind this modification is based on two
+key insights about the formulation of the original Q-filter
+in Nair et al. (2017): First, for their Q-filter to have its
+intended effects the Q-network need to have converged,
+otherwise the comparison of actions will be highly stochastic. Moreover, the action frequency in control applications
+is typically high, thereby only to a small degree affecting the subsequent state, thus the sides of the inequality
+will differ principally in the immediate reward, which
+in most cases will also be similar. The quantities that
+2
+
+Training with a guiding controller increases the wall clock time of
+the training process by about 5% compared with normal training in
+our experiments.
+
+are compared will thus be very similar and the action
+discrimination is therefore further stochastisized. Second,
+the actor in DDPG style algorithms directly implements
+a maximization over actions of the Q-function, and will
+therefore quickly learn to optimize the unconverged Qnetwork, therefore seemingly (most times erroneously) offering better options than the pre-existing controller. Their
+implementation will henceforth be referred to as the naive
+method.
+In practice, the Q-filter therefore tends to prefer the
+guiding controllers actions infrequently in the beginning,
+and converge to imitate the guiding controller with some
+non-zero frequency. We want the learning controller to aim
+to emulate the pre-existing controller to a large degree
+in the beginning, and then have the BC loss taper off to
+allow the learning controller to surpass the pre-existing
+controller. With the original formulation of the Q-filter
+however, the BC loss does not seem to be strategically
+applied. We therefore suggest using a different Q-function
+to assess the value of the pre-existing controllers actions,
+which is found by fitting a Q-network to data gathered
+by this controllers actions. This Q-function provides a
+more reliable estimate of the guiding controller actions
+true value right from the start, and also provides a static
+goal to compare against as the training progresses.
+4.3 Guiding Controllers
+The guiding controllers are handcrafted proportional controllers with some conditional logic, e.g. move over block,
+then lower hand and grip block etc. The controllers exhibit varying proficiency levels, from a perfect 3 controller
+capable of achieving any goal in the test set for the pickand-place environment, to a controller achieving merely
+21% of the goals in the slide task.
+
+factor of 0.98 and clip the regression Q-targets (1) to
+the ranges possible in the environment, and also continue
+bootstrapping on environment termination due to time
+limit. We use the hyperparameters from TD3, i.e. two
+fully-connected hidden layers of 400 and 300 nodes respectively, a learning rate of 0.001 for both actor and critic,
+and a replay buffer size of 106 . Training is run every 1000
+time steps of the environment for 1000 gradient steps, with
+a batch size of 100. We apply a small L2 regularization
+term with strength 0.01 to the pre-activation values of
+the actors output layer, in order to mitigate vanishing
+gradients issues. The BC loss term (6) is weighted with
+a factor of 2.
+The linear schedule is set to be fully decayed after 500k
+time steps, with an initial value equal to that of the other
+methods. This schedule is not optimal for all environments,
+but a static schedule was chosen to highlight some of the
+issues with this approach.
+5.2 Ablation Studies
+It is conceivable that the improvements of the proposed
+methods stem mainly from the knowledge encoded into
+QG and the initialization of Qπθ to this. A pretrained QG
+already contains information about which action would
+maximize the rewards when further following the same
+action choices as the pre-existing controller at each state,
+and the optimization procedure implemented by the actor
+could take advantage of this information to achieve some
+of the same benefits that the BC loss offers. To test this
+hypothesis, we ran one version of our method without the
+BC loss term, and one version of the naive method which
+was initialized to QG as in (8).
+6. RESULTS AND DISCUSSION
+6.1 Results of Experiments
+
+5. EXPERIMENTS
+We train and evaluate our method on the OpenAI Gym
+Fetch environments (Plappert et al., 2018), which are
+based on the MuJoCo physics simulator (Todorov et al.,
+2012). The FetchReach environment is too easy to solve
+for the RL algorithms even without the use of a guiding
+controller, and as such has been excluded from the experiments. For each environment a test set consisting of 100
+random initial states and goal states has been constructed,
+and the agents are evaluated on this set every 20k time
+steps. As a baseline, we evaluate our method against the
+original formulation of the Q-filter, as well as against
+an approach where the weight of the BC loss is linearly
+decayed with time steps. We run each experiment with
+five different random seeds and show mean results with
+one standard deviation confidence bounds.
+5.1 Configuration
+Due to limited computational resources we employed the
+TD3 algorithm instead of DDPG, as convergence of the
+latter is often dependent on running several actors in
+parallel. Following the original paper introducing the Fetch
+environments (Andrychowicz et al., 2017), we use a decay
+3 Perfect in the sense that it is able to complete all tasks in the test
+set.
+
+Figure 1 illustrates the unwanted behaviours of the naive
+Q-filter as described in section 4: it typically starts low
+and converges to some value in the range of 0.3 - 0.5.
+Our method on the other hand delivers on its promises
+of adaptivity: it copies a large portion of the actions
+produced by the perfect guiding controller in the pick-andplace environment, selects only some of the actions produced by the pre-existing controllers in the slide and push
+environments, and decreases the frequency of imitation
+as the agent improves. The two Q-filter approaches have
+the same asymptotic performance for the push and slide
+environments, but our Q-filter method has considerable
+more success in the pick-and-place environment. The linear
+method matches the performance of the adaptive methods
+for the push environment, but falls a bit short in the pickand-place environment, and is only able to find any success
+for a single seed in the most difficult slide task. The linear
+scheduling method seems to be in general the method
+with the quickest initial learning, due to indiscriminately
+imitating all actions from the guiding controller at the
+start, while the two Q-filter approaches seem to share a
+similar time at which improvements begin.
+6.2 Evaluation of Results
+While our implementation of the Q-filter does lead to more
+deliberate application of the BC loss, it does introduce a
+
+FetchPickAndPlace-v1
+
+Success
+
+BC-loss
+
+Q-filter
+1.0
+
+Model
+Ours
+Naive
+Linear
+
+1.0
+4
+0.8
+
+0.8
+
+0.4
+
+Model
+Ours
+Naive
+Linear
+Guide
+
+0.2
+0.0
+0
+
+200 k
+
+400 k
+
+600 k
+
+800 k
+
+Value
+
+Value
+
+Value
+
+3
+0.6
+
+2
+
+0.4
+
+1
+
+0.0
+0
+
+200 k
+
+400 k
+
+Step
+
+600 k
+
+800 k
+
+1M
+
+0
+
+200 k
+
+400 k
+
+Step
+BC-loss
+
+1.75
+
+1.0
+
+0.4
+
+1M
+
+1.00
+0.75
+
+Model
+Ours
+Naive
+
+0.4
+
+Value
+
+0.6
+
+1.25
+
+Value
+
+Model
+Ours
+Naive
+Linear
+Guide
+
+800 k
+
+Q-filter
+0.5
+
+Model
+Ours
+Naive
+Linear
+
+1.50
+0.8
+
+600 k
+
+Step
+
+FetchPush-v1
+
+Success
+
+Value
+
+Model
+Ours
+Naive
+
+0.2
+
+0
+
+1M
+
+0.6
+
+0.3
+
+0.2
+
+0.50
+0.25
+
+0.2
+
+0.1
+0.00
+
+0.0
+0
+
+200 k
+
+400 k
+
+600 k
+
+800 k
+
+1M
+
+0
+
+200 k
+
+400 k
+
+Step
+
+0
+
+200 k
+
+400 k
+
+0.0
+
+800 k
+
+1M
+
+Q-filter
+Model
+Ours
+Naive
+Linear
+
+1.25
+
+0.2
+
+600 k
+
+Step
+
+1.50
+
+1.00
+0.75
+
+Model
+Ours
+Naive
+
+0.8
+0.7
+0.6
+
+Value
+
+Value
+
+Value
+
+1M
+
+BC-loss
+
+1.75
+
+Model
+Ours
+Naive
+Linear
+Guide
+
+0.4
+
+800 k
+
+FetchSlide-v1
+
+Success
+
+0.6
+
+600 k
+
+Step
+
+0.5
+0.4
+
+0.50
+
+0.3
+
+0.25
+
+0.2
+0.1
+
+0.00
+
+0.0
+0
+
+500 k
+
+1M
+
+1.5 M
+
+2M
+
+2.5 M
+
+3M
+
+0
+
+500 k
+
+1M
+
+Step
+
+1.5 M
+
+Step
+
+2M
+
+2.5 M
+
+3M
+
+0
+
+500 k
+
+1M
+
+1.5 M
+
+2M
+
+2.5 M
+
+3M
+
+Step
+
+Fig. 1. Results of experiments: The graphs show for each environment the success rate on the test set, the BC loss,
+and the fraction of actions for which the indicator function evaluates to true in each minibatch. Note that the
+naive implementation of the Q-filter exhibit similar behaviour regardless of the environments difficulty and the
+pre-existing controllers proficiency, while our method is adaptive to these variables.
+credit assignment problem. Since the two Q-functions that
+are compared correspond to two different controllers, it is
+unclear which actions in the action sequences generated by
+the controllers are responsible for the observed difference
+in value. Imitating only the initial action is therefore a
+potential source of error, but introducing some randomness
+and perturbation to the training process in RL is a known
+measure to avoid local minima, and therefore this might
+not be a significant issue.
+Even though the linear scheduling method is less complex
+than the other methods it can sometimes achieve similar or better performance in terms of takeoff time and
+asymptotic performance. The slide environment clearly
+illustrates that this approach require careful tuning, as
+the method is in this case unable to represent a policy
+capable of achieving any goals for most seeds. The Q-filters
+
+on the other hand are adaptive and provide reasonable
+performance for any task with little tuning, and in particular our method will imitate a good guiding controller
+to a larger degree than a bad guiding controller, unlike
+the linear scheduling method. Our version of the Q-filter
+does however require additional information in the form of
+QE , and the linear method might therefore be preferable
+in some scenarios despite its limitations.
+Figure 2 shows the results of the ablation experiments.
+This experiment shows that initializing to QG is not
+enough in and of itself to produce the results in Figure
+1, and that the BC loss term is a vital part of the
+method. The knowledge contained in QG is likely quickly
+lost through training on the limited data available in the
+beginning, and therefore does not significantly add to the
+performance. Figure 2 also shows that adding initialization
+
+Ablation FetchPickAndPlace-v1
+
+Ablation FetchPush-v1
+
+Success
+
+1.00
+0.75
+0.50
+
+Model
+Naive-Init
+Ours-No-BC
+
+0.75
+0.50
+0.25
+
+Value
+
+0.25
+
+Value
+
+Success
+
+1.00
+Model
+Naive-Init
+Ours-No-BC
+
+0.00
+
+0.00
+
+−0.25
+
+−0.25
+
+−0.50
+
+−0.50
+
+−0.75
+
+−0.75
+
+−1.00
+
+REFERENCES
+
+−1.00
+0
+
+200 k
+
+400 k
+
+600 k
+
+800 k
+
+1M
+
+0
+
+200 k
+
+Step
+
+400 k
+
+600 k
+
+800 k
+
+1M
+
+Step
+
+Ablation FetchSlide-v1
+Success
+
+1.00
+
+Model
+Naive-Init
+Ours-No-BC
+
+0.75
+0.50
+0.25
+
+Value
+
+way one can achieve a form of safe training, in the sense
+that only safe regions of the state space is visited, and
+risk of damage to the system is minimized. An interesting
+further work is a study on what fraction of actions the
+agent needs to control itself for learning to be successful
+in such a scenario.
+
+0.00
+−0.25
+−0.50
+−0.75
+−1.00
+0
+
+500 k
+
+1M
+
+1.5 M
+
+2M
+
+2.5 M
+
+3M
+
+Step
+
+Fig. 2. The graphs show the difference in performance
+when including initialization to QG in the naive
+method and when removing the BC loss term from our
+method, compared to its counterpart in Figure 1 as
+a baseline. The naive methods performance is largely
+unaffected by this modification, while the removal of
+the BC loss from our method significantly decreases
+performance, down to a level comparable to having
+no guiding controller.
+to the naive version of the Q-filter does not alter the
+performance to a significant degree, further supporting the
+claim that the observed improvements in our method stem
+from an improved comparison in the Q-filter.
+The Q-function of the pre-existing controller need not
+be be obtained in a complicated manner such as Qlearning. Often, one has some historical data of usage
+of this controller, which one could use to estimate the
+expected sum of rewards in an entirely offline manner.
+Furthermore, one might not need a function approximator
+as complicated as a NN for this purpose, and some simpler
+methods such as linear regression might be sufficient.
+This would remove the possibility of directly initializing
+the Q-function of the actor to that of the pre-existing
+controller, but one could simply pretrain the Q-network
+in a supervised manner on outputs from the pre-existing
+controllers Q-function to achieve much of the same effect.
+7. CONCLUSION
+We have shown that our method is capable of accelerating
+learning using guiding controllers with a wide spread of
+proficiency levels. An important further work is looking
+into how the optimality of the guiding controller affects
+the rate of convergence and asymptotic performance of
+the learning controller.
+Having a pre-existing controller available online opens up
+many possibilities. If one knowns the stability properties
+of this controller, one can have the agent explore freely
+while still in the region of attraction (RoA) of the guiding
+controller, and then have the guiding controller assume
+control and stabilize the system when necessary. In this
+
+Andrychowicz, M., Wolski, F., Ray, A., Schneider, J.,
+Fong, R., Welinder, P., McGrew, B., Tobin, J., Abbeel,
+P., and Zaremba, W. (2017). Hindsight Experience
+Replay. In 31st Conference on Neural Information
+Processing Systems (NIPS 2017).
+Fujimoto, S., van Hoof, H., and Meger, D. (2018). Addressing Function Approximation Error in Actor-Critic
+Methods. In Proceedings of the 35th International Conference on Machine Learning.
+Lillicrap, T.P., Hunt, J.J., Pritzel, A., Heess, N., Erez, T.,
+Tassa, Y., Silver, D., and Wierstra, D. (2015). Continuous control with deep reinforcement learning. In 4th
+International Conference on Learning Representations,
+ICLR 2016.
+Nair, A., McGrew, B., Andrychowicz, M., Zaremba, W.,
+and Abbeel, P. (2017). Overcoming Exploration in Reinforcement Learning with Demonstrations. In 2018 IEEE
+International Conference on Robotics and Automation
+(ICRA).
+Plappert, M., Andrychowicz, M., Ray, A., McGrew,
+B., Baker, B., Powell, G., Schneider, J., Tobin, J.,
+Chociej, M., Welinder, P., Kumar, V., and Zaremba, W.
+(2018). Multi-Goal Reinforcement Learning: Challenging Robotics Environments and Request for Research.
+arXiv preprint arXiv:1802.09464.
+Ross, S., Gordon, G.J., and Bagnell, J.A. (2011). A Reduction of Imitation Learning and Structured Prediction to
+No-Regret Online Learning. In Proceedings of the 14th
+International Conference on Artificial Intelligence and
+Statistics (AISTATS) 2011.
+Schaul, T., Horgan, D., Gregor, K., and Silver, D. (2015).
+Universal Value Function Approximators. In Proceedings of the 32nd International Conference on Machine
+Learning.
+Sun, W., Venkatraman, A., Gordon, G.J., Boots, B., and
+Bagnell, J.A. (2017). Deeply AggreVaTeD: Differentiable Imitation Learning for Sequential Prediction. In
+Proceedings of the 34th International Conference on Machine Learning.
+Sutton, R.S. and Barto, A.G. (2018). Reinforcement
+Learning: An Introduction. MIT Press.
+Todorov, E., Erez, T., and Tassa, Y. (2012).
+Mujoco: A physics engine for model-based control. In
+2012 IEEE/RSJ International Conference on Intelligent
+Robots and Systems, 5026–5033.
+Vecerik, M., Hester, T., Scholz, J., Wang, F., Pietquin,
+O., Piot, B., Heess, N., Rothörl, T., Lampe, T., and
+Riedmiller, M. (2018). Leveraging Demonstrations for
+Deep Reinforcement Learning on Robotics Problems
+with Sparse Rewards. arXiv:1707.08817 [cs].
+Xie, L., Wang, S., Rosa, S., Markham, A., and Trigoni,
+N. (2018). Learning with Training Wheels: Speeding up
+Training with a Simple Controller for Deep Reinforcement Learning. In 2018 IEEE International Conference
+on Robotics and Automation (ICRA), 6276–6283.
+
+

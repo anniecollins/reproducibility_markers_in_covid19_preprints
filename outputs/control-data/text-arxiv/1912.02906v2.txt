@@ -1,0 +1,4608 @@
+Proceedings of Machine Learning Research vol xxx:1–39, 2020
+
+Scalable Reinforcement Learning of Localized Policies for
+Multi-Agent Networked Systems
+
+arXiv:1912.02906v2 [math.OC] 18 Feb 2020
+
+Guannan Qu
+Adam Wierman
+
+GQU @ CALTECH . EDU
+ADAMW @ CALTECH . EDU
+
+Department of Computing and Mathematical Sciences
+California Institute of Technology
+Pasadena, CA 91125, USA
+
+Na Li
+
+NALI @ SEAS . HARVARD . EDU
+
+School of Engineering and Applied Sciences
+Harvard University
+Cambridge, MA 02138, USA
+
+Abstract
+We study reinforcement learning (RL) in a setting with a network of agents whose states and actions
+interact in a local manner where the objective is to find localized policies such that the (discounted)
+global reward is maximized. A fundamental challenge in this setting is that the state-action space
+size scales exponentially in the number of agents, rendering the problem intractable for large networks. In this paper, we propose a Scalable Actor Critic (SAC) framework that exploits the network
+structure and finds a localized policy that is an O(ρκ+1 )-approximation of a stationary point of the
+objective for some ρ ∈ (0, 1), with complexity that scales with the local state-action space size of
+the largest κ-hop neighborhood of the network.
+Keywords: Multi-agent reinforcement learning, networked systems, actor-critic methods.
+
+1. Introduction
+Having demonstrated impressive performance in a wide array of domains such as game play (Silver
+et al., 2016; Mnih et al., 2015), robotics (Duan et al., 2016; Levine et al., 2016), autonomous driving
+(Li et al., 2019), Reinforcement Learning (RL) has emerged as a promising tool for decision and
+control. However, in order to use RL in the context of control of large scale networked systems, such
+as those in cyber-physical systems, it is necessary to develop scalable RL algorithms for networked
+systems.
+In this paper, we consider a RL problem for a network of n agents, each with state si and action
+ai , both taking values from finite sets. The agents are associated with an underlying dependence
+graph G and interact locally, i.e, the distribution of si (t + 1) only depends on the current states
+of the local neighborhood of i as well as the local ai (t). Further, each agent is associated with
+stage reward ri that is a function of si , ai , and the global stage reward is the average of ri . In
+this setting, the design goal is to find a decision policy that maximizes the (discounted) global
+reward. This setting captures a wide range of applications. For example, such models have been
+used in the literature on epidemics (Mei et al., 2017), social networks (Chakrabarti et al., 2008;
+Llas et al., 2003), communication networks (Zocca, 2019; Vogels et al., 2003), queueing networks
+
+c 2020 G. Qu, A. Wierman & N. Li.
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+(Papadimitriou and Tsitsiklis, 1999), smart transportation (Zhang and Pavone, 2016), smart building
+systems (Wu et al., 2016; Zhang et al., 2017), and multi-agent game play (Borovikov et al., 2019).
+A fundamental difficulty when applying RL to such networked systems is that, even if individual state and action spaces are small, the entire state profile (s1 , . . . , sn ) and the action profile
+(a1 , . . . , an ) can take values from a set of size exponentially large in n. This “curse of dimensionality” renders the problem unscalable. For example, most RL algorithms like temporal difference
+(TD) learning or Q-learning require storage of a value function or Q-function (Bertsekas and Tsitsiklis, 1996) whose size is the same as the state space (or state-action space), which in our problem
+is exponentially large in n. Such scalability issues have indeed been observed in previous research
+on variants of the problem we study, e.g. in multi-agent RL (Littman, 1994; Bu et al., 2008) and
+factored Markov Decision Proccess (MDP) (Kearns and Koller, 1999; Guestrin et al., 2003). A variety of approaches have been proposed to manage this issue, e.g. the idea of “independent learners”
+in Claus and Boutilier (1998); or function approximation schemes (Tsitsiklis and Van Roy, 1997).
+However, such approaches lack rigorous optimality guarantees. In fact, it has been suggested that
+such MDPs with exponentially large state spaces may be fundamentally intractable in general, e.g.,
+see Papadimitriou and Tsitsiklis (1999); Blondel and Tsitsiklis (2000).
+In addition to the challenges posed by the scalability issue, another issue is that, even if an
+optimal policy that maps a global state (s1 , . . . , sn ) profile to a global action (a1 , . . . , an ) can be
+found, it is usually impractical to implement such a policy for real-world networked systems because
+of the limited information and communication among agents. For example, in large scale networks,
+each agent i may only be able to to implement localized policies, where its action ai only depends
+on its own state si . Designing such localized polices with global network performance guarantee
+can also be challenging, see e.g. Rotkowitz and Lall (2005).
+The challenges described above highlight the difficulty of applying RL to control large scale
+networked systems. However, the network itself provides some structure that can potentially be
+exploited. The question that motivates this paper is: Can the network structure be utilized to develop
+scalable RL algorithms that provably find a (near-)optimal localized policy?
+Contributions. In this work we propose a framework that exploits properties of the network
+structure to develop RL to learn localized policies for large-scale networked systems in a scalable
+manner. Specifically, our main result (Theorem 5) shows that our algorithm, Scalable Actor Critic
+(SAC), finds a localized policy that is a O(ρκ+1 )-approximation of a stationary point of the objective function, with complexity that scales with the local state-action space size of the largest
+κ-hop neighborhood. To the best of our knowledge, our results are perhaps the first to provide such
+provable guarantee for scalable RL of localized policies in multi-agent network settings.
+The key technique underlying our results is the observation that, when the size of κ-hop neighborhood is bounded, the network structure implies that the Q-function satisfies an exponential decay
+property (Definition 2), which leads to a tractable approximation of the policy gradient. In particular, despite the policy gradient itself being intractable to compute due to the large state-action space
+size, we introduce a truncated policy gradient (see Lemma 4) that can be computed efficiently and
+can be used in an actor-critic framework which yields an O(ρκ+1 )-approximation. This technique is
+novel and is a contribution in its own right. It can be used broadly to develop RL in network settings
+beyond the specific actor-critic algorithm we propose in this paper.
+Related Literature. Our problem falls under category of the “succinctly described” MDPs in
+Blondel and Tsitsiklis (2000, Section 5.2), where the state and/or action space is a product space
+formed by the individual state and/or action space of multiple agents. As the state/action space is
+2
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+exponentially large, such problems are unscalable in general, even when the problem has structure
+(Blondel and Tsitsiklis, 2000; Whittle, 1988; Papadimitriou and Tsitsiklis, 1999). Despite this, there
+is a large literature on RL and MDPs in multi-agent settings under various structural assumptions.
+Multi-agent RL dates back to the early work of Littman (1994); Claus and Boutilier (1998);
+Littman (2001); Hu and Wellman (2003) (see Bu et al. (2008) for a review) and has been actively
+studied, e.g. Zhang et al. (2018); Kar et al. (2013); Macua et al. (2015); Mathkar and Borkar (2017);
+Wai et al. (2018), see a more recent review in Zhang et al. (2019). Multi-agent RL encompasses
+a broad range of settings including competitive agents and Markov games. The case most relevant
+to ours is the cooperative multi-agent RL where typically, the agents can take their own actions but
+they share a common global state and maximize a global reward (Bu et al., 2008). This is contrast
+to the model we study, in which each agent has its own state and acts upon its own state. Despite the
+existence of a global state, multi-agent RL still faces scalability issues since the joint-action space
+is exponentially large. A number of techniques have been proposed to deal with this, including
+independent learners (Claus and Boutilier, 1998; Matignon et al., 2012), where each agent employs
+a single-agent RL method. While successful in some cases, the independent learner approach can
+suffer from instability (Matignon et al., 2012). Alternatively, one can use function approximation
+schemes to approximate the large Q-table, e.g., linear function approximation (Zhang et al., 2018) or
+neuro networks (Lowe et al., 2017). Such methods can reduce computation complexity significantly,
+but it is unclear whether the performance loss caused by the function approximation is small. In
+contrast, our technique not only reduces computation but also guarantees small performance loss.
+Factored MDPs are problems where every agent has its own state and the state transition factorizes in a way similar to our model (Kearns and Koller, 1999; Guestrin et al., 2003; Osband and
+Van Roy, 2014). However, they differ from the model we consider in that each agent does not have
+its own action. Instead, there is a global action affecting every agent. Despite the difference, Factored MDPs still suffer from scalability issues. Similar approaches as in the case of Multi-agent RL
+are used, e.g., Guestrin et al. (2003) proposes a class of “factored” linear function approximators;
+however, it is unclear whether the loss caused by the approximation is small.
+Other Related Work. Beyond the above, our work is also connected to a few other classes of
+problems. The first is the class of weakly coupled MDPs, where every agent has its own state and
+action but their transition is decoupled (Meuleau et al., 1998). While similar to our model, our model
+differs in that the transition probability is coupled among the agents. Additionally, our model shares
+some similarity with the work of control of dynamical systems over graphs, e.g., the epidemics
+(Cator and Van Mieghem, 2012; Sahneh et al., 2013; Mei et al., 2017) and Glauber dynamics in
+physics (Lokhov et al., 2015; Mezard and Montanari, 2009), though our focus is very different from
+these works. Finally, this work is related to Qu and Li (2019), which assumes the full knowledge
+of MDP model (not RL) and imposes strong assumptions on the graph. In contrast, our work here
+does not need knowledge of the MDP and significantly relaxes the network assumptions.
+
+2. Preliminaries
+We consider a network of n agents that are associated with an underlying undirected graph G =
+(N , E), where N = {1, . . . , n} is the set of agents and E ⊂ N × N is the set of edges. Each agent i
+is associated with state si ∈ Si , ai ∈ Ai where Si and Ai are finite sets. The global state is denoted
+as s = (s1 , . . . , sn ) ∈ S := S1 × · · · × Sn and similarly the global action a = (a1 , . . . , an ) ∈ A :=
+A1 × · · · × An . At time t, given current state s(t) and action a(t), the next individual state si (t + 1)
+3
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+is independently generated and is only dependent on neighbors:
+P (s(t + 1)|s(t), a(t)) =
+
+n
+Y
+
+P (si (t + 1)|sNi (t), ai (t)),
+
+(1)
+
+i=1
+
+where notation Ni means the neighborhood of i (including i itself) and sNi is the states of i’s
+neighbors. In addition, for integer κ ≥ 1, we let Niκ denote the κ-hop neighborhood of i, i.e. the
+nodes whose graph distance to i is less than or equal to κ, including i itself. We also let f (κ) =
+supi |Niκ |.
+Each agent is associated with a class of localized policies ζiθi parameterized by θi . The localized
+policy ζiθi (ai |si ) is a distribution on the local action ai conditioned on the local state si , and each
+agent, conditioned on observing si (t), takes an action ai (t) independently drawn from ζiθi (·|si (t)).
+We use θ = (θ1 , . . . , θn ) to denote the tuple of the localized policies ζiθi , and also use ζ θ (a|s) =
+Qn
+θi
+i=1 ζi (ai |si ) to denote the joint policy, which is a product distribution of the localized policies
+as each agent acts independently.
+Further, each agent is associated with a stage reward function
+P ri (si , ai ) that depends on the local
+state and action, and the global stage reward is r(s, a) = n1 ni=1 ri (si , ai ). The objective is to find
+localized policy tuple θ such that the discounted global stage reward is maximized, starting from
+some initial state distribution π0 ,
+X
+
+∞
+t
+max J(θ) := Es∼π0 Ea(t)∼ζ θ (·|s(t))
+γ r(s(t), a(t)) s(0) = s .
+(2)
+θ
+
+t=0
+
+To provide context for what follows, we review a few key concepts in RL. First, fixing a localized
+policy tuple θ = (θ1 , . . . , θn ), the Q-function for this policy θ is:
+θ
+
+Q (s, a) = Ea(t)∼ζ θ (·|s(t))
+
+X
+∞
+
+
+γ r(s(t), a(t)) s(0) = s, a(0) = a
+t
+
+t=0
+
+
+X
+∞
+n
+n
+1X θ
+1X
+γ t ri (si (t), ai (t)) s(0) = s, a(0) = a :=
+=
+Ea(t)∼ζ θ (·|s(t))
+Q (s, a).
+n i=1
+n i=1 i
+t=0
+
+(3)
+
+In the last step, we have defined Qθi (s, a) which is the Q function for the individual reward ri . Both
+Qθ and Qθi are exponentially large tables and, therefore, are intractable to compute and store.
+Finally, we recall the policy gradient theorem, which is the basis of many algorithmic results in
+RL. We emphasize that the lemma shows that the gradient of J(θ) depends on Qθ and, therefore, is
+intractable to compute using the form in Lemma 1.
+LemmaP
+1 (Sutton et al. (2000)) Let π θ be a distribution on the state space given by π θ (s) =
+t θ
+θ
+(1 − γ) ∞
+t=0 γ πt (s), where πt is the distribution of s(t) under fixed policy θ when s(0) is drawn
+from π0 . Then
+1
+∇J(θ) =
+E θ
+Qθ (s, a)∇ log ζ θ (a|s).
+(4)
+θ
+1 − γ s∼π ,a∼ζ (·|s)
+
+3. Algorithm Design and Results
+In this paper we propose an algorithm, Scalable Actor Critic (SAC), which provably finds an
+O(ρκ+1 )-stationary point of the objective J(θ) for some ρ ≤ γ,1 with complexity scaling in the
+1. In this paper, a ε-stationary point of J(θ) refers to a θ s.t. k∇J(θ)k2 ≤ ε.
+
+4
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+size of the local state-action space of the largest κ-hop neighborhood. We state our main result
+formally in Theorem 5 after introducing the details of SAC and the key idea underlying its design.
+3.1. Key Idea: Exponential Decay of Q-function Leads to Efficient Gradient Approximation
+Recall that the policy gradient in Lemma 1 is intractable to compute due to the dimension of the
+Q-function. Our key idea is that exponential decay of the Q function allows efficient approximation
+of the policy gradient via truncation. To illustrate this, we start with the definition of the exponential
+κ = N /N κ ,
+decay property. Recall that Niκ is the set of κ-hop neighborhood of node i and define N−i
+i
+κ ),
+i.e. the set of agents that are outside of i’th κ-hop neighborhood. We write state s as (sNiκ , sN−i
+i.e. the states of agents that are in the κ-hop neighborhood of i and outside of κ-hop neighborhood
+κ ). The exponential decay property is then defined
+respectively. Similarly, we write a as (aNiκ , aN−i
+as follows.
+Definition 2 The (c, ρ)-exponential decay property holds if, for any localized policy θ, for any
+κ , s0 κ ∈ SN κ , aN κ ∈ AN κ , aN κ , a0 κ ∈ AN κ , Qθ satisfies,
+i ∈ N , sNiκ ∈ SNiκ , sN−i
+i
+N
+N
+−i
+−i
+i
+i
+−i
+−i
+
+−i
+
+κ , aN κ , aN κ )
+|Qθi (sNiκ , sN−i
+i
+−i
+
+−
+
+0
+κ , aN κ , aN κ )|
+Qθi (sNiκ , s0N−i
+i
+−i
+
+≤ cρκ+1 .
+
+It may not be immediately clear when the exponential decay property holds. Lemma 3 highlights
+that the exponential decay property holds generally, with ρ = γ. Further, under some mixing time
+assumptions, the exponential decay property holds with ρ < γ. For more details on the generality
+of the exponential decay property, see Appendix A.
+r̄
+Lemma 3 If ∀i, ri is upper bounded by r̄, then the ( 1−γ
+, γ)-exponential decay property holds.
+
+The power of the exponential decay property is that it guarantees that the dependence of Qθi on
+other agents shrinks quickly as the distance between them grows. This motivates us to consider the
+following class of truncated Q-functions,
+X
+θ
+κ , aN κ ; sN κ , aN κ )Q (sN κ , sN κ , aN κ , aN κ ),
+Q̂θi (sNiκ , aNiκ ) =
+wi (sN−i
+(5)
+i
+−i
+i
+i
+i
+−i
+i
+−i
+sN κ ,aN κ
+−i
+
+−i
+
+κ , aN κ ; sN κ , aN κ ) are any non-negative weights satisfying
+where wi (sN−i
+i
+i
+−i
+X
+κ , aN κ ; sN κ , aN κ ) = 1, ∀(sN κ , aN κ ) ∈ S k × A k .
+wi (sN−i
+N
+N
+−i
+i
+i
+i
+i
+i
+
+i
+
+(6)
+
+sN κ ∈SN κ ,aN κ ∈AN κ
+−i
+−i
+−i
+−i
+
+Finally, our key insight is the following Lemma 4, which says when the exponential decay property holds, the truncated Q-function (5) can be used to accurately approximate the policy gradient.
+The proof of Lemma 4 is postponed to Appendix B.
+Lemma 4 (Truncated Policy Gradient) Given i, define the following truncated policy gradient
+h1 X
+i
+1
+ĥi (θ) =
+Es∼πθ ,a∼ζ θ (·|s)
+Q̂θj (sNjκ , aNjκ ) ∇θi log ζiθi (ai |si ),
+(7)
+1−γ
+n
+κ
+j∈Ni
+
+where Q̂θj can be any truncated Q-function in the form of (5). Then, if (c, ρ)-exponential decay
+property holds and if k∇θi log ζiθi (ai |si )k ≤ Li for any ai , si , we have kĥi (θ) − ∇θi J(θ)k ≤
+cLi κ+1
+.
+1−γ ρ
+5
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+The power of this lemma is that the truncated Q function has much smaller dimension than the
+true Q function, and is thus scalable. However, despite the reduction in dimension, the error of
+the approximated gradient (7) is small. In the next section, we use this idea to design a scalable
+algorithm.
+3.2. Algorithm Design: Scalable Actor Critic (SAC)
+The good properties of the truncated Q-function open many possibilities for algorithm design. For
+instance, one can first obtain the truncated Q-function in some way (which could be much easier
+than directly computing the full Q-function) and then do a policy gradient step using the Lemma 4.
+In this subsection, we propose one particular approach using the actor-critic framework. Our approach, Scalable Actor Critic (SAC), uses temporal difference (TD) learning to obtain the truncated
+Q-function and then uses policy gradient for policy improvement. Psuedocode of the proposed
+algorithm is given in Algorithm 1.
+Overall structure. The overall structure of SAC is a for-loop from line 1 to line 13. Inside the
+outer loop, there is an inner loop (line 4 through line 9) that uses temporal difference learning to get
+the truncated Q-function, which is followed by a policy gradient step that does policy improvement.
+The Critic: TD-inner loop. Line 4 through line 9 is the policy evaluation inner loop that obtains
+the truncated Q function, where line 7 and 8 are the temporal difference update. We note that steps 7
+and 8 use the same update equation as TD learning, except that it “pretends” (sNiκ , aNiκ ) is the true
+state-action pair while the true state-action pair should be (s, a). As will be shown in the theoretic
+analysis in Appendix C, such a TD update implicitly gives an estimate of a truncated Q function.
+The Actor: Policy Gradient. Steps 10 through 12 define the the actor actions. Here, each agent
+calculates an estimate of the truncated gradient based on (7), and then conducts a gradient step.
+Discussion. Our algorithm serves as an initial concrete demonstration of how to make use of the
+truncated policy gradient to develop a scalable RL method for networked systems. There are many
+extensions and other approaches that could be pursued, either within the actor-critic framework or
+beyond. One immediate extension is to do a warm start, i.e., initialize Q̂0i as the final estimate Q̂Ti
+in the previous outer-loop. Additionally, one can use the TD-λ variant of TD learning with variance
+reduction schemes like the advantage function. Further, beyond the actor-critic framework, another
+direction is to develop Q-learning/SARSA type algorithms based on the truncated Q-functions.
+These are interesting topics for future work.
+3.3. Approximation Bound
+In this section we state and discuss the formal approximation guarantee for SAC. Before stating the
+theorem, we first state the assumptions we use. The first assumption is standard in the RL literature
+and bounds the reward and state/action space size.
+Assumption 1 (Bounded reward and state/action space size) The reward is upper bounded as
+0 ≤ ri (si , ai ) ≤ r̄, ∀i, si , ai . The individual state and action space size are upper bounded as
+|Si | ≤ S, |Ai | ≤ A, ∀i.
+Assumption 2 (Exponential Decay) The (c, ρ) exponential decay property holds for some ρ ≤ γ.
+Note that under Assumption 1, Assumption 2 automatically holds with ρ = γ, cf. Lemma 3.
+However, we state the exponential decay property as an assumption to account for the more general
+case that ρ could be strictly less than γ, as detailed in Appendix A.
+6
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+1
+2
+
+3
+4
+5
+6
+7
+
+8
+9
+10
+11
+12
+13
+
+Algorithm 1: SAC: Scalable Actor Critic
+Input: θi (0); parameter κ; T , length of each episode; step size parameters h, t0 , η.
+for m = 0, 1, 2, . . . do
+θ (m)
+Sample initial state s(0) ∼ π0 , each agent i takes action ai (0) ∼ ζi i (·|si (0)), receives
+reward ri (0) = ri (si (0), ai (0)).
+S
+
+κ ×A
+
+κ
+
+N
+i to be the all zero vector.
+Initialize Q̂0i ∈ R Ni
+for t = 1 to T do
+θ (m)
+Get state si (t), take action ai (t) ∼ ζi i (·|si (t)), get reward ri (t) = ri (si (t), ai (t)).
+h
+Update the truncated Q function with step size αt−1 = t−1+t
+,
+0
+t
+Q̂i (sNiκ (t − 1), aNiκ (t − 1)) =
+κ
+κ
+(1 − αt−1 )Q̂it−1 (sNiκ (t − 1), aNiκ (t − 1)) + αt−1 (ri (t − 1) + γ Q̂t−1
+i (sNi (t), aNi (t))),
+t−1
+t
+Q̂i (sNiκ , aNiκ ) = Q̂i (sNiκ , aNiκ ) for (sNiκ , aNiκ ) 6= (sNiκ (t − 1), aNiκ (t − 1)).
+end
+Each agent i calculates approximated gradient,
+P
+P
+θ (m)
+ĝi (m) = Tt=0 γ t n1 j∈N κ Q̂Tj (sNjκ (t), aNjκ (t))∇θi log ζi i (ai (t)|si (t)).
+i
+η
+Each agent i conducts gradient step θi (m + 1) = θi (m) + ηm ĝi (m) with ηm = √m+1
+.
+
+end
+
+Our third assumption can be interpreted as an ergodicity condition which ensures that the stateaction pairs are sufficiently visited.
+Assumption 3 (Sufficient Local exploration) There exists positive integer τ and σ ∈ (0, 1) s.t.
+under any fixed policy θ and any initial state-action (s, a) ∈ S × A, ∀i ∈ N , ∀(s0N κ , a0N κ ) ∈
+i
+i
+SNiκ × ANiκ , we have P ((sNiκ (τ ), aNiκ (τ )) = (s0N κ , a0N κ )|(s(1), a(1)) = (s, a)) ≥ σ.
+i
+
+i
+
+Assumption 3 requires that every state action pair in the κ-hop neighborhood must be visited with
+some positive probability after some time. This type of assumption is common for finite time
+convergence results in RL. For example, in Srikant and Ying (2019), it is assumed that every stateaction pair is visited with positive probability in the stationary distribution and the state-action
+distribution converges to the stationary distribution with some rate. This implies our assumption
+which is weaker in the sense that we only require local state-action pair (sNiκ , aNiκ ) to be visited as
+opposed to the full state-action pair (s, a).
+Finally, we assume boundedness and Lipschitz continuity of the gradients, which is standard in
+the RL literature.
+Assumption 4 (Bounded and Lipschitz continuous gradient) Forq
+any i, ai , si and θi , we assume
+Pn
+θi
+θ
+2
+k∇θi log ζi (ai |si )k ≤ Li . As a result, k∇θ log ζ (a|s)k ≤ L =
+i=1 Li . Further, assume
+∇J(θ) is L0 -Lipschitz continuous in θ.
+Theorem 5 Under Assumption 1, 2, 3 and 4, for any δ ∈ (0, 1), M ≥ 3, suppose the critic
+h
+step size αt = t+t
+satisfies h ≥ σ1 max(2, 1−1√γ ), t0 ≥ max(2h, 4σh, τ ); and the actor step
+0
+
+7
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+size satisfies ηm =
+T +1≥
+
+logγ c(1−γ)
+r̄
+
+√ η
+m+1
+
+with η ≤
+
+1
+4L0 .
+
+Further, if the inner loop length T is large enough s.t.
+
++ (κ + 1) logγ ρ and
+δ
+,T)
+Ca ( 2nM
+Ca0
+2cρκ+1
+√
++
+,
+≤
+T + t0
+(1 − γ)2
+T + t0
+
+(8)
+
+where
+6¯
+
+Ca (δ, T ) =
+√
+1− γ
+
+r
+
+τh
+2τ T 2
+2
+16¯
+hτ 2r̄
+[log(
+) + f (κ) log SA], Ca0 =
+,
+(τ + t0 )),
+√ max(
+σ
+δ
+1− γ
+σ
+1−γ
+
+r̄
+with ¯ = 4 1−γ
++ 2r̄ and we recall that f (κ) = maxi |Niκ | is the size of the largest κ-neighborhood.
+Then, with probability at least 1 − δ,
+
+PM −1
+m=0
+
+2
+
+ηm k∇J(θ(m))k
+≤
+PM −1
+m=0 ηm
+
+2r̄
+η(1−γ)
+
++
+
+8r̄ 2 L2
+(1−γ)4
+
+q
+
+log M log 4δ +
+√
+M +1
+
+96r̄ 2 L0 L2
+(1−γ)4 η log M
+
++
+
+12L2 cr̄ κ+1
+ρ
+.
+(1 − γ)5
+
+(9)
+
+The proof of Theorem 5 can be found in Appendix-D. To interpret the result, note that the first
+term in (9) converges to 0 in the order of Õ( √1M ) and the second term, which we denote as εκ , is the
+bias caused by the truncation of the Q-function and it scales in the order of O(ρκ+1 ). As such, our
+method SAC will eventually find an O(ρκ+1 )-approximation of a stationary point of the objective
+function J(θ), which could be very close to a true stationary point even for small κ as εκ decays
+exponentially in κ.
+In terms of complexity, (9) gives that, to reach a O(εκ )-approximate stationary point, the num1
+ber of outer-loop iterations required is M ≥ Ω̃( εκ12 poly(r̄, L, L0 , (1−γ)
+)), which scales polynomially with the parameters of the problem. We emphasize that it does not scale exponentially
+with n. Further, since the left hand side of (8) decays to 0 as T increases in the order of Õ( √1T )
+and the right hand side of (8) is in the same order as O(εκ ), the inner-loop length required is
+1
+T ≥ Ω̃( ε12 poly(τ, σ1 , 1−γ
+, r̄, f (κ))). Parameters τ and σ1 are from Assumption 3 and they scale
+k
+with the local state-action space size of the largest κ-hop neighborhood. Therefore, the inner-loop
+length required scale with the size of the local state-action space of the largest κ-neighborhood,
+which is much smaller than the full state-action space size when the graph is sparse.2
+
+4. Experimental Results
+In this section, we conduct numerical experiments to verify our results. We first run a small case
+n = 8 nodes interacting on a line. We set the individual state and action space as Si = {0, 1}
+and Ai = {0, 1} for all i. We draw the local transition probabilities P (·|sNi , ai ) in (1) uniformly
+random for all i, sNi ∈ SNi , ai ∈ Ai . For the rewards, for each i we first pick a state action
+pair (si , ai ) ∈ Si × Ai and set ri (si , ai ) as 5; then we draw all other entries of ri (·, ·) uniformly
+randomly from [0, 1]. The discounting factor is set as γ = 0.7 and the initial state distribution π0
+is set to be the Dirac measure concentrated on s = (0, . . . , 0). On this problem instance, we run
+our SAC algorithm with κ = 0, . . . , 7, with κ = 7 giving the full actor critic method (no truncation
+2. This requirement on T could potentially be further reduced if we do a warm start for the inner-loop, as the Q-estimate
+from the previous outer-loop should be already a good estimate for the current outer-loop. We leave the finite time
+analysis of the warm start variant as future work.
+
+8
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Figure 1: Simulation results for a small test case (n = 8). The left figure shows the approximated
+objective function value versus the number of outer-loop iterations for different values of κ. The
+right figure shows the approximated optimality gap for different values of κ.
+of Q-table or policy gradient). For all values of κ, we run M = 2000 outer-loop iterations and we
+do a warm start for the TD inner-loop with inner-loop length set as T = 10. In each outer-loop
+iteration m, we evaluate the performance of the current policy by estimating the objective function
+(2), through sampling 20 trajectories with length T = 10 using the current policy and calculate the
+discounted reward.
+In Figure 1 (left), we plot the approximated objective function throughout the training procedure
+for different values of κ. It shows that when κ increases, the objective function increases throughout
+the entire training procedure. We then use the final approximated objective function value achieved
+by κ = 7 as the benchmark and plot the optimality gap of our algorithm with different values of κ in
+Figure 1 (right), where the optimality gap is calculated as the difference between the benchmark and
+the final objective function value achieved by the algorithm with the respective κ. Figure 1 (right)
+shows the optimality gap decays exponentially in κ up to κ = 4, confirming our theoretical result.
+We note that the optimality gap stops decaying for κ > 4, which we believe is due to the fact that
+both the benchmark and the final objective function achieved by the algorithm are sampled values
+and are therefore noisy.
+We also run the experiment on a larger example with n = 50 nodes, keeping all other settings the
+same as the previous case. We run our algorithm up to κ = 5, and show the approximated objective
+value throughout the training process (number of outer-loop iterations) for different values of κ.
+These results show that when κ increases, the objective function increases throughout the entire
+training procedure, again consistent with the theoretical results.
+
+5. Conclusion and Discussion
+This paper proposes a SAC algorithm that provably finds a close-to-stationary point of J(θ) in time
+that scales with the local state-action space size of the largest κ-hop neighbor, which can be much
+smaller than the full state-action space size when the graph is sparse. This perhaps represents the
+first scalable RL method for localized control of multi-agent networked systems with such provable
+guarantee. In addition, the framework underlying SAC, including the truncated Q-function (5) and
+
+9
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Figure 2: Simulation results for a large test case (n = 50), showing the approximated objective
+value versus the number of outer loop iterations.
+truncated policy gradient (Lemma 7), is a contribution in its own right and could potentially lead
+to other scalable RL methods for networked systems, including the warm start, TD-λ variants and
+Q-learning/SARSA type methods. We leave these directions as future work.
+
+References
+Dimitri P Bertsekas and John N Tsitsiklis. Neuro-dynamic programming, volume 5. Athena Scientific Belmont, MA, 1996.
+Vincent D Blondel and John N Tsitsiklis. A survey of computational complexity results in systems
+and control. Automatica, 36(9):1249–1274, 2000.
+Igor Borovikov, Yunqi Zhao, Ahmad Beirami, Jesse Harder, John Kolen, James Pestrak, Jervis
+Pinto, Reza Pourabolghasem, Harold Chaput, Mohsen Sardari, Long Lin, Navid Aghdaie, and
+Kazi Zaman. Winning isn’t everything: Training agents to playtest modern games. In AAAI 2019
+Workshop on Reinforcement Learning in Games, 01 2019.
+Lucian Bu, Robert Babu, Bart De Schutter, et al. A comprehensive survey of multiagent reinforcement learning. IEEE Transactions on Systems, Man, and Cybernetics, Part C (Applications and
+Reviews), 38(2):156–172, 2008.
+Eric Cator and Piet Van Mieghem. Second-order mean-field susceptible-infected-susceptible epidemic threshold. Physical review E, 85(5):056111, 2012.
+Deepayan Chakrabarti, Yang Wang, Chenxi Wang, Jurij Leskovec, and Christos Faloutsos. Epidemic thresholds in real networks. ACM Transactions on Information and System Security (TISSEC), 10(4):1, 2008.
+Caroline Claus and Craig Boutilier. The dynamics of reinforcement learning in cooperative multiagent systems. AAAI/IAAI, 1998:746–752, 1998.
+
+10
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Yan Duan, Xi Chen, Rein Houthooft, John Schulman, and Pieter Abbeel. Benchmarking deep
+reinforcement learning for continuous control. In International Conference on Machine Learning,
+pages 1329–1338, 2016.
+Carlos Guestrin, Daphne Koller, Ronald Parr, and Shobha Venkataraman. Efficient solution algorithms for factored mdps. Journal of Artificial Intelligence Research, 19:399–468, 2003.
+Junling Hu and Michael P Wellman. Nash q-learning for general-sum stochastic games. Journal of
+machine learning research, 4(Nov):1039–1069, 2003.
+Soummya Kar, José MF Moura, and H Vincent Poor. Qd-learning: A collaborative distributed strategy for multi-agent reinforcement learning through consensus + innovations. IEEE Transactions
+on Signal Processing, 61(7):1848–1862, 2013.
+Michael Kearns and Daphne Koller. Efficient reinforcement learning in factored mdps. In IJCAI,
+volume 16, pages 740–747, 1999.
+Sergey Levine, Chelsea Finn, Trevor Darrell, and Pieter Abbeel. End-to-end training of deep visuomotor policies. The Journal of Machine Learning Research, 17(1):1334–1373, 2016.
+Dong Li, Dongbin Zhao, Qichao Zhang, and Yaran Chen. Reinforcement learning and deep learning based lateral control for autonomous driving [application notes]. IEEE Computational Intelligence Magazine, 14(2):83–98, 2019.
+Michael L Littman. Markov games as a framework for multi-agent reinforcement learning. In
+Machine learning proceedings 1994, pages 157–163. Elsevier, 1994.
+Michael L Littman. Value-function reinforcement learning in markov games. Cognitive Systems
+Research, 2(1):55–66, 2001.
+Mateu Llas, Pablo M Gleiser, Juan M López, and Albert Dı́az-Guilera. Nonequilibrium phase
+transition in a model for the propagation of innovations among economic agents. Physical Review
+E, 68(6):066101, 2003.
+Andrey Y. Lokhov, Marc Mézard, and Lenka Zdeborová. Dynamic message-passing equations
+for models with unidirectional dynamics. Phys. Rev. E, 91:012811, Jan 2015. doi: 10.1103/
+PhysRevE.91.012811. URL https://link.aps.org/doi/10.1103/PhysRevE.91.
+012811.
+Ryan Lowe, Yi Wu, Aviv Tamar, Jean Harb, OpenAI Pieter Abbeel, and Igor Mordatch. Multi-agent
+actor-critic for mixed cooperative-competitive environments. In Advances in Neural Information
+Processing Systems, pages 6379–6390, 2017.
+Sergio Valcarcel Macua, Jianshu Chen, Santiago Zazo, and Ali H Sayed. Distributed policy evaluation under multiple behavior strategies. IEEE Transactions on Automatic Control, 60(5):1260–
+1274, 2015.
+Adwaitvedant Mathkar and Vivek S Borkar. Distributed reinforcement learning via gossip. IEEE
+Transactions on Automatic Control, 62(3):1465–1470, 2017.
+
+11
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Laetitia Matignon, Guillaume J Laurent, and Nadine Le Fort-Piat. Independent reinforcement learners in cooperative markov games: a survey regarding coordination problems. The Knowledge
+Engineering Review, 27(1):1–31, 2012.
+Wenjun Mei, Shadi Mohagheghi, Sandro Zampieri, and Francesco Bullo. On the dynamics of
+deterministic epidemic propagation over networks. Annual Reviews in Control, 44:116–128,
+2017.
+Nicolas Meuleau, Milos Hauskrecht, Kee-Eung Kim, Leonid Peshkin, Leslie Pack Kaelbling,
+Thomas L Dean, and Craig Boutilier. Solving very large weakly coupled markov decision processes. In AAAI/IAAI, pages 165–172, 1998.
+Marc Mezard and Andrea Montanari. Information, physics, and computation. Oxford University
+Press, 2009.
+Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Andrei A Rusu, Joel Veness, Marc G Bellemare, Alex Graves, Martin Riedmiller, Andreas K Fidjeland, Georg Ostrovski, et al. Human-level
+control through deep reinforcement learning. Nature, 518(7540):529, 2015.
+Ian Osband and Benjamin Van Roy. Near-optimal reinforcement learning in factored mdps. In
+Advances in Neural Information Processing Systems, pages 604–612, 2014.
+Christos H Papadimitriou and John N Tsitsiklis. The complexity of optimal queuing network control. Mathematics of Operations Research, 24(2):293–305, 1999.
+Guannan Qu and Na Li. Exploiting fast decaying and locality in multi-agent mdp with tree dependence structure. arXiv preprint arXiv:1909.06900, 2019.
+Michael Rotkowitz and Sanjay Lall. A characterization of convex problems in decentralized control.
+IEEE transactions on Automatic Control, 50(12):1984–1996, 2005.
+Faryad Darabi Sahneh, Caterina Scoglio, and Piet Van Mieghem. Generalized epidemic mean-field
+model for spreading processes over multilayer complex networks. IEEE/ACM Transactions on
+Networking (TON), 21(5):1609–1620, 2013.
+David Silver, Aja Huang, Chris J Maddison, Arthur Guez, Laurent Sifre, George Van Den Driessche,
+Julian Schrittwieser, Ioannis Antonoglou, Veda Panneershelvam, Marc Lanctot, et al. Mastering
+the game of go with deep neural networks and tree search. nature, 529(7587):484, 2016.
+R Srikant and Lei Ying. Finite-time error bounds for linear stochastic approximation and td learning.
+arXiv preprint arXiv:1902.00923, 2019.
+Richard S Sutton, David A McAllester, Satinder P Singh, and Yishay Mansour. Policy gradient
+methods for reinforcement learning with function approximation. In Advances in neural information processing systems, pages 1057–1063, 2000.
+John N Tsitsiklis and Benjamin Van Roy. Analysis of temporal-diffference learning with function
+approximation. In Advances in neural information processing systems, pages 1075–1081, 1997.
+
+12
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Werner Vogels, Robbert van Renesse, and Ken Birman. The power of epidemics: Robust communication for large-scale distributed systems. SIGCOMM Comput. Commun. Rev., 33(1):131–135,
+January 2003. ISSN 0146-4833. doi: 10.1145/774763.774784. URL http://doi.acm.
+org/10.1145/774763.774784.
+Hoi-To Wai, Zhuoran Yang, Zhaoran Wang, and Mingyi Hong. Multi-agent reinforcement learning
+via double averaging primal-dual optimization. arXiv preprint arXiv:1806.00877, 2018.
+Peter Whittle. Restless bandits: Activity allocation in a changing world. Journal of applied probability, 25(A):287–298, 1988.
+Zijian Wu, Qing-Shan Jia, and Xiaohong Guan. Optimal control of multiroom hvac system: An
+event-based approach. IEEE Transactions on Control Systems Technology, 24(2):662–669, 2016.
+Kaiqing Zhang, Zhuoran Yang, Han Liu, Tong Zhang, and Tamer Başar. Fully decentralized multiagent reinforcement learning with networked agents. arXiv preprint arXiv:1802.08757, 2018.
+Kaiqing Zhang, Zhuoran Yang, and Tamer Başar. Multi-agent reinforcement learning: A selective
+overview of theories and algorithms. arXiv preprint arXiv:1911.10635, 2019.
+Rick Zhang and Marco Pavone. Control of robotic mobility-on-demand systems: a queueingtheoretical perspective. The International Journal of Robotics Research, 35(1-3):186–203, 2016.
+Xuan Zhang, Wenbo Shi, Bin Yan, Ali Malkawi, and Na Li. Decentralized and distributed temperature control via hvac systems in energy efficient buildings. arXiv preprint arXiv:1702.03308,
+2017.
+Alessandro Zocca. Temporal starvation in multi-channel csma networks: an analytical framework.
+Queueing Systems, 91(3-4):241–263, 2019.
+Shaofeng Zou, Tengyu Xu, and Yingbin Liang. Finite-sample analysis for sarsa with linear function
+approximation. In Advances in Neural Information Processing Systems, pages 8665–8675, 2019.
+
+Appendix A. The Exponential Decay Property
+Our main results depend on the (c, ρ)-exponential decay of the Q-function (cf. Definition 2), which
+κ and s0 κ , aN κ , aN κ and a0 κ ,
+means that for any i, any sNiκ , sN−i
+N
+N
+i
+−i
+−i
+
+−i
+
+θ
+0
+0
+κ+1
+κ , aN κ , aN κ ) − Q (sN κ , s κ , aN κ , a κ )| ≤ cρ
+|Qθi (sNiκ , sN−i
+.
+i
+N−i
+N−i
+i
+−i
+i
+i
+
+In Section 3.1, we have pointed out in Lemma 3 that the (c, ρ)-exponential decay property always holds with ρ being set to the discounting factor γ, assuming the rewards ri are upper bounded.
+We now provide the proof of Lemma 3.
+κ ), a = (aN κ , aN κ ); s0 =
+Proof of Lemma 3. For notational simplicity, denote s = (sNiκ , sN−i
+i
+−i
+(sNiκ , s0N κ ) and a0 = (aNiκ , a0N κ ). Let πt,i be the distribution of (si (t), ai (t)) conditioned on
+−i
+−i
+0 be the distribution of (s (t), a (t)) conditioned
+(s(0), a(0)) = (s, a) under policy θ, and let πt,i
+i
+i
+0
+0
+0 for all t ≤ κ. The
+on (s(0), a(0)) = (s , a ) under policy θ. Then, we must have πt,i = πt,i
+13
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+reason is that, due to the local dependence structure (1) and the localized policy structure, πt,i
+only depends on (sNit , aNit ) (the initial state-action of agent i’th t-hop neighborhood) which is the
+same as (s0N t , s0N t ) when t ≤ κ per the way the initial state (s, a), (s0 , a0 ) are chosen. With these
+i
+
+i
+
+definitions, we expand the definition of Qθi in (3),
+|Qθi (s, a) − Qθi (s0 , a0 )|
+∞
+X
+
+
+
+
+≤
+E γ t ri (si (t), ai (t)) (s(0), a(0)) = (s, a) − E γ t ri (si (t), ai (t)) (s(0), a(0)) = (s0 , a0 )
+t=0
+
+=
+=
+≤
+
+∞
+X
+
+0 ri (si , ai )
+γ t E(si ,ai )∼πt,i ri (si , ai ) − γ t E(si ,ai )∼πt,i
+
+t=0
+∞
+X
+t=κ+1
+∞
+X
+t=κ+1
+
+0 ri (si , ai )
+γ t E(si ,ai )∼πt,i ri (si , ai ) − γ t E(si ,ai )∼πt,i
+
+0
+γ t r̄TV(πt,i , πt,i
+)≤
+
+r̄
+γ κ+1 ,
+1−γ
+
+(10)
+
+0 ) is the total variation distance between π and π 0 which is upper bounded by
+where TV(πt,i , πt,i
+t,i
+t,i
+r̄
+1. The above inequality shows that the ( 1−γ
+, γ)-exponential decay property holds and concludes
+the proof of Lemma 3.
+
+Lemma 3 shows that the (c, ρ)-exponential decay property automatically holds with ρ being the
+discounting factor γ, without any assumption on the transition probabilities except for the factorization structure (1) and the localized policy structure. However, in practice, typically the Markov
+chain is ergodic and has fast mixing property. The following Lemma 6 shows that when some fast
+mixing holds, then the (c, ρ)-exponential decay property holds for some ρ < γ.
+
+Lemma 6 Suppose ri is upper bounded by r̄ for all i, and assume there exists c0 > 0 and µ ∈
+(0, 1) s.t. under any policy θ, the Markov chain is ergodic and starting from any initial state,
+TV(πt,i , π∞,i ) ≤ c0 µt where πt,i is the distribution of (si (t), ai (t)) and π∞,i is the distribution for
+2c0 r̄
+(si , ai ) in stationarity. Then, the ( 1−γµ
+, γµ)-exponential decay property holds.
+Proof The proof is almost identical to that of Lemma 3. The only change is that in step (10), we
+0 ) ≤ 2c0 µt .
+use TV(πt,i , πt,i
+The condition on mixing rate in Lemma 6 is similar to those used in the literature on finite-time analysis of RL methods, e.g. Zou et al. (2019). In fact, our condition is weaker than the common mixing
+rate condition in that we only require the distribution of the local state-action pair (si (t), ai (t)) to
+mix, instead of the full state-action pair (s(t), a(t)). We leave it as future work to study such “local”
+mixing behavior and its relation to the local transition probabilities (1).
+
+14
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Appendix B. Proof of Lemma 4
+We first show that the truncated Q function is a good approximation of the true Q function. To see
+that, we have for any (s, a) ∈ S × A, by (5) and (6),
+|Q̂θi (sNiκ , aNiκ ) − Qθi (s, a)|
+X
+0
+θ
+0
+θ
+0
+κ , aN κ ; sN κ , aN κ )Qi (sN κ , sN κ , aN κ , aN κ ) − Qi (sN κ , sN κ , aN κ , aN κ )
+=
+wi (s0N−i
+−i
+i
+−i
+i
+i
+i
+i
+i
+−i
+−i
+−i
+s0N κ ,a0N κ
+−i
+
+−i
+
+X
+
+≤
+
+0
+θ
+0
+0
+θ
+κ , aN κ ; sN κ , aN κ ) Qi (sN κ , sN κ , aN κ , aN κ ) − Qi (sN κ , sN κ , aN κ , aN κ )
+wi (s0N−i
+i
+i
+i
+i
+i
+−i
+i
+−i
+−i
+−i
+−i
+
+s0N κ ,a0N κ
+−i
+
+κ+1
+
+≤ cρ
+
+−i
+
+,
+
+(11)
+
+where in the last step, we have used the (c, ρ) exponential decay property, cf. Definition 2.
+Next, recall by the policy gradient theorem (Lemma 1),
+1
+E θ
+Qθ (s, a)∇θi log ζ θ (a|s)
+θ
+1 − γ s∼π ,a∼ζ (·|s)
+1
+=
+E θ
+Qθ (s, a)∇θi log ζiθi (ai |si ),
+θ
+1 − γ s∼π ,a∼ζ (·|s)
+P
+θ
+where we have used ∇θi log ζ θ (a|s) = ∇θi j∈N log ζj j (aj |sj ) = ∇θi log ζiθi (ai |si ) by the localized policy structure. With the above equation, we can compute ĥi (θ) − ∇θi J(θ),
+∇θi J(θ) =
+
+ĥi (θ) − ∇θi J(θ)
+i
+h1 X
+1
+=
+Q̂θj (sNjκ , aNjκ ) − Qθ (s, a) ∇θi log ζiθi (ai |si )
+Es∼πθ ,a∼ζ θ (·|s)
+1−γ
+n
+j∈Niκ
+h1 X
+i
+1
+1 X θ
+=
+Es∼πθ ,a∼ζ θ (·|s)
+Q̂θj (sNjκ , aNjκ ) −
+Qj (s, a) ∇θi log ζiθi (ai |si )
+1−γ
+n
+n
+j∈N
+
+j∈N
+
+1
+1 X θ
+Es∼πθ ,a∼ζ θ (·|s)
+−
+Q̂j (sNjκ , aNjκ )∇θi log ζiθi (ai |si )
+1−γ
+n
+κ
+j∈N−i
+
+:= E1 − E2 .
+κ ,
+We claim that E2 = 0. To see this, consider for any j ∈ N−i
+
+Es∼πθ ,a∼ζ θ (·|s) ∇θi log ζiθi (ai |si )Q̂θj (sNjκ , aNjκ )
+=
+
+X
+
+=
+
+X
+
+π θ (s)
+
+s,a
+
+s,a
+
+n
+Y
+
+ζ`θ` (a` |s` )
+
+`=1
+θ
+
+π (s)
+
+Y
+
+ζiθi (ai |si )
+
+Q̂θj (sNjκ , aNjκ )
+
+ζ`θ` (a` |s` )∇θi ζiθi (ai |si )Q̂θj (sNjκ , aNjκ )
+
+`6=i
+
+X
+
+=
+
+∇θi ζiθi (ai |si )
+
+s,a1 ,...,ai−1 ,ai+1 ,...,an
+
+π θ (s)
+
+Y
+
+ζ`θ` (a` |s` )Q̂θj (sNjκ , aNjκ )
+
+X
+ai
+
+`6=i
+
+= 0,
+15
+
+∇θi ζiθi (ai |si )
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+where in the last equality, we have used Q̂θj (sNjκ , aNjκ ) does not depend on ai as i 6∈ Njκ ; and
+P
+P θi
+θi
+ai ζi (ai |si ) = ∇θi 1 = 0. Now that we have shown E2 = 0, we can
+ai ∇θi ζi (ai |si ) = ∇θi
+bound E1 as follows
+kĥi (θ) − ∇θi J(θ)k = kE1 k
+1 X θ
+1
+≤
+Es∼πθ ,a∼ζ θ (·|s)
+Q̂j (sNjκ , aNjκ ) − Qθj (s, a) k∇θi log ζiθi (ai |si )k
+1−γ
+n
+j∈N
+
+1
+cρκ+1 Li ,
+≤
+1−γ
+where in the last step, we have used (11) and the upper bound k∇θi log ζiθi (ai |si )k ≤ Li . This
+concludes the proof of Lemma 4.
+
+
+Appendix C. Analysis of the Critic
+In this section we provide an analysis of the error bound associated with the critic component of our
+framework. More specifically, recall that within iteration m the inner loop update is
+κ
+κ
+Q̂ti (sNiκ (t − 1), aNiκ (t − 1)) = (1 − αt−1 )Q̂t−1
+i (sNi (t − 1), aNi (t − 1))
+κ
+κ
++ αt−1 (ri (si (t − 1), ai (t − 1)) + γ Q̂t−1
+i (sNi (t), aNi (t))), (12)
+
+Q̂ti (sNiκ , aNiκ ) = Q̂it−1 (sNiκ , aNiκ ) for (sNiκ , aNiκ ) 6= (sNiκ (t − 1), aNiκ (t − 1)),
+(13)
+S
+
+κ ×A
+
+κ
+
+h
+N
+i is initialized to be all zero vector, and αt =
+where Q̂0i ∈ R Ni
+t+t0 is the step size. We
+note that when implementing (12) and (13) within outer loop iteration m, (s(t), a(t)) is a random
+θ(m)
+trajectory generated by the agents taking a fixed policy θ(m). Let Qi
+∈ RS×A be the true
+Q-function for reward ri under this fixed policy θ(m) as defined in (3).
+Given the above notation, the specific goal of this section is to prove the following theorem,
+θ(m)
+which bounds the error between the approximation Q̂Ti generated by (12), (13) and the true Qi .
+
+Theorem 7 Assume Assumption 1, 2, 3 are true and suppose t0 , h satisfies, h ≥ σ1 max(2, 1−1√γ )
+and t0 ≥ max(2h, 4σh, τ ). Then, inside outer loop iteration m, for each i ∈ N , with probability
+at least 1 − δ, we have the following error bound,
+θ(m)
+
+sup
+(s,a)∈S×A
+
+Qi
+
+Ca
+Ca0
+2cρκ+1
+(s, a) − Q̂Ti (sNiκ , aNiκ ) ≤ √
++
++
+,
+T + t0 T + t0 (1 − γ)2
+
+where
+6¯
+
+Ca =
+√
+1− γ
+
+r
+
+τh
+2τ T 2
+2
+16¯
+hτ 2r̄
+[log(
+) + f (κ) log SA], Ca0 =
+,
+(τ + t0 )),
+√ max(
+σ
+δ
+1− γ
+σ
+1−γ
+
+r̄
+with ¯ = 4 1−γ
++ 2r̄.
+
+16
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+C.1. Overview of the proof of Theorem 7
+Since Theorem 7 is entirely about a particular outer-loop iteration m, inside which the policy is fixed
+to be θ(m), to simplify notation we drop the dependence on m and θ(m) throughout this section.
+θ(m)
+Particularly, we refer to Qi
+as Q∗i . Since Q∗i is the true Q-function for reward ri under policy
+θ(m), it must satisfy the Bellman equation (Bertsekas and Tsitsiklis, 1996),
+Q∗i = TD(Q∗i ) := ri + γP Q∗i ,
+
+(14)
+
+where TD : RS×A → RS×A is the standard Bellman operator for reward ri and P is the transition
+probability from s(t), a(t) to s(t + 1), a(t + 1) under policy θ(m). Note in (14), without causing
+any confusion, ri is interpreted as a vector in RS×A although ri only depends on (si , ai ).
+Theorem 7 essentially says that the critic iterate Q̂ti in (12) (13) will become a good estimate
+of Q∗i as t increases. Our proof is divided into 5 steps. In Step 1, we rewrite (12) and (13) in
+a linear update form (cf. (16)). Then, the averaged behavior of the linear update form will be
+studied in Step 2 (cf. Lemma 8). In Step 3, we decompose the error into a recursive form (cf.
+Lemma 11), and in Step 4, we bound a certain martingale difference-like sequence (cf. Lemma 12
+and Lemma 13). Finally, in Step 5, we use the recursive error decomposition and the bound on the
+martingale difference-like sequence to prove Theorem 7.
+Step 1: Writing the critic update in linear form. To simplify notation, we use the following
+definitions. We use z = (s, a) ∈ Z = S×A to represent a particular state action pair (s, a) ∈ S×A.
+Similarly, we define zi = (si , ai ) ∈ Zi = Si × Ai , and zNiκ = (sNiκ , aNiκ ) ∈ ZNiκ = SNiκ × ANiκ .
+Z
+
+κ
+
+Also, define ezN κ to be the indicator vector in R Ni , i.e. the zNiκ ’th entry of ezN κ is 1 and other
+i
+i
+entries are zero. Then, the critic update equations (12) and (13) can be written as,
+t−1
+κ
+κ
+Q̂ti = Q̂t−1
++ αt−1 [ri (zi (t − 1)) + γ Q̂t−1
+i
+i (zNi (t)) − Q̂i (zNi (t − 1))]ezN κ (t−1) ,
+
+(15)
+
+i
+
+with Q̂0i being the all zero vector in R
+following definition
+
+ZN κ
+i
+
+t−1
+>
+κ
+. Notice that Q̂t−1
+i (zNi ) = ezN κ Q̂i , we can make the
+i
+
+A(z, z 0 ) = ezN κ [γe>
+z0
+i
+
+Nκ
+i
+
+− e>
+zN κ ] ∈ R
+
+b(z) = ezN κ ri (zi ) ∈ R
+
+ZN κ ×ZN κ
+i
+
+i
+
+,
+
+i
+
+ZN κ
+i
+
+,
+
+i
+
+and rewrite (15) in a linear form
+
+
+Q̂ti = Q̂t−1
++ αt−1 A(z(t − 1), z(t))Q̂t−1
++ b(z(t − 1)) .
+i
+i
+
+(16)
+
+Step 2: Analyze the average behavior of A, b. Recall that P is transition matrix from z(t − 1)
+to z(t). We define,
+Ã(z) = Ez 0 ∼P (·|z) A(z, z 0 ) = ezN κ [γP (·|z)Φ − eTzN κ ],
+i
+
+(17)
+
+i
+
+where P (·|z) is understood as the z’th row of P and is treated as a row vector. Also, we have
+Z×ZN κ
+i to be a matrix with each row indexed by z ∈ Z and each column indexed by
+defined Φ ∈ R
+>
+0
+0
+zN
+κ ∈ ZN κ . Further, the z’th row of Φ is the indicator vector ez κ , in other words Φ(z, zN κ ) = 1
+i
+N
+i
+
+i
+
+17
+
+i
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+0
+0
+if zN
+κ = zN κ and Φ(z, zN κ ) = 0 elsewhere. We further define, given any distribution d on the
+i
+i
+i
+state-action pair z, the “averaged” A and b,
+
+Ād = Ez∼d Ã(z)
+X
+=
+d(z)ezN κ [γP (·|z)Φ − e>
+zN κ ]
+i
+
+z∈Z
+>
+
+i
+
+
+
+= Φ diag(d) γP Φ − Φ ,
+>
+
+d
+
+b̄ = Ez∼d b(z) = Φ diag(d)ri ,
+
+(18)
+(19)
+
+where diag(d) ∈ RZ×Z is a diagonal matrix with the z’th diagonal entry being d(z); in the last
+equation, ri is understood as a vector over the entire state-action space Z, though it only depends on
+zi . The goal of this step is to show the following lemma, which shows a certain contraction property
+for the “averaged” A and b. The proof is postponed to Section C.2.
+Lemma 8 Given distribution d on state-action pair z whose marginalization onto zNiκ is non-zero
+for every zNiκ , we have Ād Q̂i + b̄d can be written as
+Ād Q̂i + b̄d = −DQ̂i + Dg d (Q̂i ),
+Z
+
+κ ×Z
+
+κ
+
+where D = Φ> diag(d)Φ ∈ R Ni Ni is a diagonal matrix, with the zNiκ ’th entry being the
+marginalized distribution of zNiκ under distribution d; g d (·) is given by g d (Q̂i ) = Πd TDΦQ̂i ,
+where Πd = (Φ> diag(d)Φ)−1 Φ> diag(d) and TD(Qi ) = ri + γP Qi is the Bellman operator in
+(14).
+Z κ
+Further, g d (·) is γ contractive in infinity norm, and has a unique fixed point Q̂di ∈ R Ni
+depending on d, and the fixed point satisfies
+kΦQ̂di − Q∗i k∞ ≤
+
+cρκ+1
+.
+1−γ
+
+Step 3: Decomposition of the error. Recall the update for Q̂ti is
+
+Q̂ti = Q̂it−1 + αt−1 A(z(t − 1), z(t))Q̂t−1
++ b(z(t − 1))].
+i
+
+(20)
+
+(21)
+
+We define the following simplifying notations,
+At−1 = A(z(t − 1), z(t)),
+bt−1 = b(z(t − 1)).
+Let Ft be the σ-algebra generated by z(0), . . . , z(t). Then, clearly At−1 is Ft -measurable and bt−1
+is Ft−1 measurable. As a result, Q̂ti is Ft -measurable. Let τ > 0 to be the integer in Assumption 3.
+Let dt−1 be the distribution of z(t − 1) conditioned on Ft−τ . Further define,
+Āt−1 = Ādt−1 ,
+
+18
+
+b̄t−1 = b̄dt−1 ,
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+i.e. the “averaged” A and b under distribution dt−1 . It is clear that dt−1 , Āt−1 , b̄t−1 are all Ft−τ
+measurable random vectors (matrices). With these notations, (21) can be rewritten as,
+
+Q̂ti = Q̂t−1
++ αt−1 At−1 Q̂it−1 + bt−1 ]
+i
+
+= Q̂t−1
++ αt−1 Āt−1 Q̂it−1 + b̄t−1 ] + αt−1 [(At−1 − Āt−1 )Q̂t−1
++ bt−1 − b̄t−1 ]
+i
+i
+
+= Q̂it−1 + αt−1 Āt−1 Q̂it−1 + b̄t−1 ]
+− Q̂t−τ
++ αt−1 [(At−1 − Āt−1 )Q̂t−τ
++ bt−1 − b̄t−1 ] +αt−1 (At−1 − Āt−1 )(Q̂t−1
+i ), (22)
+i
+{z
+}
+{z i
+}
+|
+|
+:=t−1
+
+:=φt−1
+
+where in the last step, we have defined sequence t−1 and φt−1 . We have the following auxiliary
+lemma that provides upper bounds for Q̂ti , t and φt , which will be frequently used in the rest of the
+proof. The proof of Lemma 9 is postponed to Section C.3.
+Lemma 9 We have the following upper bounds.
+(a) kQ̂ti k∞ ≤
+
+r̄
+1−γ
+
+almost surely.
+
+r̄
+(b) kt k∞ ≤ ¯ = 4 1−γ
++ 2r̄ almost surely.
+
+(c) kφt k∞ ≤ 2¯
+
+
+Pt−1
+
+k=t−τ +1 αk
+
+almost surely.
+
+By Lemma 8, we have for each t, there exists diagonal matrix Dt−1 and operator gt−1 s.t.
+Āt−1 Q̂it−1 + b̄t−1 = −Dt−1 Q̂t−1
++ Dt−1 gt−1 (Q̂t−1
+i
+i ),
+
+(23)
+d
+
+where by Lemma 8, gt−1 is a γ-contraction in infinity norm, with unique fixed point Q̂i t−1 satifying
+d
+
+kΦQ̂i t−1 − Q∗i k∞ ≤
+Z
+
+κ ×Z
+
+cρκ+1
+.
+1−γ
+
+(24)
+
+κ
+
+Further, by Lemma 8 Dt−1 ∈ R Ni Ni is a diagonal matrix, with the zNiκ ’th entry being
+dt−1 (zNiκ ), the marginalized distribution of zNiκ under dt−1 . Since dt−1 is the distribution of z(t−1)
+conditioned on Ft−τ , by Assumption 3, we have almost surely,
+Dt−1  σI,
+
+(25)
+
+where σ > 0 is from Assumption 3.
+With these preparations, we plug (23) into (22) and expand it recursively, getting,
+Q̂ti = (I − αt−1 Dt−1 )Q̂t−1
++ αt−1 Dt−1 gt−1 (Q̂t−1
+i
+i ) + αt−1 t−1 + αt−1 φt−1
+=
+
+t−1
+Y
+k=τ
+
+(I − αk Dk )Q̂τi +
+
+t−1
+X
+
+t−1
+Y
+
+αk Dk
+
+t−1
+X
+
+(I − α` D` )gk (Q̂ki ) +
+
+`=k+1
+
+k=τ
+
+k=τ
+
+αk
+
+t−1
+Y
+
+(I − α` D` )(k + φk ).
+
+`=k+1
+
+(26)
+We use the following notation:
+Bk,t = αk Dk
+
+t−1
+Y
+
+(I − α` D` ), B̃k,t =
+
+`=k+1
+
+t−1
+Y
+
+(I − α` D` ).
+
+`=k+1
+
+19
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+It is then immediately clear that
+B̃τ −1,t +
+
+t−1
+X
+
+Bk,t = I.
+
+(27)
+
+k=τ
+
+We also define
+
+t−1
+Y
+
+βk,t = αk
+
+(1 − α` σ),
+
+β̃k,t =
+
+`=k+1
+
+t−1
+Y
+
+(1 − α` σ).
+
+`=k+1
+
+Since every diagonal entry of D` is lower bounded by σ almost surely (cf. (25)), we have every
+entry of Bk,t is upper bounded by βk,t and every entry of B̃k,t is upper bounded by β̃k,t almost
+surely. We have the following lemma on the βk,t , β̃k,t sequence which we will frequently use later.
+The proof of Lemma 10 is provided in Section C.3.
+h
+, where t0 ≥ h > σ2 and t0 ≥ 4σh, and t0 ≥ τ , then βk,t , β̃k,t satisfies the
+Lemma 10 If αt = t+t
+0
+following.
+
+σh
+σh
+
+k+1+t0
+k+1+t0
+h
+(a) βk,t ≤ k+t
+,
+β̃
+≤
+.
+k,t
+t+t0
+t+t0
+0
+
+(b)
+
+Pt−1
+
+(c)
+
+Pt−1
+
+2
+k=1 βk,t
+k=τ
+
+βk,t
+
+≤
+
+2h
+1
+σ (t+t0 ) .
+
+Pk−1
+
+`=k−τ +1 α`
+
+≤
+
+8hτ 1
+σ t+t0 .
+
+Next, (26) can be rewritten as
+Q̂ti = B̃τ −1,t Q̂τi +
+
+t−1
+X
+
+Bk,t gk (Q̂ki ) +
+
+k=τ
+
+t−1
+X
+
+αk B̃k,t k +
+
+t−1
+X
+
+αk B̃k,t φk .
+
+(28)
+
+k=τ
+
+k=τ
+
+The goal of this step is to decompose the error. Let at = kΦQ̂ti − Q∗i k∞ = supz∈Z |Q̂ti (zNiκ ) −
+be the error at time t. From (28), and also utilizing the γ-contraction of gk as well as the
+property of the fixed point of gk (24), we have the following Lemma, which decomposes the error
+in a resursive form. The proof of Lemma 11 is postponed to Section C.4.
+
+Q∗i (z)|
+
+Lemma 11 Let at = kΦQ̂ti − Q∗i k∞ . The following recursion holds almost surely,
+at ≤ β̃τ −1,t aτ + γ
+
+sup
+
+t−1
+X
+
+zN κ ∈ZN κ k=τ
+i
+i
+
+bk,t (zNiκ )ak +
+
+t−1
+
+t−1
+
+k=τ
+
+k=τ
+
+X
+X
+2cρκ+1
++k
+αk B̃k,t k k∞ + k
+αk B̃k,t φk k∞ ,
+1−γ
+
+Q
+where bk,t (zNiκ ) is the zNiκ ’th diagonal entry of Bk,t , and bk,t (zNiκ ) = αk dk (zNiκ ) t−1
+`=k+1 (1 −
+α` d` (zNiκ )), where dk (zNiκ ) is the zNiκ ’th diagonal entry of Dk satisfying dk (zNiκ ) ≥ σ.
+P
+From
+Lemma 11, it is clear that to bound the error at , we need to bound k t−1
+k=τ αk B̃k,t k k∞
+Pt−1
+and k k=τ αk B̃k,t φk k∞ , which is the focus of the next step.
+Pt−1
+Step
+4:
+Bound
+the
+
+and
+the
+φ
+-sequence.
+The
+goal
+of
+this
+step
+is
+to
+bound
+k
+k
+k
+k=τ αk B̃k,t k k∞
+Pt−1
+and k k=τ αk B̃k,t φk k∞ . Recall that,
+t−1 = (At−1 − Āt−1 )Q̂t−τ
++ bt−1 − b̄t−1 ,
+i
+φt−1 = (At−1 − Āt−1 )(Q̂t−1
+− Q̂t−τ
+i
+i ).
+20
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Clearly, t−1 is Ft -measurable, and satisfies
+Et−1 |Ft−τ = E[(At−1 − Āt−1 )Q̂t−τ
++ bt−1 − b̄t−1 |Ft−τ ]
+i
+= E[(At−1 − Āt−1 )|Ft−τ ]Q̂t−τ
++ E[bt−1 − b̄t−1 |Ft−τ ]
+i
+= 0,
+
+(29)
+
+where in the last equality we have used
+E[At−1 |Ft−τ ] = E[A(z(t − 1), z(t))|Ft−τ ] = EÃ(z(t − 1))|Ft−τ = Ādt−1 = Āt−1 ,
+E[bt−1 |Ft−τ ] = Eb(z(t − 1))|Ft−τ = b̄dt−1 = b̄t−1 ,
+per the definition of dt−1 .
+P
+Equation (29) shows that t−1 is a “shifted” martingale difference sequence.3 Therefore, k t−1
+k=τ αk B̃k,t k k∞
+can be controlled by Azuma-Hoeffding type inequalities, as shown by Lemma 12. We comment that
+B̃k,t is also random and B̃k,t k is no longer a martingale difference sequence. As a result, to prove
+Lemma 12 requires more than direct application of the Azuma-Hoeffding bound. For more details,
+see the full proof of Lemma 12 in Appendix C.5.
+Lemma 12 We have with probability 1 − δ,
+s
+t−1
+X
+2τ t
+τh
+[log(
+) + f (κ) log SA].
+αk B̃k,t k
+≤ 6¯
+
+σ(t + t0 )
+δ
+∞
+k=τ
+
+Pt−1
+αk B̃k,t φk k∞ , primarily using the fact each φt−1 = (At−1 −
+Finally we bound sequence k k=τ
+t−1
+t−τ
+Āt−1 )(Q̂i − Q̂i ) can be bounded by the movement of the Q̂ti function after τ steps (i.e. kQ̂t−1
+−
+i
+Q̂t−τ
+k
+),
+which
+is
+quite
+small
+due
+to
+the
+step
+size
+selection.
+The
+proof
+of
+Lemma
+13
+can
+also
+be
+∞
+i
+found in Section C.5.
+Lemma 13 The following inequality holds almost surely.
+k
+
+t−1
+X
+
+αk B̃k,t φk k∞ ≤
+
+k=τ
+
+16¯
+hτ 1
+1
+:= Cφ
+.
+σ t + t0
+t + t0
+
+Step 5: bounding the critic error and proof of Theorem 7. We are now ready to use the error
+decomposition in Lemma 11 as well as the bound on k , φk -sequences in Lemma 12 and Lemma 13
+to bound the error of the critic. Recall that Theorem 7 states with probability 1 − δ,
+aT ≤ √
+where C0 =
+
+2cρκ+1
+1−γ ,
+
+6¯
+
+Ca =
+√
+1− γ
+
+r
+
+Ca0
+C0
+Ca
++
++
+,
+T + t0 T + t0 1 − γ
+
+(30)
+
+and
+
+τh
+2τ T 2
+2
+16¯
+hτ 2r̄
+[log(
+) + f (κ) log SA], Ca0 =
+,
+(τ + t0 )).
+√ max(
+σ
+δ
+1− γ
+σ
+1−γ
+
+3. It is not a standard martingale difference sequence, which would require Et−1 |Ft−1 = 0.
+
+21
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+To prove (30), we start by applying Lemma 12 to t ≤ T with δ replaced by δ/T . Then, using a
+union bound, we get with probability 1 − δ, for any t ≤ T ,
+t−1
+X
+
+αk B̃k,t k
+
+k=τ
+
+∞
+
+≤ C √
+
+1
+,
+t + t0
+
+q
+2
+where C = 6¯
+ τσh [log( 2τδT ) + f (κ) log SA]. Combine the above with Lemma 11 and use
+Lemma 13, we get with probability 1 − δ, for all τ ≤ t ≤ T ,
+
+at ≤ β̃τ −1,t aτ + γ sup
+zN κ
+i
+
+t−1
+X
+
+bk,t (zNiκ )ak + C √
+
+k=τ
+
+1
+1
++ Cφ
++ C0 .
+t + t0
+t + t0
+
+(31)
+
+We now condition on (31) is true and use induction to show (30). Eq. (30) is true for t = τ , as
+2r̄
+2r̄
+> aτ , where we have used |aτ | ≤ kQ∗i k∞ + kQ̂τi k∞ ≤ 1−γ
+. Then, assume (30)
+≥ 1−2√γ 1−γ
+is true for up to k ≤ t − 1, we have by (31),
+Ca0
+τ +t0
+
+at ≤ β̃τ −1,t aτ + γ sup
+zN κ
+i
+
+t−1
+X
+
+bk,t (zNiκ )[ √
+
+k=τ
+t−1
+X
+
+≤ β̃τ −1,t aτ + γCa sup
+zN κ
+i
+
++ C √
+
+Ca
+1
+1
+Ca0
+C0
+] + C √
++ Cφ
++
++
++ C0
+t + t0
+t + t0
+k + t0 k + t0 1 − γ
+
+bk,t (zNiκ ) √
+
+k=τ
+
+t−1
+X
+1
+1
+bk,t (zNiκ )
++ γCa0 sup
+k + t0
+k + t0
+zN κ
+k=τ
+i
+
+C0
+1
+1
++
+.
++ Cφ
+t + t0 1 − γ
+t + t0
+
+We use the following auxiliary Lemma, whose proof is provided in Section C.6.
+Q
+h
+κ
+Lemma 14 Recall αk = k+t
+, and bk,t (zNiκ ) = αk dk (zNiκ ) t−1
+`=k+1 (1 − α` d` (zNi )), here
+0
+√
+1
+dk (zNiκ ) ≥ σ. If σh(1 − γ) ≥ 1, t0 ≥ 1, and α0 ≤ 2 , then, for any zNiκ , and any 0 < ω ≤ 1,
+t−1
+X
+k=τ
+
+bk,t (zNiκ )
+
+1
+1
+≤√
+.
+(k + t0 )ω
+γ(t + t0 )ω
+
+With Lemma 14, and using the bound on β̃τ −1,t in Lemma 10 (a), we have
+√
+
+1
+1
+1
+1
+C0
+√
++ γCa0
++ C √
++ Cφ
++
+t + t0
+t + t0 1 − γ
+t + t0
+t + t0
+ τ + t σh
+1
+1
+1
+C0
+1
+√
+√
+0
+≤ γCa √
++ γCa0
++ Cφ
++
+aτ +
+.
++ C √
+t
++
+t
+t
++
+t
+t
++
+t
+1
+−γ
+t + t0
+t + t0
+0
+0
+{z 0
+}
+{z
+} |
+|
+
+at ≤ β̃τ −1,t aτ +
+
+γCa √
+
+:=Ft0
+
+:=Ft
+
+0
+
+Ca
+a
+and Ft0 ≤ t+t
+. To see this,
+To finish the induction, it suffices to show Ft ≤ √C
+t+t0
+0
+√
+t + t0 √
+C
+Ft
+= γ+
+,
+Ca
+Ca
+Cφ aτ (τ + t0 ) (τ + t0 )σh−1
+t + t0 √
+Ft0
+=
+γ
++
++
+.
+Ca0
+Ca0
+Ca0
+(t + t0 )σh−1
+
+22
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+So, we can require Ca , Ca0 to be large enough such that
+√
+√
+1− γ
+1− γ
+Cφ
+C
+aτ (τ + t0 )
+√
+≤ 1 − γ,
+≤
+,
+≤
+.
+Ca
+Ca0
+2
+Ca0
+2
+2r̄
+, one can check our selection of Ca and Ca0 satisfies the above three inequalities,
+Using aτ ≤ 1−γ
+and so the induction is finished and the proof of Theorem 7 is concluded.
+
+C.2. Proof of Lemma 8
+Z
+
+κ ×Z
+
+κ
+
+It is easy to check that D = Φ> diag(d)Φ ∈ R Ni Ni is a diagonal matrix, and the zNiκ ’th diagonal entry is the marginal probability of zNiκ under d, which is non-zero by the assumption of the
+Z
+
+κ ×Z
+
+κ
+
+lemma. Therefore, Φ> diag(d)Φ ∈ R Ni Ni is invertable and matrix Πd = (Φ> diag(d)Φ)−1 Φ> diag(d)
+is well defined. Further, the zNiκ ’th row of Πd is in fact the conditional distribution of the full state
+z given zNiκ . So, Πd must be a stochastic matrix and is non-expansive in infinity norm.
+By the definition of Ād and b̄d , we have,
+
+
+Ād Q̂i + b̄d = Φ> diag(d) γP Φ − Φ Q̂i + Φ> diag(d)ri
+= Φ> diag(d)[ri + γP ΦQ̂i ] − Φ> diag(d)ΦQ̂i
+= Φ> diag(d)TD(ΦQ̂i ) − Φ> diag(d)ΦQ̂i
+= −DQ̂i + DΠd TD(ΦQ̂i )
+= −DQ̂i + Dg d (Q̂i ),
+where TD is the Bellman operator for reward ri defined in (14), and operator g d is given by g d (Q̂i ) =
+Πd TDΦQ̂i .
+Notice that Φ is non-expansive in k · k∞ norm since each row of Φ has precisely one entry being
+1 and all others are zero. Also since Πd is non-expansive in k · k∞ norm and TD is a γ-contraction
+in k · k∞ norm, we have g d = Πd TDΦ is a γ contraction in k · k∞ norm. As a result, g d has a unique
+fixed point Q̂di .
+Finally, we show (20), which bounds the distance between ΦQ̂di and Q∗i , where Q∗i is the true
+Q-function for reward ri and it is the unique fixed point of TD operator (14). We have,
+kΦQ̂di − Q∗i k∞ ≤ kΦQ̂di − ΦΠd Q∗i k∞ + kΦΠd Q∗i − Q∗i k∞
+= kΦΠd TD(ΦQ̂di ) − ΦΠd TD(Q∗i )k∞ + kΦΠd Q∗i − Q∗i k∞
+≤ γkΦQ̂di − Q∗i k∞ + kΦΠd Q∗i − Q∗i k∞ ,
+where the equality follows from the fact that Q̂di is the fixed point of Πd TDΦ, Q∗i is the fixed point
+of TD; the last inequality is due to ΦΠd TD is a γ contration in infinity norm. Therefore,
+kΦQ̂di − Q∗i k∞ ≤
+
+1
+kΦΠd Q∗i − Q∗i k∞ .
+1−γ
+
+(32)
+
+Next, recall that the zNiκ ’s row of Πd is the distribution of the state-action pair z conditioned on its
+Niκ coordinates being fixed to be zNiκ . We denote this conditional distribution of the states outside
+
+23
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+κ , given zN κ , as d(zN κ |zN κ ). With this notation,
+of Niκ , zN−i
+i
+−i
+i
+
+X
+
+(Πd Q∗i )(zNiκ ) =
+
+∗
+κ |z k )Q (zN κ , zN κ ).
+d(zN−i
+i
+N
+i
+−i
+i
+
+zN κ
+
+−i
+
+And therefore,
+κ ) =
+(ΦΠd Q∗i )(zNiκ , zN−i
+
+X
+
+0
+∗
+0
+κ |zN κ )Qi (zN κ , zN κ ).
+d(zN
+i
+i
+−i
+−i
+
+0
+zN
+κ
+
+−i
+
+Further, we have
+∗
+κ ) − Q (zN κ , zN κ )|
+|(ΦΠd Q∗i )(zNiκ , zN−i
+i
+−i
+i
+X
+X
+∗
+0
+0
+∗
+0
+κ |zN κ )Qi (zN κ , zN κ )
+κ |zN κ )Qi (zN κ , zN κ ) −
+d(zN
+=
+d(zN
+−i
+i
+i
+i
+i
+−i
+−i
+−i
+0
+zN
+κ
+
+0
+zN
+κ
+
+−i
+
+−i
+
+≤
+
+X
+
+0
+κ |zN κ )
+d(zN
+i
+−i
+
+0
+κ )
+Q∗i (zNiκ , zN
+−i
+
+−
+
+κ )
+Q∗i (zNiκ , zN−i
+
+0
+zN
+κ
+−i
+
+≤ cρκ+1 ,
+where the last inequality is due to the exponential decay property (cf. Definition 2 and Assumption 2). Therefore,
+kΦΠd Q∗i − Q∗i k∞ ≤ cρκ+1 .
+Combining the above with (32), we get the desired result
+kΦQ̂di − Q∗i k∞ ≤
+
+cρκ+1
+.
+1−γ
+
+
+C.3. Proof of Lemma 9 and Lemma 10
+In this section, we provide proofs of the two auxiliary lemmas, Lemma 9 and Lemma 10. We start
+with the proof of Lemma 9.
+Proof of Lemma 9. First, notice that A(z, z 0 ) = ezN κ [γeTz0 κ − eTzN κ ] and b(z) = ezN κ ri (zi ). As
+i
+
+such, kA(z, z 0 )k∞ ≤ 1 + γ < 2, kb(z)k∞ ≤ r̄.
+
+N
+
+i
+
+i
+
+i
+
+Part (a) can be proved by induction. Part (a) is true for t = 0 as Q̂0i = 0. Assume kQ̂t−1
+i k∞ ≤
+r̄
+1−γ . Recall the update equation (15),
+t−1
+κ
+κ
+Q̂ti = Q̂it−1 + αt−1 [ri (zi (t − 1)) + γ Q̂t−1
+i (zNi (t)) − Q̂i (zNi (t − 1))]ezN κ (t−1) ,
+i
+
+or in other words,
+t−1
+t−1
+κ
+κ
+κ
+Q̂ti (zNiκ (t − 1)) = Q̂t−1
+i (zNi (t − 1)) + αt−1 [ri (zi (t − 1)) + γ Q̂i (zNi (t)) − Q̂i (zNi (t − 1))]
+t−1
+κ
+κ
+= (1 − αt−1 )Q̂t−1
+i (zNi (t − 1)) + αt−1 [ri (zi (t − 1)) + γ Q̂i (zNi (t))].
+
+24
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+And for other entries of Q̂ti , it stays the same as Q̂t−1
+i . For this reason,
+t
+κ
+kQ̂ti k∞ ≤ max(kQ̂t−1
+i k∞ , |Q̂i (zNi (t − 1))|).
+
+Notice that
+|Q̂ti (zNiκ (t − 1))| ≤ (1 − αt−1 )
+
+r̄
+r̄
+r̄
++ αt−1 (r̄ + γ
+)=
+,
+1−γ
+1−γ
+1−γ
+
+which finishes the induction and the proof of part (a).
+For part (b), notice that t = (At − Āt )Q̂t+1−τ
++ bt − b̄t . Therefore, it is easy to check that by
+i
+r̄
+part (a), kt k∞ ≤ 4 1−γ
++ 2r̄ = ¯.
+For part (c), notice that, for any k
++ bk−1 k∞ ≤ αk−1 [2
+kQ̂ki − Q̂k−1
+k∞ = αk−1 kAk−1 Q̂k−1
+i
+i
+
+r̄
++ r̄].
+1−γ
+
+Therefore, by triangle inequality,
+kQ̂t−1
+− Q̂t−τ
+i
+i k∞ ≤ [2
+
+t−2
+X
+r̄
+αk .
++ r̄]
+1−γ
+k=t−τ
+
+As a consequence,
+kφt k∞ ≤ kAt −
+
+Āt k∞ kQ̂ti
+
+−
+
++1
+Q̂t−τ
+k∞
+i
+
+r̄
+≤ [8
++ 4r̄]
+1−γ
+
+t−1
+X
+k=t−τ +1
+
+t−1
+X
+
+αk = 2¯
+
+
+αk .
+
+k=t−τ +1
+
+
+Proof of Lemma 10. Notice that log(1 − x) ≤ −x for all x < 1. Then,
+(1 − σαt ) = e
+
+σh
+log(1− t+t
+)
+0
+
+σh
+− t+t
+
+≤e
+
+0
+
+.
+
+Therefore,
+t−1
+Y
+
+(1 − σα` ) ≤ e
+
+−
+
+Pt−1
+
+−
+
+Rt
+
+σh
+`=k+1 `+t0
+
+`=k+1
+
+≤e
+
+σh
+`=k+1 `+t0 d`
+
+−σh log(
+
+t+t0
+
+)
+
+k+1+t0
+=e
+ k + 1 + t σh
+0
+=
+,
+t + t0
+
+which leads to the bound on βk,t and β̃k,t .
+For part (b),
+2
+βk,t
+≤
+
+h2
+(k + 1 + t0 )2σh
+2h2
+≤
+(k + t0 )2σh−2 ,
+(k + t0 )2
+(t + t0 )2σh
+(t + t0 )2σh
+25
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+where we have used (k + 1 + t0 )2σh ≤ 2(k + t0 )2σh , which is true when t0 ≥ 4σh. Then,
+t−1
+X
+
+2
+βk,t
+
+k=1
+
+Z t
+t−1
+X
+2h2
+2h2
+2σh−2
+(y + t0 )2σh−2 dy
+≤
+(k + t0 )
+≤
+(t + t0 )2σh
+(t + t0 )2σh 1
+k=1
+
+2h2
+1
+1
+2h
+<
+(t + t0 )2σh−1 <
+,
+2σh
+2σh − 1
+σ (t + t0 )
+(t + t0 )
+where in the last inequality we have used 2σh − 1 > σh.
+For part (c), notice that for k − τ + 1 ≤ ` ≤ k − 1 where k ≥ τ , we have α` ≤
+(using t0 ≥ τ ). Then,
+t−1
+X
+k=τ
+
+βk,t
+
+k−1
+X
+
+α` ≤
+
+`=k−τ +1
+
+t−1
+X
+k=τ
+
+≤
+
+t−1
+X
+k=τ
+
+h
+k−τ +t0
+
+≤
+
+2h
+k+t0
+
+t−1
+
+βk,t
+
+X h  k + 1 + t0 σh 2hτ
+2hτ
+≤
+k + t0
+k + t0
+t + t0
+k + t0
+k=τ
+
+4h2 τ
+(t + t0 )σh
+
+(k + t0 )σh−2
+
+4h2 τ (t + t0 )σh−1
+(t + t0 )σh σh − 1
+8hτ 1
+≤
+,
+σ t + t0
+≤
+
+where we have used (k + 1 + t0 )σh ≤ 2(k + t0 )σh , and σh − 1 > 21 σh.
+
+
+
+C.4. Proof of Lemma 11
+Let the zNiκ ’th diagonal entry of Bk,t be bk,t (zNiκ ), and that of B̃k,t be b̃k,t (zNiκ ). Using these
+notations, equation (28) can be written as,
+:=G(zN κ )
+i
+
+z
+Q̂ti (zNiκ ) = b̃τ −1,t (zNiκ )Q̂τi (zNiκ ) +
+
+}|
+t−1
+X
+
+{
+bk,t (zNiκ )[gk (Q̂ki )](zNiκ )
+
+k=τ
+
++
+
+t−1
+X
+
+αk b̃k,t (zNiκ )(k (zNiκ ) + φk (zNiκ )).
+
+k=τ
+
+26
+
+(33)
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Notice that by (27), b̃τ −1,t (zNiκ ) +
+
+Pt−1
+
+κ
+k=τ bk,t (zNi )
+
+= 1. Then,
+
+|G(zNiκ ) − Q∗i (z)| ≤ b̃τ −1,t (zNiκ )|Q̂τi (zNiκ ) − Q∗i (z)| +
+≤ b̃τ −1,t (zNiκ )|Q̂τi (zNiκ ) − Q∗i (z)| +
+
+t−1
+X
+k=τ
+t−1
+X
+
+bk,t (zNiκ )|[gk (Q̂ki )](zNiκ ) − Q∗i (z)|
+bk,t (zNiκ )|[gk (Q̂ki )](zNiκ ) − Q̂di k (zNiκ )|
+
+k=τ
+
++
+
+t−1
+X
+
+bk,t (zNiκ )|Q∗i (z) − Q̂di k (zNiκ )|
+
+k=τ
+
+≤ b̃τ −1,t (zNiκ )|Q̂τi (zNiκ ) − Q∗i (z)| + γ
+
+t−1
+X
+
+bk,t (zNiκ )kQ̂ki − Q̂di k k∞
+
+k=τ
+
++
+
+t−1
+X
+
+bk,t (zNiκ )kQ∗i − ΦQ̂di k k∞
+
+k=τ
+
+≤ b̃τ −1,t (zNiκ )|Q̂τi (zNiκ ) − Q∗i (z)| + γ
+
+t−1
+X
+
+bk,t (zNiκ )kΦQ̂ki − Q∗i k∞
+
+k=τ
+
++2
+
+t−1
+X
+
+bk,t (zNiκ )kQ∗i − ΦQ̂di k k∞
+
+k=τ
+
+≤ β̃τ −1,t aτ + γ
+
+t−1
+X
+
+bk,t (zNiκ )ak +
+
+k=τ
+
+2cρκ+1
+,
+1−γ
+
+(34)
+
+where in the thrid inequality, we have used that gk is γ-contraction in infinity norm with fixed point
+Q̂di k , and in the last inequality, we have used (24). Combining the above with (33), we have
+at = kΦQ̂ti − Q∗i k∞
+≤ β̃τ −1,t aτ + γ sup
+zN κ
+i
+
+t−1
+X
+
+bk,t (z
+
+Niκ
+
+k=τ
+
+t−1
+
+t−1
+
+k=τ
+
+k=τ
+
+X
+X
+2cρκ+1
+)ak +
+αk B̃k,t φk k∞ .
++k
+αk B̃k,t k k∞ + k
+1−γ
+
+
+C.5. Proof of Lemma 12 and Lemma 13
+Given
+Pt−1the work done above, notice that Lemma 9 (c) and Lemma 10 (c) imply the bound on
+k k=τ αk B̃k,t φk k∞ in Lemma 13, and so the lemma follows directly. So, in this section, we
+focus on the proof of Lemma 12. We start by stating a variant of the Azuma-Hoeffding bound that
+handles our “shifted” Martingale difference sequence.
+Lemma 15 Let Xt be a Ft -adapted stochastic process, satisfying EXt |Ft−τ = 0. Further, |Xt | ≤
+X̄t almost surely. Then with probability 1 − δ, we have,
+v
+u
+t
+t
+X
+u X
+2τ
+t
+|
+Xt | ≤ 2τ
+X̄k2 log( ).
+δ
+k=0
+
+k=0
+
+27
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Proof Let ` be an integer between 0 and τ − 1. For each `, define process Yk` = Xτ k+` , scalar
+Ȳk` = X̄kτ +` , and define Filtration F̃k` = Fτ k+` . Then, Yk` is F̃k` -adapted, and satisfies
+`
+EYk` |F̃k−1
+= EXkτ +` |Fkτ +`−τ = 0.
+
+Therefore, applying Azuma-Hoeffding bound on Yk` , we have
+P (|
+
+t2
+),
+Yk` | ≥ t) ≤ 2 exp(− P
+2 k:kτ +`≤t (Ȳk` )2
+k:kτ +`≤t
+X
+
+i.e. with probability at least 1 − τδ ,
+|
+
+X
+
+Xkτ +` | = |
+
+k:kτ +`≤t
+
+X
+
+Yk` |
+
+s
+≤ 2
+
+k:kτ +`≤t
+
+X
+
+2
+X̄kτ
++` log(
+
+k:kτ +`≤t
+
+2τ
+).
+δ
+
+Using the union bound for ` = 0, . . . , τ − 1, we get that with probability at least 1 − δ,
+v
+u
+t
+t
+τ −1
+τ −1 s
+X
+X
+X
+X
+X
+u X
+2τ
+2τ
+2
+t
+2
+X̄kτ +` log( ) ≤ 2τ
+X̄k2 log( ),
+|
+Xt | ≤
+|
+Xkτ +` | ≤
+δ
+δ
+k=0
+
+`=0 k:kτ +`≤t
+
+`=0
+
+k:kτ +`≤t
+
+k=0
+
+where the last inequality is due to Cauchy-Schwarz.
+Recall that Lemma 12 is an upper bound on k
+Z κ
+random vector in R Ni , with its zNiκ ’th entry being
+t−1
+X
+k=τ
+
+αk k (zNiκ )
+
+t−1
+Y
+
+Pt−1
+
+k=τ
+
+αk B̃k,t k k, where
+
+Pt−1
+
+k=τ
+
+αk B̃k,t k is a
+
+(1 − α` d` (zNiκ )),
+
+(35)
+
+`=k+1
+
+with d` (zNiκ ) ≥ σ almost surely, cf. (25). Fixing zNiκ , as have been shown in (29), k (zNiκ )
+Q
+is a Fk+1 adapted stochastic process satisfying Ek (zNiκ )|Fk+1−τ = 0. However, t−1
+`=k+1 (1 −
+α` d` (zNiκ )) is not Fk+1−τ -measurable, and as such we cannot directly apply the Azuma-Hoeffding
+bound in Lemma 15 to quantity (35). In what follows, we first show in Lemma 16 that almost surely,
+the absolute value of quantity (35) can be upper bounded by the sup of another quantity, to which
+we can directly apply Lemma 15. With the help of Lemma 16, we can use the Azuma-Hoeffding
+bound to control (35) and prove Lemma 12.
+Lemma 16 For each zNiκ , we have almost surely,
+t−1
+X
+k=τ
+
+αk k (zNiκ )
+
+t−1
+Y
+
+
+(1 − α` d` (zNiκ )) ≤
+
+`=k+1
+
+sup
+τ ≤k0 ≤t−1
+
+t−1
+X
+
+k (zNiκ )βk,t
+
+k=k0 +1
+
+Proof Let pk be a scalar sequence defined as follows. Set pτ = 0, and
+pk = (1 − αk−1 dk−1 (zNiκ ))pk−1 + αk−1 k−1 (zNiκ ).
+28
+
+
++ 2¯
+βk0 ,t .
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Then pt =
+|pt |. Let
+
+Pt−1
+
+k=τ
+
+αk k (zNiκ )
+
+Qt−1
+
+`=k+1 (1
+
+− α` d` (zNiκ )), and to prove Lemma 16 we need to bound
+
+k0 = sup{k ≤ t − 1 : (1 − αk dk (zNiκ ))|pk | ≤ αk |k (zNiκ )|}.
+We must have k0 ≥ τ since |pτ | = 0. With k0 defined, we now define another scalar sequence p̃ s.t.
+p̃k0 +1 = pk0 +1 and
+p̃k = (1 − αk−1 σ)p̃k−1 + αk−1 k−1 (zNiκ ).
+We claim that for all k ≥ k0 + 1, pk and p̃k have the same sign, and |pk | ≤ |p̃k |. This is obviously
+true for k = k0 + 1. Suppose it is true for for k − 1. Without loss of generality, suppose both pk−1
+and p̃k−1 are non-negative. Since k − 1 > k0 and by the definition of k0 , we must have
+(1 − αk−1 dk−1 (zNiκ ))pk−1 > |αk−1 k−1 (zNiκ )|.
+Therefore, pk > 0. Further, since dk−1 (zNiκ ) ≥ σ, we also have
+(1 − αk−1 σ)p̃k−1 ≥ (1 − αk−1 dk−1 (zNiκ ))pk−1 > |αk−1 k−1 (zNiκ )|.
+These imply p̃k ≥ pk > 0. The case where both pk−1 and p̃k−1 are negative are similar. This
+finishes the induction, and as a result, |pt | ≤ |p̃t |.
+Notice,
+p̃t =
+
+t−1
+X
+k=k0 +1
+
+αk k (zNiκ )
+
+t−1
+Y
+
+(1−α` σ)+p̃k0 +1
+
+t−1
+Y
+
+k (zNiκ )βk,t +p̃k0 +1 β̃k0 ,t .
+
+k=k0 +1
+
+`=k0 +1
+
+`=k+1
+
+t−1
+X
+
+(1−α` σ) =
+
+By the definition of k0 , we have
+|pk0 +1 | ≤ (1 − αk0 dk0 (zNiκ ))|pk0 | + αk0 |k0 (zNiκ )| ≤ 2αk0 |k0 (zNiκ )| ≤ 2αk0 ¯,
+where in the last step, we have used the upper bound on kk0 k∞ in Lemma 9 (b). As a result,
+t−1
+X
+
+|pt | ≤ |p̃t | ≤
+
+k (zNiκ )βk,t + p̃k0 +1 β̃k0 ,t
+
+k=k0 +1
+
+≤
+
+t−1
+X
+
+k (zNiκ )βk,t + 2αk0 ¯β̃k0 ,t
+
+k=k0 +1
+
+=
+
+t−1
+X
+
+k (zNiκ )βk,t + 2¯
+βk0 ,t .
+
+k=k0 +1
+
+With the above preparations, we are now ready to prove Lemma 12.
+Proof of Lemma 12. Fix zNiκ and τ ≤ k0 ≤ t − 1. As have been shown in (29), k (zNiκ )βk,t is
+a Fk+1 adapted stochastic process satisfying Ek (zNiκ )βk,t |Fk+1−τ = 0. Also by Lemma 9(b),
+|k (zNiκ )βk,t | ≤ ¯βk,t almost surely. As a result, we can use the Azuma-Hoeffding bound in
+Lemma 15 to get with probability 1 − δ,
+v
+u
+t−1
+t−1
+X
+X
+u
+2 log( 2τ ).
+k (zNiκ )βk,t ≤ ¯t2τ
+βk,t
+δ
+k=k0 +1
+
+k=k0 +1
+
+29
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+By a union bound on τ ≤ k0 ≤ t − 1, we get with probability 1 − δ,
+v
+v
+u
+u
+t−1
+t−1
+t−1
+X
+X
+X
+u
+u
+2τ
+t
+2
+2 log( 2τ t ).
+sup
+) ≤ ¯t2τ
+k (zNiκ )βk,t ≤ sup ¯t2τ
+βk,t log(
+βk,t
+δ
+δ
+τ ≤k0 ≤t−1
+τ ≤k0 ≤t−1
+k=k0 +1
+
+k=k0 +1
+
+k=τ +1
+
+Then, by Lemma 16, we have with probability 1 − δ,
+|
+
+t−1
+X
+
+αk k (zNiκ )
+
+k=τ
+
+t−1
+Y
+
+
+(1 − α` d` (zNiκ ))| ≤
+
+`=k+1
+
+sup
+τ ≤k0 ≤t−1
+
+t−1
+X
+
+
+k (zNiκ )βk,t + 2¯
+βk0 ,t
+
+k=k0 +1
+
+v
+u
+t−1
+X
+u
+2 log( 2τ t ) +
+t
+sup 2¯
+βk0 ,t
+βk,t
+≤ ¯ 2τ
+δ
+τ ≤k0 ≤t−1
+k=τ +1
+s
+τh
+2τ t
+h  k0 + 1 + t0 σh
+log(
+) + sup 2¯
+
+≤ 2¯
+
+σ(t + t0 )
+δ
+k0 + t0
+t + t0
+τ ≤k0 ≤t−1
+s
+2τ t
+h
+τh
+log(
+) + 2¯
+
+≤ 2¯
+
+σ(t + t0 )
+δ
+t − 1 + t0
+s
+τh
+2τ t
+≤ 6¯
+
+log(
+),
+σ(t + t0 )
+δ
+where in the third inequality, we have used the bounds on βk,t in Lemma 10. Finally, apply the union
+bound over zNiκ ∈ ZNiκ , and noticing that |Niκ | ≤ f (κ) and |ZNiκ | ≤ (SA)f (κ) by Assumption 1,
+we have with probability 1 − δ,
+s
+s
+t−1
+X
+τh
+τh
+2τ t(SA)f (κ)
+2τ t
+
+αk B̃k,t k k∞ ≤ 6¯
+k
+log(
+) = 6¯
+
+[log(
+) + f (κ) log SA].
+σ(t + t0 )
+δ
+σ(t + t0 )
+δ
+k=τ
+
+
+C.6. Proof of Lemma 14
+Throughout the proof, we fix zNiκ and prove the desired upper bound. For notational simplicity, we
+drop the dependence on zNiκ and write bk,t and dk instead, and we will use the property dk ≥ σ.
+Define the sequence
+t−1
+X
+1
+.
+et =
+bk,t
+(k + t0 )ω
+k=τ
+
+We use induction to show that et ≤
+eτ +1 =
+
+bτ,τ +1 (τ +t10 )ω
+
+=
+
+ατ dτ (τ +t10 )ω
+
+1
+γ(t+t0 )ω . The statement is clearly
+1
+≤ √γ(τ +1+t
+ω (last step needs ατ
+0)
+
+√
+
+30
+
+true for t = τ + 1, as
+≤ 21 , (1 +
+
+1 ω
+t0 )
+
+≤
+
+√2 ,
+γ
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+implied by t0 ≥ 1, ω ≤ 1). Let the statement be true for t − 1. Then, notice that,
+et =
+
+t−2
+X
+
+bk,t
+
+k=τ
+
+1
+1
++ bt−1,t
+(k + t0 )ω
+(t − 1 + t0 )ω
+
+= (1 − αt−1 dt−1 )
+
+t−2
+X
+k=τ
+
+bk,t−1
+
+1
+1
++ αt−1 dt−1
+ω
+(k + t0 )
+(t − 1 + t0 )ω
+
+= (1 − αt−1 dt−1 )et−1 + αt−1 dt−1
+
+1
+(t − 1 + t0 )ω
+
+1
+1
++ αt−1 dt−1
+≤ (1 − αt−1 dt−1 ) √
+γ(t − 1 + t0 )ω
+(t − 1 + t0 )ω
+h
+1
+√ i
+= 1 − αt−1 dt−1 (1 − γ) √
+,
+γ(t − 1 + t0 )ω
+where the inequality is based on induction assumption. Then, plug in αt−1 =
+dt−1 ≥ σ, we have,
+
+h
+t−1+t0
+
+and use
+
+σh
+1
+√ i
+(1 − γ) √
+t − 1 + t0
+γ(t − 1 + t0 )ω
+h
+σh
+1
+√ i t + t0 ω
+= 1−
+(1 − γ)
+√
+t − 1 + t0
+t − 1 + t0
+γ(t + t0 )ω
+h
+ω
+1
+1
+σh
+√ i
+.
+= 1−
+(1 − γ) 1 +
+√
+t − 1 + t0
+t − 1 + t0
+γ(t + t0 )ω
+
+h
+et ≤ 1 −
+
+Now using the inequality that for any x > −1, (1 + x) ≤ ex , we have,
+ω
+√
+1
+σh
+1
+√ i
+− σh (1− γ)+ω t−1+t
+0 ≤ 1,
+(1 − γ) 1 +
+≤ e t−1+t0
+t − 1 + t0
+t − 1 + t0
+√
+where in the last inequality, we have used ω ≤ 1 and the condition on h s.t. σh(1 − γ) ≥ 1. This
+1
+shows et ≤ √γ(t+t
+
+ω and finishes the induction.
+0)
+h
+1−
+
+Appendix D. Analysis of the Actor and Proof of Theorem 5
+In this section, we analyze the actor step. Recall that at iteration m,
+θi (m + 1) = θi (m) + ηm ĝi (m),
+with ηm =
+
+√ η
+m+1
+
+and ĝi (m) is given by
+
+ĝi (m) =
+
+T
+X
+t=0
+
+γt
+
+1 X m,T
+θ (m)
+Q̂j (sNjκ (t), aNjκ (t))∇θi log ζi i (ai (t)|si (t)),
+n
+κ
+
+(36)
+
+j∈Ni
+
+where Q̂m,T
+is the final estimate of the Q-function for ri at the end of the critic loop in iteration
+i
+m, where we have added an additional superscript m to Q̂m,T
+to indicate its dependence on m;
+i
+31
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+{s(t), a(t)}Tt=0 is the state-action trajectory with s(0) drawn from π0 (the initial state distribution
+defined in the objective function J(θ), cf. (2)) and the agents taking policy θ(m). Our goal is to
+show that ĝi (m) is approximately the right gradient direction, ∇θi J(θ(m)), which by Lemma 1 can
+be written as,
+∇θi J(θ(m)) =
+
+∞
+X
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t Qθ(m) (s, a)∇θi log ζ θ(m) (a|s),
+
+t=0
+
+(37)
+
+t
+
+θ(m)
+
+where πt
+is the distribution of s(t) under fixed policy θ(m) when the initial state is drawn from
+θ(m)
+π0 ; Q
+is the true Q function for the global reward r under policy θ(m), cf. (3).
+To bound the difference between ĝi (m) and the true gradient ∇θi J(θ(m)), we define the following additional sequences,
+gi (m) =
+
+T
+X
+t=0
+
+hi (m) =
+
+T
+X
+t=0
+
+γt
+
+1 X θ(m)
+θ (m)
+Qj (s(t), a(t))∇θi log ζi i (ai (t)|si (t)),
+n
+κ
+
+(38)
+
+j∈Ni
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t
+t
+
+1 X θ(m)
+θ (m)
+Qj (s, a)∇θi log ζi i (ai |si ),
+n
+κ
+
+(39)
+
+j∈Ni
+
+θ(m)
+
+where Qi
+is the true Q function for ri under policy θ(m). We also use notation h(m), g(m),
+ĝ(m) to denote the respective hi (m), gi (m), ĝi (m) stacked into a larger vector. The following
+result is an immediate consequence of Assumption 1 and Assumption 4, whose proof is postponed
+to Appendix D.1.
+Lemma 17 We have almost surely, ∀m ≤ M ,
+max(kĝ(m)k, kg(m)k, kh(m)k, k∇J(θ(m))k) ≤
+
+r̄L
+.
+(1 − γ)2
+
+Proof Overview. Our main proof idea is the following decomposition,
+ĝ(m) = ĝ(m) − g(m) + g(m) − h(m) + h(m) − ∇J(θ(m)) +∇J(θ(m)),
+|
+{z
+} |
+{z
+} |
+{z
+}
+e1 (m)
+
+e2 (m)
+
+(40)
+
+e3 (m)
+
+where the error between the gradient estimator ĝ(m) and the true gradient ∇J(θ(m)) is decomposed into the sum of three terms. In Step 1, we bound the first term ke1 (m)k which is a direct
+consequence of our result in the analysis of the critic, cf. Theorem 7 in Appendix C. In Step 2,
+we study e2 (m), which turns out to be a martingale difference sequence and can be controlled by
+Azuma-Hoeffding bound. In Step 3, we bound e3 (m), and finally in Step 4, we combine the bounds
+on e1 (m), e2 (m) and e3 (m) to prove our main result Theorem 5.
+Step 1: bounds on e1 (m). Notice that the difference between ĝi (m) and gi (m) is that the critic
+θ(m)
+estimate Q̂m,T
+is replaced with the true Q-function Qj . By Theorem 7, we have Q̂m,T
+will
+j
+j
+θ(m)
+
+be very close to Qj
+with high probability when T is large enough, based on which we can
+1
+bound ke (m)k, which is formally provided in Lemma 18. The proof of Lemma 18 is postponed to
+Appendix D.2.
+32
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Lemma 18 When T is large enough s.t.
+6¯
+
+Ca (δ, T ) =
+√
+1− γ
+
+r
+
+δ
+Ca ( 2nM
+,T )
+√
+T +t0
+
++
+
+Ca0
+T +t0
+
+≤
+
+2cρκ+1
+,
+(1−γ)2
+
+where
+
+τh
+2τ T 2
+2
+16¯
+hτ 2r̄
+[log(
+) + f (κ) log SA], Ca0 =
+,
+(τ + t0 )),
+√ max(
+σ
+δ
+1− γ
+σ
+1−γ
+
+r̄
+with ¯ = 4 1−γ
++ 2r̄, then we have with probability at least 1 − 2δ ,
+
+ke1 (m)k ≤
+
+sup
+0≤m≤M −1
+
+4cLρκ+1
+.
+(1 − γ)3
+
+Step 2: bounds on e2 (m). Let Gm be the σ-algebra generated by the trajectories in the first m outerloop iterations. Then, θ(m) is Gm−1 measurable, and so is hi (m). Further, by the way that the trajectory {(s(t), a(t))}Tt=0 is generated, we have Eg(m)|Gm−1 = h(m). As such, ηm h∇J(θ(m)), e2 (m)i
+is a martingale difference sequence w.r.t. Gm , and we have the following bound in Lemma 19 which
+is a direct consequence of Azuma-Hoeffding bound. The proof of Lemma 19 is postponed to Section D.3.
+Lemma 19 With probability at least 1 − δ/2,
+M
+−1
+X
+m=0
+
+v
+u M −1
+u X
+4
+2
+t2
+2 log .
+ηm h∇J(θ(m)), e (m)i ≤
+ηm
+4
+(1 − γ)
+δ
+2r̄2 L2
+
+m=0
+
+Step 3: bounds on e3 (m). We have the following Lemma 20 that bounds ke3 (m)k. Its proof is
+quite similar to that of Lemma 4 and is postponed to Appendix D.4.
+Lemma 20 When T + 1 ≥
+
+log
+
+c(1−γ)
++(κ+1) log ρ
+r̄
+
+log γ
+
+, we have almost surely,
+
+ke3 (m)k ≤ 2
+
+Lc
+ρκ+1 .
+(1 − γ)
+
+Step 4: Proof of Theorem 5. With the above bounds on e1 (m), e2 (m) and e3 (m), we are now
+ready to prove the main result Theorem 5. Since ∇J(θ) is L0 Lipschitz continuous, we have
+J(θ(m + 1)) ≥ J(θ(m)) + h∇J(θ(m)), θ(m + 1) − θ(m)i −
+= J(θ(m)) + ηm h∇J(θ(m)), ĝ(m)i −
+
+L0
+kθ(m + 1) − θ(m)k2
+2
+
+2
+L0 ηm
+kĝ(m)k2 .
+2
+
+Recall the decomposition of ĝ(m),
+ĝ(m) = ĝ(m) − g(m) + g(m) − h(m) + h(m) − ∇J(θ(m)) +∇J(θ(m)).
+|
+{z
+} |
+{z
+} |
+{z
+}
+e1 (m)
+
+e2 (m)
+
+e3 (m)
+
+Then,
+kĝ(m)k2 ≤ 4ke1 (m)k2 + 4ke2 (m)k2 + 4ke3 (m)k2 + 4k∇J(θ(m))k2 .
+33
+
+(41)
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Further, we can bound h∇J(θ(m)), ĝ(m)i,
+h∇J(θ(m)), ĝ(m)i = k∇J(θ(m))k2 + h∇J(θ(m)), e1 (m) + e2 (m) + e3 (m)i
+≥ k∇J(θ(m))k2 + h∇J(θ(m)), e2 (m)i − k∇J(θ(m))k(ke1 (m)k + ke3 (m)k).
+Plug the above bounds on kĝ(m)k2 and h∇J(θ(m)), ĝ(m)i into (41), we have,
+2
+2
+J(θ(m + 1)) ≥ J(θ(m)) + (ηm − 2L0 ηm
+)k∇J(θ(m))k2 + ηm εm,0 − ηm εm,1 − ηm
+εm,2 , (42)
+
+where
+εm,0 = h∇J(θ(m)), e2 (m)i,
+εm,1 = k∇J(θ(m))k(ke1 (m)k + ke3 (m)k),
+εm,2 = 2L0 (ke1 (m)k2 + ke2 (m)k2 + ke3 (m)k2 ).
+Doing a telescope sum for (42), we get
+J(θ(M )) ≥ J(θ(0)) +
+
+≥ J(θ(0)) +
+
+M
+−1
+X
+m=0
+M
+−1
+X
+m=0
+
+2
+(ηm − 2L0 ηm
+)k∇J(θ(m))k2 +
+
+M
+−1
+X
+
+ηm εm,0 −
+
+m=0
+
+1
+ηm k∇J(θ(m))k2 +
+2
+
+M
+−1
+X
+
+ηm εm,0 −
+
+M
+−1
+X
+
+ηm εm,1 −
+
+m=0
+M
+−1
+X
+
+m=0
+
+ηm εm,1 −
+
+m=0
+
+M
+−1
+X
+
+2
+ηm
+εm,2
+
+m=0
+M
+−1
+X
+
+2
+ηm
+εm,2 ,
+
+m=0
+
+(43)
+2 = η (1 − 2L0 η ) ≥ 1 η , which is true because η ≤ η ≤
+where we have used ηm − 2L0 ηm
+m
+m
+m
+2 m
+After rearranging, we get
+M
+−1
+X
+m=0
+
+1
+4L0 .
+
+M
+−1
+M
+−1
+M
+−1
+X
+X
+X
+1
+2
+ηm k∇J(θ(m))k2 ≤ J(θ(M )) − J(θ(0)) −
+ηm εm,0 +
+ηm εm,1 +
+ηm
+εm,2 .
+2
+m=0
+
+m=0
+
+m=0
+
+(44)
+We now apply our results in the first three steps. By Lemma 19, we have with probability 1 − 2δ ,
+M
+−1
+X
+m=0
+
+ηm εm,0
+
+v
+u M −1
+u X
+4
+t2
+2 log .
+≤
+ηm
+4
+(1 − γ)
+δ
+2r̄2 L2
+
+(45)
+
+m=0
+
+By Lemma 18 and Lemma 20, we have with probability 1 − 2δ ,
+sup εm,1 ≤
+m≤M −1
+
+r̄L
+( sup ke1 (m)k + sup ke3 (m)k)
+(1 − γ)2 m≤M −1
+m≤M −1
+
+r̄L
+4cLρκ+1
+Lc
+(
++2
+ρκ+1 )
+2
+3
+(1 − γ) (1 − γ)
+(1 − γ)
+6L2 cr̄ κ+1
+≤
+ρ .
+(1 − γ)5
+≤
+
+34
+
+(46)
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+r̄L
+By Lemma 17, we have almost surely, max(ke1 (m)k, ke2 (m)k, ke3 (m)k) ≤ 2 (1−γ)
+2 , and
+hence almost surely,
+
+sup εm,2 = 2L0 (ke1 (m)k2 + ke2 (m)k2 + ke3 (m)k2 )
+m≤M −1
+
+≤
+
+24r̄2 L0 L2
+.
+(1 − γ)4
+
+(47)
+
+Using a union bound, we have with probability 1 − δ, all three events (45), (46) and (47) hold,
+which when combined with (44) implies
+PM −1
+2
+m=0 ηm k∇J(θ(m))k
+PM −1
+m=0 ηm
+PM −1
+PM −1 2
+2(J(θ(M )) − J(θ(0))) + 2
+m=0 ηm εm,0 + 2 supm≤M −1 εm,2
+m=0 ηm
+≤
++ 2 sup εm,1
+PM −1
+m≤M −1
+m=0 ηm
+q P
+P
+−1 2
+M −1 2
+4
+48r̄2 L0 L2
+4r̄2 L2
+2 M
+2(J(θ(M )) − J(θ(0))) + (1−γ)
+4
+m=0 ηm log δ + (1−γ)4
+m=0 ηm
+≤
+PM −1
+m=0 ηm
+2
+12L cr̄ κ+1
++
+ρ .
+(48)
+(1 − γ)5
+√
+√
+P −1 2
+PM −1
+η
+ηm > 2η( M + 1 − 1) ≥ η M + 1 and M
+Since ηm = √m+1
+, we have, m=0
+m=0 ηm <
+r̄
+2
+2
+η (1 + log(M )) < 2η log(M ) (using M ≥ 3). Further we use the bound J(θ(M )) ≤ 1−γ
+and
+J(θ(0)) ≥ 0 almost surely. Combining these results, we get with probability 1 − δ,
+q
+2 L0 L2
+PM −1
+2r̄
+8r̄2 L2
+2
+log M log 4δ + 96r̄
+η log M
++
+4
+12L2 cr̄ κ+1
+η(1−γ)
+(1−γ)
+(1−γ)4
+m=0 ηm k∇J(θ(m))k
+√
++
+≤
+ρ .
+PM −1
+5
+(1
+−
+γ)
+M
++
+1
+η
+m
+m=0
+This concludes the proof of the main Theorem 5.
+D.1. Proof of Lemma 17
+Recall that
+ĝi (m) =
+
+T
+X
+
+γt
+
+t=0
+
+1 X m,T
+θ (m)
+Q̂j (sNjκ (t), aNjκ (t))∇θi log ζi i (ai (t)|si (t)).
+n
+κ
+j∈Ni
+
+Therefore,
+kĝi (m)k ≤
+
+T
+X
+
+γt
+
+t=0
+
+≤
+
+T
+X
+t=0
+
+1 X
+θ (m)
+|Q̂m,T
+(sNjκ (t), aNjκ (t))|k∇θi log ζi i (ai (t)|si (t))k
+j
+n
+κ
+j∈Ni
+
+γt
+
+r̄
+r̄
+Li <
+Li ,
+1−γ
+(1 − γ)2
+
+35
+
+
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+where we have used that kQ̂m,T
+k∞ ≤
+j
+
+r̄
+1−γ
+
+almost surely (cf. Lemma 9 (a)). As a result,
+
+v
+u n
+uX
+kĝ(m)k = t
+kĝi (m)k2 <
+i=1
+
+r̄
+L.
+(1 − γ)2
+
+The upper bounds for kg(m)k, kh(m)k and k∇J(θ(m))k can be obtained in an almost identical
+way and their proof is therefore omitted.
+
+D.2. Proof of Lemma 18
+In this section, we prove Lemma 18.
+Proof of Lemma 18 Let Gm be the σ-algebra generated by the trajectories in the first m outer-loop
+iterations. Then, Theorem 7 implies that, fixing each m ≤ M and i ∈ N , conditioned on Gm−1 , the
+following event happens with probability at least 1 − δ:
+θ(m)
+
+sup
+(s,a)∈S×A
+
+Qi
+
+Ca (δ, T )
+2cρκ+1
+Ca0
+κ
+κ
+√
+≤
+(s, a) − Q̂m,T
+(s
+,
+a
+)
++
+,
++
+Ni
+Ni
+i
+T + t0 T + t0 (1 − γ)2
+
+where
+6¯
+
+Ca (δ, T ) =
+√
+1− γ
+
+r
+
+τh
+2τ T 2
+2
+16¯
+hτ 2r̄
+[log(
+) + f (κ) log SA], Ca0 =
+,
+(τ + t0 )),
+√ max(
+σ
+δ
+1− γ
+σ
+1−γ
+
+r̄
+with ¯ = 4 1−γ
++ 2r̄.
+We can take expectation and average out Gm−1 , and apply union bound over 0 ≤ m ≤ M − 1
+and i ∈ N , getting with probability at least 1 − 2δ ,
+
+sup sup
+
+sup
+
+m≤M −1 i∈N (s,a)∈S×A
+
+θ(m)
+
+Qi
+
+(s, a) − Q̂m,T
+(sNiκ , aNiκ ) ≤
+i
+≤
+
+δ
+Ca ( 2nM
+,T)
+Ca0
+2cρκ+1
+√
++
++
+T + t0 (1 − γ)2
+T + t0
+
+4cρκ+1
+,
+(1 − γ)2
+Ca (
+
+(49)
+δ
+
+,T )
+
+0
+
+where in the last step, we have used that our lower bound on T implies √2nM
++ TC+ta 0 ≤
+T +t0
+Therefore, conditioned on (49) being true, we have for any m ≤ M − 1 and any i ∈ N ,
+
+2cρκ+1
+.
+(1−γ)2
+
+kĝi (m) − gi (m)k
+≤
+
+T
+X
+
+γt
+
+t=0
+
+≤
+
+T
+X
+
+γt
+
+t=0
+
+≤
+
+T
+X
+t=0
+
+
+1 X  θ(m)
+θ (m)
+Qj (s(t), a(t)) − Q̂m,T
+(sNjκ (t), aNjκ (t)) ∇θi log ζi i (ai (t)|si (t))
+j
+n
+κ
+j∈Ni
+
+1 X
+θ(m)
+θ (m)
+Qj (s(t), a(t)) − Q̂m,T
+(sNjκ (t), aNjκ (t)) ∇θi log ζi i (ai (t)|si (t))
+j
+n
+κ
+j∈Ni
+
+γt
+
+4cρκ+1
+4cLi ρκ+1
+L
+<
+.
+i
+(1 − γ)2
+(1 − γ)3
+
+36
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+As a result,
+kĝ(m) − g(m)k ≤
+
+sup
+0≤m≤M −1
+
+4cLρκ+1
+,
+(1 − γ)3
+
+which is true conditioned on event (49) is true that happens with probability at least 1 − 2δ .
+
+
+
+D.3. Proof of Lemma 19
+By Lemma 17, we have almost surely,
+|ηm h∇J(θ(m)), e2 (m)i| ≤ ηm k∇J(θ(m))kkh(m) − g(m)k ≤ ηm
+
+2r̄2 L2
+.
+(1 − γ)4
+
+As ηm h∇J(θ(m)), e2 (m)i is a martingale difference sequence w.r.t. Gm , we have by Azuma Hoeffding bound, with probability at least 1 − 21 δ,
+v
+u M −1
+M
+−1
+2
+2
+u X
+X
+4
+2r̄
+L
+t2
+2 log .
+ηm
+ηm h∇J(θ(m)), e2 (m)i ≤
+4
+(1 − γ)
+δ
+m=0
+
+m=0
+
+
+D.4. Proof of Lemma 20
+In this section, we provide the proof of Lemma 20.
+Proof of Lemma 20 By (37), we have
+∇θi J(θ(m)) =
+=
+
+∞
+X
+t=0
+∞
+X
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t Qθ(m) (s, a)∇θi log ζ θ(m) (a|s)
+t
+
+θ (m)
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t Qθ(m) (s, a)∇θi log ζi i
+
+t=0
+
+where we have used ∇θi log ζ θ(m) (a|s) = ∇θi
+Also recall the definition of hi (θ) in (39),
+hi (m) =
+
+T
+X
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t
+
+t=0
+
+(ai |si )
+
+t
+
+t
+
+P
+
+θ (m)
+
+j∈N
+
+log ζj j
+
+θ (m)
+
+(aj |sj ) = ∇θi log ζi i
+
+(ai |si ).
+
+1 X θ(m)
+θ (m)
+Qj (s, a)∇θi log ζi i (ai |si ).
+n
+κ
+j∈Ni
+
+Combining the above two equations, we have,
+∇θi J(θ(m)) − hi (m)
+=
+
+T
+X
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ
+t
+
+t=0
+
++
+
+∞
+X
+
+t
+
+θ (m)
+∇θi log ζi i (ai |si )
+
+j∈Ni
+
+θ (m)
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t ∇θi log ζi i
+
+t=T +1
+
+
+
+1 X θ(m)
+θ(m)
+Q
+(s, a) −
+Qj (s, a)
+n
+κ
+
+t
+
+:= E1 + E2 .
+37
+
+(ai |si )Qθ(m) (s, a)
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+Li r̄
+γ T +1 .
+(1−γ)2
+
+Clearly, the second term satisfies kE2 k ≤
+
+E1 =
+
+T
+X
+
+θ (m)
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t ∇θi log ζi i
+t
+
+t=0
+
+=
+
+T
+X
+
++
+
+t
+
+t
+
+T
+X
+
+
+ X
+1
+θ(m)
+Qj (s, a)
+(ai |si )
+n
+κ
+j∈N−i
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ
+
+t=0
+
+For E1 , we have
+
+
+X  θ(m)
+θ(m)
+Qj (s, a) − Q̂j (sNjκ , aNjκ )
+
+1
+θ (m)
+∇θi log ζi i (ai |si )
+
+n
+
+θ (m)
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) γ t ∇θi log ζi i
+
+κ
+j∈N−i
+
+(ai |si )
+
+t
+
+t=0
+
+1 X θ(m)
+Q̂j (sNjκ , aNjκ )
+n
+κ
+j∈N−i
+
+:= E3 + E4 ,
+θ(m)
+
+θ(m)
+
+is any truncated Q function for Qj
+where Q̂j
+κ and any t,
+this, consider for any j ∈ N−i
+θ (m)
+
+Es∼πθ(m) ,a∼ζ θ(m) (·|s) ∇θi log ζi i
+t
+
+=
+=
+
+n
+Y
+
+as defined in (5). We claim E4 is zero. To see
+θ(m)
+
+(ai |si )Q̂j
+
+(sNjκ , aNjκ )
+
+θ (m)
+
+∇θi ζi i
+
+(ai |si ) θ(m)
+Q̂j (sNjκ , aNjκ )
+θi (m)
+ζ
+(a
+|s
+)
+i
+i
+s,a
+`=1
+i
+X θ(m) Y θ (m)
+θ (m)
+θ(m)
+`
+πt (s)
+ζ`
+(a` |s` )∇θi ζi i (ai |si )Q̂j (sNjκ , aNjκ )
+s,a
+`6=i
+X
+
+θ(m)
+
+πt
+
+(s)
+
+X
+
+=
+
+θ (m)
+
+ζ` `
+
+θ(m)
+
+πt
+
+(s)
+
+s,a1:i−1 ,ai+1:n
+
+(a` |s` )
+
+Y
+
+θ (m)
+
+ζ` `
+
+θ(m)
+
+(a` |s` )Q̂j
+
+(sNjκ , aNjκ )
+
+X
+
+θ (m)
+
+∇θi ζi i
+
+(ai |si )
+
+ai
+
+`6=i
+
+= 0,
+θ(m)
+
+where in the last equality, we have used Q̂j (sNjκ , aNjκ ) does not depend on ai as i 6∈ Njκ ; and
+P θ (m)
+P
+θi (m)
+(ai |si ) = ∇θi ai ζi i (ai |si ) = ∇θi 1 = 0.
+ai ∇θi ζi
+For E3 , by the exponential decay property, the truncated Q function has a small error, cf. (11),
+θ(m)
+
+sup |Qj
+s,a
+
+θ(m)
+
+(s, a) − Q̂j
+
+(sNjκ , aNjκ )| ≤ cρκ+1 ,
+
+and as a result,
+kE3 k ≤
+
+1 − γ T +1
+Li c κ+1
+Li cρκ+1 <
+ρ .
+1−γ
+(1 − γ)
+
+Therefore,
+
+k∇θi J(θ(m)) − hi (m)k = kE2 + E3 k ≤
+≤2
+
+Li r̄
+Li c κ+1
+γ T +1 +
+ρ ,
+(1 − γ)2
+(1 − γ)
+
+Li c κ+1
+ρ ,
+(1 − γ)
+
+38
+
+S CALABLE R EINFORCEMENT L EARNING OF L OCALIZED P OLICIES FOR M ULTI -AGENT N ETWORKED S YSTEMS
+
+where in the last step, we have used
+T +1≥
+
+log c(1−γ)
++ (κ + 1) log ρ
+r̄
+,
+log γ
+
+Lc
+ρκ+1 .
+and as a result, k∇J(θ(m)) − h(m)k ≤ 2 (1−γ)
+
+39
+
+
+
+

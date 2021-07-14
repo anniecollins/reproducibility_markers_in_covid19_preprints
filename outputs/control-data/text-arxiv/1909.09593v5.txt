@@ -1,0 +1,4246 @@
+Bayesian Optimization for Iterative Learning
+
+arXiv:1909.09593v5 [cs.LG] 16 Jan 2021
+
+Vu Nguyen ∗
+University of Oxford
+vu@robots.ox.ac.uk
+
+Sebastian Schulze ∗
+University of Oxford
+sebastian.schulze@eng.ox.ac.uk
+
+Michael A. Osborne
+University of Oxford
+mosb@robots.ox.ac.uk
+
+Abstract
+The performance of deep (reinforcement) learning systems crucially depends on
+the choice of hyperparameters. Their tuning is notoriously expensive, typically
+requiring an iterative training process to run for numerous steps to convergence.
+Traditional tuning algorithms only consider the final performance of hyperparameters acquired after many expensive iterations and ignore intermediate information
+from earlier training steps. In this paper, we present a Bayesian optimization (BO)
+approach which exploits the iterative structure of learning algorithms for efficient
+hyperparameter tuning. We propose to learn an evaluation function compressing learning progress at any stage of the training process into a single numeric
+score according to both training success and stability. Our BO framework is then
+balancing the benefit of assessing a hyperparameter setting over additional training steps against their computation cost. We further increase model efficiency by
+selectively including scores from different training steps for any evaluated hyperparameter set. We demonstrate the efficiency of our algorithm by tuning hyperparameters for the training of deep reinforcement learning agents and convolutional
+neural networks. Our algorithm outperforms all existing baselines in identifying
+optimal hyperparameters in minimal time.
+
+1
+
+Introduction
+
+Deep learning (DL) and deep reinforcement learning (DRL) have led to impressive breakthroughs in
+a broad range of applications such as game play [26, 36], motor control [43], and image recognition
+[20]. To maintain general applicability, these algorithms expose sets of hyperparameters to adapt
+their behavior to any particular task at hand. This flexibility comes at the price of having to tune an
+additional set of parameters – poor settings lead to drastic performance losses [11, 30, 37]. On top
+of being notoriously sensitive to these choices, deep (reinforcement) learning systems often have
+high training costs, in computational resources and time. For example, a single training run on the
+Atari Breakout game took approximately 75 hours on a GPU cluster [26]. Tuning DRL parameters
+is further complicated as only noisy evaluations of an agent’s final performance are obtainable.
+Bayesian optimization (BO) [12, 28, 35] has recently achieved considerable success in optimizing
+these hyperparameters. This approach casts the tuning process as a global optimization problem
+based on noisy evaluations of a black-box function f . BO constructs a surrogate model typically
+using a Gaussian process (GP) [31], over this unknown function. This GP surrogate is used to build
+an acquisition function [13, 44] which suggests the next hyperparameter to evaluate.
+In modern machine learning (ML) algorithms [15], the training process is often conducted in an
+iterative manner. A natural example is given by deep learning where training is usually based on
+stochastic gradient descent and other iterative procedures. Similarly, the training of reinforcement
+learning agents is mostly carried out using multiple episodes. The knowledge accumulated during
+these training iterations can be useful to inform BO. However, most existing BO approaches [35]
+∗ These
+
+authors contributed equally.
+
+34th Conference on Neural Information Processing Systems (NeurIPS 2020), Vancouver, Canada.
+
+define the objective function as the average performance over the final training iterations. In doing
+so, they ignore the information contained in the preceding training steps.
+In this paper, we present a Bayesian optimization approach for tuning algorithms where iterative
+learning is available – the cases of deep learning and deep reinforcement learning. First, we consider
+the joint space of input hyperparameters and number of training iterations to capture the learning
+progress at different time steps in the training process. We then propose to transform the whole
+training curve into a numeric score according to user preference. To learn across the joint space
+efficiently, we introduce a data augmentation technique leveraging intermediate information from
+the iterative process. By exploiting the iterative structure of training procedures, we encourage our
+algorithm to consider running a larger number of cheap (but high-utility) experiments, when costignorant algorithms would only be able to run a few expensive ones. We demonstrate the efficiency
+of our algorithm on training DRL agents on several well-known benchmarks as well as the training
+of convolutional neural networks. In particular, our algorithm outperforms existing baselines in
+finding the best hyperparameter in terms of wall-clock time. Our main contributions are:
+• an algorithm to optimize the learning curve of a ML algorithm by using training curve
+compression, instead of averaged final performance;
+• an approach to learn the compression curve from the data and a data augmentation technique for increased sample-efficiency;
+• demonstration on tuning DRL and convolutional neural networks.
+
+2
+
+Related Work in Iteration-Efficient Bayesian Optimization
+
+The first algorithm category employs stopping criteria to terminate some training runs early and allocate resources towards more promising settings. These criteria typically involve projecting towards
+a final score from early training stages. Freeze-thaw BO [42] models the training loss over time using a GP regressor under the assumption that the training loss roughly follows an exponential decay.
+Based on this projection, training resources are allocated to the most promising settings. Hyperband
+[8, 23] dynamically allocates computational resources (e.g. training epochs or dataset size) through
+random sampling and eliminates under-performing hyperparameter settings by successive halving.
+Attempts have also been made to improve the epoch efficiency of other hyperparameter optimization
+algorithms in [5, 7, 18] which predict the final learning outcome based on partially trained learning
+curves to identify hyperparameter settings that are expected to under-perform and early-stop them.
+In the context of DRL, however, these stopping criteria, including the exponential decay assumed in
+Freeze-thaw BO [42], may not be applicable, due to the unpredictable fluctuations of DRL reward
+curves. In the supplement, we illustrate the noisiness of DRL training.
+The second category [16, 17, 23, 41, 48] aims to reduce the resource consumption of BO by utilizing
+low-fidelity functions which can be obtained by using a subset of the training data or by training
+the ML model for a small number of iterations. Multi-task BO [41] requires the user to define a
+division of the dataset into pre-defined and discrete subtasks. Multi-fidelity BO with continuous
+approximation (BOCA) [16] and hierarchical partition [34] extend this idea to continuous settings.
+Specifically, BOCA first selects the hyperparameter input and then the corresponding fidelity to be
+evaluated at. The fidelity in this context refers to the use of different number of learning iterations.
+Analogous to BOCA’s consideration of continuous fidelities, Fabolas [17] proposes to model the
+combined space of input hyperparameter and dataset size and then select the optimal input and
+dataset size jointly.
+The above approaches typically identify performance of hyperparameters via the average (either
+training or validation) loss of the last learning iterations. Thereby, they do not account for potential
+noise in the learning process (e.g., they might select unstable settings that jumped to high performance in the last couple of iterations).
+
+3
+
+Bayesian Optimization for Iterative Learning (BOIL)
+
+Problem setting. We consider training a machine learning algorithm given a d-dimensional hyperparameter x ∈ X ⊂ R d for t iterations. This process has a training time cost c(x,t) and produces
+2
+
+Reward Curve
+Sigmoid Func
+
+200
+
+4
+
+5
+
+14
+
+8
+
+18
+
+34
+
+26
+
+45
+
+m0* =-4.0
+g0* =1.476
+
+0.8
+0.6
+
+150
+
+Score
+
+Estimated l( . | m0* ,g0* ) for Cifar10
+
+1.0
+
+0.4
+0.2
+0.0
+
+100
+
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Estimated l( . | m0* ,g0* ) for Reacher
+
+1.0
+
+50
+
+m0* =2.779
+g0* =1.973
+
+0.8
+0.6
+
+0
+
+0.4
+
+0
+
+100
+
+1.00
+
+x
+
+0.95
+
+300
+
+Tmin
+
+400
+
+500
+
+Tmax
+
+0.85
+
+0.2
+0.0
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Estimated l( . | m0* ,g0* ) for CartPole
+
+Augmented Obs
+Observation
+
+0.90
+
+0.80
+
+200
+
+1.0
+
+m0* =-3.266
+g0* =3.0
+
+0.8
+0.6
+0.4
+
+0
+
+100
+
+200
+
+#Episode t
+
+300
+
+400
+
+500
+
+0.2
+0.0
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Figure 1: Left: the score in pink box is a convolution of the reward curve r(· | x = 0.9,t = 500)
+and a Sigmoid function l(u | g0 , m0 ) = 1+exp(−g1 [u−m ]) up to time step t. Bottom: observations are
+0
+0
+selected to augment the dataset (red dots). The heatmap indicates the GP predictive mean µ for f
+across the number of episodes t used to train an agent. Tmin and Tmax are two user-defined thresholds
+for the number of training episodes. x is a hyperparameter to be tuned. Right: we learn the optimal
+parameter g∗0 and m∗0 for each experiment separately.
+training evaluations r(· | x,t) for t iterations, t ∈ [Tmin , Tmax ]. These could be episode rewards in
+DRL or training accuracies in DL. An important property of iterative training is that we know the
+whole curve at preceding steps r(t 0 | x,t), ∀t 0 ≤ t.
+Given the raw training curve r(· | x,t), we assume an underlying smoothed black-box function f ,
+defined in Sec. 3.2. Formally, we aim to find x∗ = arg maxx∈X f (x, Tmax ); at the same time, we want
+to keep the overall training time, ∑Ni=1 c(xi ,ti ), of evaluated settings [xi ,ti ] as low as possible. We
+summarize our variables in Table 1 in the supplement for ease of reading.
+3.1
+
+Selecting a next point using iteration-efficient modeling
+
+We follow popular designs in [17, 19, 39, 41] and model the cost-sensitive black-box function as
+f (x,t) ∼ GP (0, k([x,t], [x0 ,t 0 ])), where k is an appropriate covariance functions and [x,t] ∈ R d+1 .
+For simplicity and robustness, the cost function c(x,t) is approximated by a linear regressor. Depending on the setting, it may be more appropriate to employ a second GP or different parametric
+model if the cost has a more complex dependence on hyperparameters x and iterations t. We regularly (re-)optimize both kernel and cost function parameters in between point acquisitions.
+More specifically, we choose the covariance function as a product k ([x,t], [x0 ,t 0 ]) = k(x, x0 ) × k(t,t 0 )
+to induce joint similarities over parameter and iteration space. We estimate the predictive mean and
+uncertainty for a GP [31] at any input z∗ = [x∗ ,t∗ ] as
+
+−1
+
+−1 T
+(2)
+µ (z∗ ) =k∗ K + σy2 I
+y
+(1)
+σ 2 (z∗ ) =k∗∗ − k∗ K + σy2 I
+k∗
+where y = [yi ]∀i , k∗ = [k (z∗ , zi )]∀i , K = [k (zi , z j )]∀i, j , k∗∗ = k (z∗ , z∗ ), and σy2 is the noise variance
+of f . Cost predictions at any particular parameter x and time t are given by µc ([x∗ ,t∗ ]) = β T [x,t],
+where β is directly computed from data {Z = [xi ,ti ], c = [ci ]}∀i as β = (Z T Z)−1 Zc [1].
+Our goal is to select a point with high function value (exploitation), high uncertainty (exploration)
+and low cost (cheap). At each iteration n, we query the input parameter xn and the number of
+iteration tn [38, 48]:
+zn = [xn ,tn ] =
+
+arg max
+
+α(x,t)/µc (x,t).
+
+x∈X ,t∈[Tmin ,Tmax ]
+
+3
+
+(3)
+
+Although our framework is available for any acquisition choices [13, 22, 47], to cope with output
+noise, we follow [45] and slight modify the expected improvement criterion using the maximum
+max
+n
+mean GP prediction µnmax . Let λ = µn (z)−µ
+, we then have a closed-form for the new expected
+σn (z)
+EI
+improvement (EI) as αn (z) = σn (z) φ (λ ) + [µn (z) − µnmax ] Φ (λ ) where φ is the standard normal
+p.d.f., Φ is the c.d.f, µn and σn are the GP predictive mean and variance defined in Eq. (1) and Eq.
+(2), respectively.
+3.2
+
+Training curve compression and estimating the transformation function
+
+Existing BO approaches [4, 23] typically define the objective function as an average loss over the
+final learning episodes. However, this does not take into consideration how stable performance is or
+the training stage at which it has been achieved. We argue that averaging learning losses is likely
+misleading due to the noise and fluctuations of our observations (learning curves) – particularly
+during the early stages of training. We propose to compress the whole learning curve into a numeric
+score via a preference function representing the user’s desired training curve. In the following, we
+use the Sigmoid function (specifically the Logistic function) to compute the utility score as
+t
+
+y = ŷ (r, m0 , g0 ) = r(· | x,t) • l(· | m0 , g0 ) =
+
+r(u | x,t)
+
+∑ 1 + exp(−g0 [u − m0 ])
+
+(4)
+
+u=1
+
+where • is a dot product, a Logistic function l(· | m0 , g0 ) is parameterized by a growth parameter
+g0 defining a slope and the middle point of the curve m0 . The optimal parameters g0 and m0 are
+estimated directly from the data. We illustrate different shapes of l parameterized by g0 and m0 in
+the appendix. The Sigmoid preference has a number of desirable properties. As early weights are
+small, less credit is given to fluctuations at the initial stages, making it less likely for our surrogate to
+be biased towards randomly well performing settings. However, as weights monotonically increase,
+hyperparameters with improving performance are preferred. As weights saturate over time, stable,
+high performing configurations are preferred over short “performance spikes” characteristic of unstable training. Lastly, this utility score assigns higher values to the same performance if it is being
+maintained over more episodes.
+Learning the transformation function from data. Different compression curves l(), parameterized by different choices of g0 and m0 in Eq. (4), may lead to different utilities y and thus affect the
+performance. The optimal values of g∗0 and m∗0 are unknown in advance. Therefore, we propose to
+learn these values g∗0 and m∗0 directly from the data. Our intuition is that the ‘optimal’ compression
+curve l(m∗0 , g∗0 ) will lead to a better fit of the GP. This better GP surrogate model, thus, will result
+in better prediction as well as optimization performance. We parameterize the GP log marginal
+likelihood L [31] as the function of m0 and g0 :
+−1
+1
+1
+L(m0 , g0 ) = ŷT K + σy2 I
+(5)
+ŷ − ln K + σy2 I + const
+2
+2
+where σy2 is the output noise variance, ŷ is the function of m0 and g0 defined in Eq. (4). We optimize
+m0 and g0 (jointly with other GP hyperparameters) using multi-start gradient descent. We derive the
+derivative ∂∂mL = ∂∂ Lŷ ∂∂mŷ and ∂∂gL = ∂∂ Lŷ ∂∂gŷ which can be computed analytically as:
+0
+
+0
+
+−1
+∂L
+= K + σy2 IN
+ŷ;
+∂ ŷ
+
+0
+
+0
+
+∂ ŷ
+−g0 × exp(−g0 [u − m0 ]) ∂ ŷ
+−m0 × exp(−g0 [u − m0 ])
+=
+;
+=
+.
+2 ∂g
+∂ m0
+0
+[1 + exp(−g0 [u − m0 ])]
+[1 + exp(−g0 [u − m0 ])]2
+
+The estimated compression curves are illustrated in Right Fig. 1 and in Sec. 4.1.
+3.3
+
+Augmenting the training data
+
+When evaluating a parameter x over t iterations, we obtain not only a final score but also all reward
+sequences r(t 0 | x,t), ∀t 0 = 1, ...,t. The auxiliary information from the curve can be useful for BO.
+Therefore, we propose to augment the information from the curve into the sample set of our GP
+model.
+A naïve approach for augmentation is to add a full curve of points {[x, j], y j }tj=1 where
+y j is computed using Eq. (4). However, this approach can be redundant and may impose serious issues in the conditioning of the GP covariance matrix.
+As we cluster
+4
+
+#Episode
+
+400
+300
+200
+0.80
+
+0.85 0.90 0.95
+Augmented Obs
+
+1.00
+Obs
+
+12
+10
+8
+6
+4
+2
+0
+2
+
+GP variance
+
+0.80
+
+0.85
+
+0.90
+
+x
+
+0.95
+
+1.00
+
+0.175
+0.150
+0.125
+0.100
+0.075
+0.050
+0.025
+0.000
+
+GP mean
+
+500
+
+#Episode
+
+GP mean
+
+500
+
+GP variance
+
+400
+
+300
+
+240
+
+0.040
+
+160
+
+0.035
+
+80
+
+0.030
+
+0
+
+0.025
+80
+
+0.020
+
+160
+
+0.015
+
+240
+
+0.010
+
+320
+200
+0.80
+
+0.005
+
+400
+0.85
+
+0.90
+
+0.95
+
+Augmented Obs
+
+1.00
+
+0.000
+0.80
+
+Obs
+
+0.85
+
+0.90
+
+x
+
+0.95
+
+1.00
+
+Figure 2: GP with different settings. Left: our augmentation. Right: using a full curve. If we add
+too many observations, the GP covariance matrix becomes ill-conditioned. On the right, the GP
+fit is poor with a large mean estimate range of [−400, 240] even though the output is standardized
+N (0, 1). All x-axis are over x, a hyperparameter to be tuned.
+
+Log of Condition Number
+
+more evaluations closely, the conditioning of the GP covariance degrades further, as discussed in [24]. This conditioning issue is especially serious in our noisy DRL settings.
+We highlight this effect on GP estimation in Fig.
+Condition Number of GP Covariance
+2 wherein the GP mean varies erratically when the
+25
+natural log of the condition number of the GP covariance matrix goes above 25 (see Fig. 3) as we
+20
+include the whole curve.
+15
+10
+
+Augmentation
+No Augmentation
+Full Curve
+Reasonable Threshold
+
+Selecting subset of points from the curve. Dif5
+ferent solutions, such as the addition of artificial
+0
+0
+10
+20
+30
+40
+50
+60
+noise or altering the kernel’s length-scales, have
+Iterations
+been proposed. We decide to use an active learning approach [10, 29] as sampled data points are Figure 3: The condition number of GP covariexpected to contain a lot of redundant informa- ance matrix deteriorates if we add the whole
+tion. As a consequence, the loss of information curve of points into a GP. The large condition
+from sub-sampling the data should be minimal number indicates the nearness to singularity.
+and information-eroding modification of the kernel matrix itself can be avoided. As a side benefit, the reduced number of sampled points speeds up
+inference in our GP models.
+In particular, we select samples at the maximum of the GP predictive uncertainty. Formally, we
+sequentially select a set Z = [z1 , ...zM ], zm = [x,tm ], by varying tm while keeping x fixed as
+zm = arg max σ ([x,t 0 ] | D0 ), ∀m ≤ M s.t. ln of cond(K) ≤ δ
+∀t 0 ≤t
+
+(6)
+
+where D0 = D ∪ {z j = [x,t j ]}m−1
+j=1 . This sub-optimisation problem is done in a one-dimensional space
+0
+of t ∈ {Tmin , ...,t}, thus it is cheap to optimize using (multi-start) gradient descent (the derivative
+of GP predictive variance is available [31]). Alternatively, a fixed-size
+
+ grid could be considered, but
+this could
+cause
+conditioning
+issues
+when
+a
+point
+in
+the
+grid
+x,t
+grid is placed near another existing
+
+
+point x0 ,tgrid , i.e., ||x − x0 ||2 ≤ ε for some small ε.
+These generated points Z are used to calculate the output r(zm ) and augmented into the observation
+set (X,Y ) for fitting the GP. The number of samples M is adaptively chosen such that the natural log
+of the condition number of the covariance matrix is less than a threshold. This is to ensure that the
+GP covariance matrix condition number behaves well by reducing the number of unnecessary points
+added to the GP at later stages. We compute the utility score ym given zm for each augmented point
+using Eq. (4). In addition, we can estimate the running time cm using the predictive mean µc (zm ).
+We illustrate the augmented observations and estimated scores in Fig. 1.
+We summarize the overall algorithm in Alg. 1. To enforce non-negativity and numerical stability,
+we make use of the transformations α ← log [1 + exp(α)] and µc ← log [1 + exp(µc )].
+
+4
+
+Experiments
+
+We assess our model by tuning hyperparameters for two DRL agents on three environments and a
+CNN on two datasets. We provide additional illustrations and experiments in the appendix.
+5
+
+Algorithm 1 Bayesian Optimization with Iterative Learning (BOIL)
+Input: #iter N, initial data D0 , z = [x,t]. Output: optimal x∗ and y∗ = max∀y∈DN y
+1: for n = 1....N do
+2:
+Fit a GP to estimate µ f (), σ f () from Eqs. (1,2) and a LR for cost µc ()
+3:
+Select zn = arg maxx,t α(x,t)/µc (x,t) and observe a curve r and a cost c from f (zn )
+4:
+Compressing the learning curve r(zn ) into numeric score using Eq. (4).
+5:
+Sample augmented points zn,m , yn,m , cn,m , ∀m ≤ M given the curve and Dn in Eq. (6)
+6:
+Augment the data into Dn and estimate Logistic curve hyperparameters m0 and g0 .
+7: end for
+
+Experimental setup. All experimental results are averaged over 20 independent runs with different random seeds. Final performance is estimated by evaluating the chosen hyperparameter over
+the maximum number of iterations. All experiments are executed on a NVIDIA 1080 GTX GPU
+using the tensorflow-gpu Python package. The DRL environments are available through the OpenAI
+gym [3] and Mujoco [43]. Our DRL implementations are based on the open source from Open AI
+Baselines [6]. We release our implementation at https://github.com/ntienvu/BOIL.
+We use square-exponential kernels for the GP in our model and estimate their parameters by maximizing the marginal likelihood [31]. We set the maximum number of augmented points to be M = 15
+and a threshold for a natural log of GP condition number δ = 20. We note that the optimization overhead is much less than the black-box function evaluation time.
+Baselines. We compare with Hyperband [23] which demonstrated empirical successes in tuning
+deep learning applications in an iteration-efficient manner. We extend the discrete multi-task BO
+[41] to the continuous case – which can also be seen as continuous multi-fidelity BO [16, 39] as in
+our setting, they both consider cost-sensitivity and iteration-efficiency. We, therefore, label the two
+baselines as continuous multi-task/fidelity BO (CM-T/F-BO). We have ignored the minor difference
+in these settings, such as multi-task approaches jointly optimizes the fidelity and input while BOCA
+[16] first selects the input and then the fidelity.
+Our focus is to demonstrate the effectiveness of optimizing the learning curve using compression
+and augmentation techniques. We therefore omit the comparison of various acquisition functions and
+kernel choices which can easily be used in our model. We also do not compare with Fabolas [17]
+which is designed to vary dataset sizes, not iteration numbers. We would expect the performance of
+Fabolas to be close to CM-T/F-BO. We are unable to compare with FreezeThaw as the code is not
+available. However, the curves in our setting are not exponential decays and thus ill-suited to their
+model (see last figure in the appendix). We have considered an ablation study in the appendix using
+a time kernel following the exponential decay proposed in Freeze-thaw method [42].
+Task descriptions. We consider three DRL settings including a Dueling DQN (DDQN) [46]
+agent in the CartPole-v0 environment and Advantage Actor Critic (A2C) [25] agents in the
+InvertedPendulum-v2 and Reacher-v2 environments. In addition to the DRL applications, we tune
+6 hyperparameters for training a convolutional neural network [21] on the SVHN dataset and CIFAR10. Due to space considerations, we refer to the appendix for further details.
+Model illustration
+  $ X J P H Q W H G  2 E V
+
+4.1
+
+ 1 X P E H U  R I  * H Q H U D W H G  $ X J P H Q W H G  2 E V
+
+  
+We first illustrate the estimated compression function l(m∗0 , g∗0 ) in Right Fig. 1 from different experi  
+ments. These Logistic parameters g∗0 and m∗0 are es 
+timated by maximizing the GP marginal likelihood
+ 
+and used for compressing the curve. We show that
+ 
+  
+  
+  
+  
+  
+  
+the estimated curve from CartPole tends to reach
+ % 2  , W H U D W L R Q V
+the highest performance much earlier than Reacher
+because CartPole is somewhat easier to train than
+Figure 4: DDQN on CartPole. The number of
+Reacher.
+augmented observations reduces over time.
+We next examine the count of augmented observations generated per iteration in Fig. 4. Although this number is fluctuating, it tends to reduce over
+
+6
+
+ > $  &  5 H D F K H U @  5 H Z D U G  X V L Q J  2 S W L P L ] H G  3 D U D P H W H U V
+  
+
+   
+
+  
+  
+  
+
+ % 2
+ % 2  /
+ % 2 , /
+
+  
+  
+  
+ 
+
+   
+
+   
+
+ ( S L V R G H
+
+   
+
+   
+
+ $ Y H U D J H  5 H Z D U G
+
+ $ Y H U D J H  5 H Z D U G
+
+ > $  &  , Y 3 H Q @  5 H Z D U G  X V L Q J  2 S W L P L ] H G  3 D U D P H W H U V
+
+   
+
+   
+   
+   
+  
+
+ % 2
+ % 2  /
+ % 2 , /
+
+  
+  
+ 
+
+   
+
+   
+
+   
+
+   
+
+   
+
+ ( S L V R G H
+
+    
+
+    
+
+    
+
+Figure 5: The learning curves of the best found parameters by different approaches. The curves
+show that BO-L and BOIL reliably identify parameters leading to stable training. BOIL takes only
+half total time to find this optimal curve.
+time. BOIL does not add more augmented observations at the later stage when we have gained
+sufficient information and GP covariance conditioning falls below our threshold δ = 20.
+4.2
+
+Ablation study of curve compression
+
+To demonstrate the impact of our training curve compression, we compare BOIL to vanilla Bayesian
+optimization (BO) and with compression (BO-L) given the same number of iterations at Tmax . We
+show that using the curve compression leads to stable performance, as opposed to the existing technique of averaging the last iterations. We plot the learning curves of the best hyperparameters
+identified by BO, BO-L and BOIL. Fig. 5 shows the learning progress over Tmax episodes for each
+of these. The curves are smoothed by averaging over 100 consecutive episodes for increased clarity.
+We first note that all three algorithms eventually obtain similar performance at the end of learning.
+However, since BO-L and BOIL take into account the preceding learning steps, they achieve higher
+performance more quickly. Furthermore, they achieve this more reliably as evidenced by the smaller
+error bars (shaded regions).
+4.3
+
+Tuning deep reinforcement learning and CNN
+
+We now optimize hyperparameters for deep reinforcement learning algorithms; in fact, this application motivated the development of BOIL. The combinations of hyperparameters to be tuned, target
+DRL algorithm and environment can be found in the appendix.
+Comparisons by iterations and real-time. Fig. 6 illustrates the performance of different algorithms against the number of iterations as well as real-time (the plots for CIFAR10 are in the appendix). The performance is the utility score of the best hyperparameters identified by the baselines.
+Across all three tasks, BOIL identifies optimal hyperparameters using significantly less computation
+time than other approaches.
+The plots show that other approaches such as BO and BO-L can identify well-performing hyperparameters in fewer iterations than BOIL. However, they do so only considering costly, high-fidelity
+evaluations resulting in significantly higher evaluation times. In contrast to this behavior, BOIL accounts for the evaluation costs and chooses to initially evaluate low-fidelity settings consuming less
+time. This allows fast assessments of a multitude of hyperparameters. The information gathered
+here is then used to inform later point acquisitions. Hereby, the inclusion of augmented observations
+is crucial in offering useful information readily available from the data. In addition, this augmentation is essential to prevent from the GP kernel issue instead of adding the full curve of points into
+our GP model.
+Hyperband [23] exhibits similar behavior in that it uses low fidelity (small t) evaluations to reduce
+a pool of randomly sampled configurations before evaluating at high fidelity (large t). To deal with
+noisy evaluations and other effects, this process is repeated several times. This puts Hyperband
+at a disadvantage particularly in the noisy DRL tasks. Since early performance fluctuates hugely,
+Hyperband can be misled in where to allocate evaluation effort. It is then incapable of revising
+7
+
+ > ' ' 4 1  & D U W 3 R O H @  7 X Q L Q J    D Q G 
+     
+
+     
+
+     
+
+     
+
+     
+
+ 8 W L O L W \  6 F R U H
+
+ 8 W L O L W \  6 F R U H
+
+ > ' ' 4 1  & D U W 3 R O H @  7 X Q L Q J    D Q G 
+     
+
+     
+     
+     
+     
+
+     
+     
+     
+     
+
+ 5 D Q G
+ % 2
+
+     
+     
+ 
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+ % 2  , W H U D W L R Q V
+
+  
+
+ + \ S H U E D Q G
+ % 2 , /
+  
+
+ 5 D Q G
+ % 2
+
+     
+     
+
+  
+
+ 
+
+  
+
+   
+
+   
+
+ 8 W L O L W \  6 F R U H
+
+ 8 W L O L W \  6 F R U H
+
+   
+
+   
+   
+   
+
+ 5 D Q G
+ % 2
+
+   
+
+ 
+
+  
+
+  
+
+ % 2  , W H U D W L R Q V
+
+  
+
+ + \ S H U E D Q G
+ % 2 , /
+
+   
+
+  
+
+ 5 D Q G
+ % 2
+ 
+
+  
+
+  
+
+  
+
+  
+
+ $ F F X U D F \
+
+  
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+  
+
+ + \ S H U E D Q G
+ % 2 , /
+  
+
+   
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+ > & 1 1  6 9 + 1 @  7 X Q L Q J    + \ S H U S D U D P H W H U V
+
+  
+
+  
+
+2
+
+   
+
+   
+
+  
+
+   
+
+   
+
+  
+
+  
+  
+  
+
+  
+
+ 5 D Q G
+ % 2
+
+  
+  
+
+   
+
+   
+
+   
+
+ > & 1 1  6 9 + 1 @  7 X Q L Q J    + \ S H U S D U D P H W H U V
+
+  
+
+ $ F F X U D F \
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+
+   
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+ + \ S H U E D Q G
+ % 2 , /
+
+ > $  &  5 H D F K H U @  7 X Q L Q J     1  D Q G 
+
+ > $  &  5 H D F K H U @  7 X Q L Q J     1  D Q G  2
+   
+
+   
+
+   
+
+ % 2  /
+ & 0  7  )  % 2
+
+ 
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+ % 2  , W H U D W L R Q V
+
+ + \ S H U E D Q G
+ % 2 , /
+
+  
+
+ 5 D Q G
+ % 2
+
+  
+  
+
+  
+
+  
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+  
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+  
+
+ + \ S H U E D Q G
+ % 2 , /
+  
+
+  
+
+Figure 6: Comparison over BO evaluations (Left) and real-time (Right). Given the same time budget, CM-T/F-BO, Hyperband and BOIL can take more evaluations than vanilla BO, BO-L and Rand.
+BOIL outperforms other competitors in finding the optimal parameters in an iteration-efficient manner. CM-T/F-BO does not augment the observations from the curve and requires more evaluations.
+The results of InvertedPendulum and CNN-CIFAR10 are in the appendix.
+
+these choices until an entirely new pool of hyperparameters is sampled and evaluated from scratch.
+In contrast to this, BOIL is more flexible than Hyperband in that it can freely explore-exploit the
+whole joint space. The GP surrogate hereby allows BOIL to generalize across hyperparameters and
+propagate information through the joint space.
+
+5
+
+Conclusion and Future work
+
+Our framework complements the existing BO toolbox for hyperparameter tuning with iterative learning. We present a way of leveraging our understanding that later stages of the training process are
+informed by progress made in earlier ones. This results in a more iteration-efficient hyperparameter tuning algorithm that is applicable to a broad range of machine learning systems. We evaluate
+its performance on a set of diverse benchmarks. The results demonstrate that our model surpasses
+the performance of well-established alternatives while consuming significantly fewer resources. Finally, we note that our approach is not necessarily specific to machine learning algorithms, but more
+generally applies to any process exhibiting an iterative structure to be exploited.
+8
+
+6
+
+Broader Impact
+
+Our work aims at making the optimization of processes operating in a step-wise fashion more efficient. As demonstrated this makes BOIL particularly well-suited to supporting supervised learning
+models and RL systems. By increasing training efficience of these models, we hope to contribute
+to their widespread deployment whilst reducing the computational and therefore environmental cost
+their implementation has.
+Deep (reinforcement) learning systems find application in a wide range of settings that directly
+contribute to real world decisions, e.g., natural language processing, visual task, autonomous driving
+and many more. As machine learning models building on our contributions are being deployed
+in the real world, we encourage practicioners to put in place necessary supervision and override
+mechanisms as precautions against potential failure.
+In a more general context, our algorithm may be seen as a step towards the construction of an
+automated pipeline for the training and deployment of machine learning models. A potential danger
+is that humans become further and further removed from the modelling process, making it harder to
+spot (potentially critical) failures. We do not see this as an argument against the construction of such
+a pipeline in principle, but instead encourage practicioners to reflect on potential biases indirectly
+encoded in the choice of data sets and models, they are feeding into said automated processes.
+The growing opacity of machine learning models is a concern of its own and which automated
+training procedures will only contribute to. Opposing this is a rapidly growing corpus of work
+addressing the interpretability of trained machine learning models and their decision making. These
+can and should be used to rigorously analyse final training outcomes. Only then can we ensure that
+machine learning algorithm do indeed become a beneficial source of information guiding real world
+policy making as opposed to opaque, unquestioned entities.
+While our main interest lies in the hyperparameter optimization of machine learning models, it
+should be noted that any iterative process depending on a set of parameters can make use of our contributions. Possible settings could, for instance, include the optimization of manufacturing pipelines
+in which factory setting are adjusted to increase productivity.
+
+7
+
+Acknowledgements
+
+S. Schulze is supported by an I-CASE studentship funded by the EPSRC and Dyson.
+
+References
+[1] Christopher M Bishop. Pattern recognition and machine learning. springer New York, 2006.
+[2] Eric Brochu, Vlad M Cora, and Nando De Freitas. A tutorial on Bayesian optimization of expensive cost functions, with application to active user modeling and hierarchical reinforcement
+learning. arXiv preprint arXiv:1012.2599, 2010.
+[3] Greg Brockman, Vicki Cheung, Ludwig Pettersson, Jonas Schneider, John Schulman, Jie Tang,
+and Wojciech Zaremba. Openai gym. arXiv preprint arXiv:1606.01540, 2016.
+[4] Yutian Chen, Aja Huang, Ziyu Wang, Ioannis Antonoglou, Julian Schrittwieser, David Silver,
+and Nando de Freitas. Bayesian optimization in AlphaGo. arXiv preprint arXiv:1812.06855,
+2018.
+[5] Zhongxiang Dai, Haibin Yu, Bryan Kian Hsiang Low, and Patrick Jaillet. Bayesian optimization meets Bayesian optimal stopping. In International Conference on Machine Learning,
+pages 1496–1506, 2019.
+[6] Prafulla Dhariwal, Christopher Hesse, Oleg Klimov, Alex Nichol, Matthias Plappert, Alec
+Radford, John Schulman, Szymon Sidor, Yuhuai Wu, and Peter Zhokhov. Openai baselines.
+GitHub, GitHub repository, 2017.
+[7] Tobias Domhan, Jost Tobias Springenberg, and Frank Hutter. Speeding up automatic hyperparameter optimization of deep neural networks by extrapolation of learning curves. In
+Twenty-Fourth International Joint Conference on Artificial Intelligence, 2015.
+9
+
+[8] Stefan Falkner, Aaron Klein, and Frank Hutter. Bohb: Robust and efficient hyperparameter
+optimization at scale. In International Conference on Machine Learning, pages 1436–1445,
+2018.
+[9] Peter I Frazier. A tutorial on Bayesian optimization. arXiv preprint arXiv:1807.02811, 2018.
+[10] Yarin Gal, Riashat Islam, and Zoubin Ghahramani. Deep Bayesian active learning with image
+data. In Proceedings of the 34th International Conference on Machine Learning, pages 1183–
+1192, 2017.
+[11] Peter Henderson, Riashat Islam, Philip Bachman, Joelle Pineau, Doina Precup, and David
+Meger. Deep reinforcement learning that matters. In Thirty-Second AAAI Conference on
+Artificial Intelligence, 2018.
+[12] Philipp Hennig and Christian J Schuler. Entropy search for information-efficient global optimization. Journal of Machine Learning Research, 13:1809–1837, 2012.
+[13] José Miguel Hernández-Lobato, Matthew W Hoffman, and Zoubin Ghahramani. Predictive
+entropy search for efficient global optimization of black-box functions. In Advances in Neural
+Information Processing Systems, pages 918–926, 2014.
+[14] Donald R Jones, Matthias Schonlau, and William J Welch. Efficient global optimization of
+expensive black-box functions. Journal of Global optimization, 13(4):455–492, 1998.
+[15] M. I. Jordan and T. M. Mitchell. Machine learning: Trends, perspectives, and prospects.
+Science, 349(6245):255–260, 2015.
+[16] Kirthevasan Kandasamy, Gautam Dasarathy, Jeff Schneider, and Barnabás Póczos. Multifidelity Bayesian optimisation with continuous approximations. In Proceedings of the 34th
+International Conference on Machine Learning, pages 1799–1808, 2017.
+[17] Aaron Klein, Stefan Falkner, Simon Bartels, Philipp Hennig, and Frank Hutter. Fast Bayesian
+optimization of machine learning hyperparameters on large datasets. In Artificial Intelligence
+and Statistics, pages 528–536, 2017.
+[18] Aaron Klein, Stefan Falkner, Jost Tobias Springenberg, and Frank Hutter. Learning curve prediction with Bayesian neural networks. International Conference on Learning Representations
+(ICLR), 2017.
+[19] Andreas Krause and Cheng S Ong. Contextual Gaussian process bandit optimization. In
+Advances in Neural Information Processing Systems, pages 2447–2455, 2011.
+[20] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton. Imagenet classification with deep
+convolutional neural networks. In Advances in Neural Information Processing Systems, pages
+1097–1105, 2012.
+[21] Yann LeCun, Léon Bottou, Yoshua Bengio, and Patrick Haffner. Gradient-based learning
+applied to document recognition. Proceedings of the IEEE, 86(11):2278–2324, 1998.
+[22] Benjamin Letham, Brian Karrer, Guilherme Ottoni, Eytan Bakshy, et al. Constrained Bayesian
+optimization with noisy experiments. Bayesian Analysis, 14(2):495–519, 2019.
+[23] Lisha Li and Kevin Jamieson. Hyperband: A novel bandit-based approach to hyperparameter
+optimization. Journal of Machine Learning Research, 18:1–52, 2018.
+[24] Mark McLeod, Stephen Roberts, and Michael A Osborne. Optimization, fast and slow: Optimally switching between local and Bayesian optimization. In International Conference on
+Machine Learning, pages 3440–3449, 2018.
+[25] Volodymyr Mnih, Adria Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy Lillicrap,
+Tim Harley, David Silver, and Koray Kavukcuoglu. Asynchronous methods for deep reinforcement learning. In International conference on machine learning, pages 1928–1937, 2016.
+[26] Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Alex Graves, Ioannis Antonoglou, Daan
+Wierstra, and Martin Riedmiller. Playing atari with deep reinforcement learning. NIPS Deep
+Learning Workshop, 2013.
+[27] Vu Nguyen, Sunil Gupta, Santu Rana, Cheng Li, and Svetha Venkatesh. Regret for expected
+improvement over the best-observed value and stopping condition. In Proceedings of The 9th
+Asian Conference on Machine Learning (ACML), pages 279–294, 2017.
+[28] Vu Nguyen and Michael A Osborne. Knowing the what but not the where in Bayesian optimization. In International Conference on Machine Learning, pages 7317–7326, 2020.
+10
+
+[29] Michael Osborne, Roman Garnett, Zoubin Ghahramani, David K Duvenaud, Stephen J
+Roberts, and Carl E Rasmussen. Active learning of model evidence using Bayesian quadrature.
+In Advances in Neural Information Processing Systems, pages 46–54, 2012.
+[30] Jack Parker-Holder, Vu Nguyen, and Stephen Roberts. Provably efficient online hyperparameter optimization with population-based bandits. In Advances in Neural Information Processing
+Systems, 2020.
+[31] Carl Edward Rasmussen. Gaussian processes for machine learning. 2006.
+[32] Binxin Ru, Mark McLeod, Diego Granziol, and Michael A Osborne. Fast information-theoretic
+Bayesian optimisation. In International Conference on Machine Learning, pages 4381–4389,
+2018.
+[33] Tom Schaul, John Quan, Ioannis Antonoglou, and David Silver. Prioritized experience replay.
+International Conference on Learning Representations, 2016.
+[34] Rajat Sen, Kirthevasan Kandasamy, and Sanjay Shakkottai. Multi-fidelity black-box optimization with hierarchical partitions. In International conference on machine learning, pages
+4538–4547, 2018.
+[35] Bobak Shahriari, Kevin Swersky, Ziyu Wang, Ryan P Adams, and Nando de Freitas. Taking
+the human out of the loop: A review of Bayesian optimization. Proceedings of the IEEE,
+104(1):148–175, 2016.
+[36] David Silver, Aja Huang, Chris J Maddison, Arthur Guez, Laurent Sifre, George Van
+Den Driessche, Julian Schrittwieser, Ioannis Antonoglou, Veda Panneershelvam, Marc Lanctot, et al. Mastering the game of go with deep neural networks and tree search. Nature,
+529(7587):484, 2016.
+[37] Leslie N Smith. A disciplined approach to neural network hyper-parameters: Part 1–learning
+rate, batch size, momentum, and weight decay. arXiv preprint arXiv:1803.09820, 2018.
+[38] Jasper Snoek, Hugo Larochelle, and Ryan P Adams. Practical Bayesian optimization of machine learning algorithms. In Advances in Neural Information Processing Systems, pages
+2951–2959, 2012.
+[39] Jialin Song, Yuxin Chen, and Yisong Yue. A general framework for multi-fidelity Bayesian
+optimization with Gaussian processes. In The 22nd International Conference on Artificial
+Intelligence and Statistics, pages 3158–3167, 2019.
+[40] Niranjan Srinivas, Andreas Krause, Sham Kakade, and Matthias Seeger. Gaussian process
+optimization in the bandit setting: No regret and experimental design. In Proceedings of the
+27th International Conference on Machine Learning, pages 1015–1022, 2010.
+[41] Kevin Swersky, Jasper Snoek, and Ryan P Adams. Multi-task Bayesian optimization. In
+Advances in Neural Information Processing Systems, pages 2004–2012, 2013.
+[42] Kevin Swersky, Jasper Snoek, and Ryan Prescott Adams. Freeze-thaw Bayesian optimization.
+arXiv preprint arXiv:1406.3896, 2014.
+[43] Emanuel Todorov, Tom Erez, and Yuval Tassa. Mujoco: A physics engine for model-based
+control. In 2012 IEEE/RSJ International Conference on Intelligent Robots and Systems, pages
+5026–5033. IEEE, 2012.
+[44] Zi Wang and Stefanie Jegelka. Max-value entropy search for efficient Bayesian optimization.
+In International Conference on Machine Learning, pages 3627–3635, 2017.
+[45] Ziyu Wang and Nando de Freitas. Theoretical analysis of Bayesian optimisation with unknown
+Gaussian process hyper-parameters. arXiv preprint arXiv:1406.7758, 2014.
+[46] Ziyu Wang, Tom Schaul, Matteo Hessel, Hado Hasselt, Marc Lanctot, and Nando Freitas.
+Dueling network architectures for deep reinforcement learning. In International Conference
+on Machine Learning, pages 1995–2003, 2016.
+[47] Jian Wu and Peter Frazier. The parallel knowledge gradient method for batch Bayesian optimization. In Advances In Neural Information Processing Systems, pages 3126–3134, 2016.
+[48] Jian Wu, Saul Toscano-Palmerin, Peter I Frazier, and Andrew Gordon Wilson. Practical multifidelity Bayesian optimization for hyperparameter tuning. In 35th Conference on Uncertainty
+in Artificial Intelligence, 2019.
+
+11
+
+The following sections are intended to give the reader further insights into our design choices and
+a deeper understanding of the algorithms properties. First, we give a brief overview of Bayesian
+optimization with Gaussian processes. We then illustrate our models behavior on a two dimensional
+problem. Last, we give further details of our experiments for reproducibility purposes.
+
+A
+
+Bayesian Optimization Preliminaries
+
+Bayesian optimization is a sequential approach to global optimization of black-box functions without making use of derivatives. It uses two components: a learned surrogate model of the objective
+function and an acquisition function derived from the surrogate for selecting new points to inform
+the surrogate with. In-depth discussions beyond our brief overview can be found in recent surveys
+[2, 9, 35].
+Notation. We summarize all of the notations used in our model in Table 1 for ease of reading.
+A.1
+
+Gaussian processes
+
+We present the GP surrogate model for the black-box function f [31]. A GP defines a probability
+distribution over functions f under the assumption that any subset of points {(xi , f (xi )} is normally
+distributed. Formally, this is denoted as:
+
+f (x) ∼ GP m (x) , k x, x0 ,
+where m (x) and k (x, x0 ) are the mean and covariance functions, given by m(x) = E [ f (x)] and
+k(x, x0 ) = E ( f (x) − m (x))( f (x0 ) − m (x0 ))T .
+Typically, the mean of the GP is assumed to be zero everywhere. The kernel k(x, x0 ) can be thought
+of as a similarity measure relating f (x) and f (x0 ). Numerous kernels encoding different prior beliefs about f (x) have
+been proposed.
+
+ A popular choice is given by the square exponential kernel
+k(x, x0 ) = σ 2f exp −(x − x0 )2 /2σl2 . The length- and output-scales σl2 and σ 2f regulate the maximal
+covariance between two points and can be estimated using maximum marginal likelihood. The SE
+kernel encodes the belief that nearby points are highly correlated as it is maximized at k(x, x) = σ 2f
+and decays the further x and x0 are separated.
+For predicting f∗ = f (x∗ ) at a new data point x∗ , assuming a zero mean m(x) = 0, we have:
+
+
+ 
+
+f
+K kT∗
+∼ N 0,
+f∗
+k∗ k∗∗
+
+(7)
+
+where k∗∗ = k (x∗ , x∗ ), k∗ = [k (x∗ , xi )]∀i≤N and K = [k (xi , x j )]∀i, j≤N . The conditional probability of
+
+p ( f∗ | f ) follows a univariate Gaussian distribution as p ( f∗ | f ) ∼ N µ (x∗ ) , σ 2 (x∗ ) . Its mean
+and variance are given by:
+µ (x∗ ) =k∗ K−1 y
+σ 2 (x∗ ) =k∗∗ − k∗ K−1 kT∗ .
+As GPs give full uncertainty information with any prediction, they provide a flexible nonparametric
+prior for Bayesian optimization. We refer the interested readers to [31] for further details on GPs.
+A.2
+
+Acquisition function
+
+Bayesian optimization is typically applied in settings in which the objective function is expensive to
+evaluate. To minimize interactions with that objective, an acquisition function is defined to reason
+about the selection of the next evaluation point xt+1 = arg maxx∈X αt (x). The acquisition function is constructed from the predictive mean and variance of the surrogate to be easy to evaluate
+and represents the trade-off between exploration (of points with high predictive uncertainty) and
+exploitation (of points with high predictive mean). Thus, by design the acquisition function can
+be maximized with standard global optimization toolboxes. Among the many acquisition functions
+[12, 13, 14, 32, 40, 44] available in the literature, the expected improvement [14, 27, 45] is one of
+the most popular.
+12
+
+Table 1: Notation List
+Parameter
+
+Domain
+
+Meaning
+
+d
+x
+N
+Tmin , Tmax
+t
+M
+δ
+m
+n
+z = [x,t]
+cn,m
+yn
+yn,m
+α(x,t)
+µc (x,t)
+r(. | x,t)
+f (x,t)
+l (. | m0 , g0 )
+g0 , g∗0
+m0 , m∗0
+L
+
+integer, N
+vector,R d
+integer, N
+integer, N
+∈ [Tmin , ...Tmax ]
+integer, N
+scalar, R
+∈ {1, ...M}
+∈ {1, ..., N}
+vector, R d+1
+scalar, R
+scalar, R
+scalar, R
+function
+function
+function
+function
+function
+scalar, R
+scalar, R
+scalar, R
+
+dimension, no. of hyperparameters to be optimized
+input hyperparameter
+maximum number of BO iterations
+the min/max no of iterations for training a ML algorithm
+index of training steps
+the maximum number of augmentation. We set M = 15.
+threshold for rejecting augmentation when ln of cond(K) > δ
+index of augmenting variables
+index of BO iterations
+concatenation of the parameter x and iteration t
+training cost (sec)
+transformed score at the BO iteration n
+transformed score at the BO iteration n, training step m
+acquisition function for performance
+estimation of the cost by LR given x and t
+a raw learning curve, r(x,t) = [r(1 | x,t), ...r(t 0 | x,t), r(t | x,t)]
+a black-box function which is compressed from the above f ()
+Logistic curve l(u | m0 , g0 ) = 1+exp(−g1 [u−m ])
+0
+0
+a growth parameter defining a slope, g∗0 = arg maxg0 L
+a middle point parameter, m∗0 = arg maxm0 L
+Gaussian process log marginal likelihood
+
+A.3
+
+GP kernels and treatment of GP hyperparameters
+
+We present the GP kernels and treatment of GP hyperparameters for the black-box function f .
+Although the raw learning curve in DRL is noisy, the transformed version using our proposed curve
+compression is smooth. Therefore, we use two squared exponential
+kernels
+for input hyperparameter
+
+
+
+
+0 ||2
+||t−t 0 ||2
+0
+and training iteration, respectively. That is kx (x, x0 ) = exp − ||x−x
+and
+k
+t (t,t ) = exp − 2σ 2
+2σ 2
+x
+
+t
+
+where the observation x and t are normalized to [0, 1]d and the outcome y is standardized y ∼
+N (0, 1) for robustness. As a result, our product kernel becomes
+
+
+
+||x − x0 ||2 ||t − t 0 ||2
+−
+k [x,t], [x0 ,t 0 ] = k(x, x0 ) × k(t,t 0 ) = exp −
+.
+2σx2
+2σt2
+The length-scales σx and σt are learnable parameters indicating the variability of the function with
+regards to the hyperparameter input x and number of training iterations t. Estimating appropriate
+values for them is critical as this represents the GPs prior regarding the sensitivity of performance
+w.r.t. changes in the number of training iterations and hyperparameters. For extremely large σt we
+expect the objective function to change very little for different numbers of training iterations. For
+small σt by contrast we expect drastic changes even for small differences. We estimate these GP
+hyperparameters (including the length-scales σx , σt and the output noise variance σy ) by maximizing
+their log marginal likelihood [31].
+We optimize Eq. (5) with a gradient-based optimizer, providing the analytical gradient to the algorithm. We start the optimization from the previous hyperparameter values θ prev . If the optimization
+fails due to numerical issues, we keep the previous value of the hyperparameters. We refit the hyperparameters every 3 × d function evaluations where d is the dimension.
+
+B
+
+Algorithm Illustration and Further Experiments
+
+Fig. 7 and Fig. 8 illustrate the behavior of our proposed algorithm BOIL on the example of optimizing the discount factor γ of Dueling DQN [46] on the CartPole problem. The two settings differ
+in the inclusion augmented observations into BOIL in Fig. 7 and CM-T/F-BO (or BOIL without
+augmented observations) in Fig. 8.
+13
+
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+2.5
+2.0
+1.5
+1.0
+0.5
+0.0
+0.5
+1.0
+1.5
+
+gamma
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+gamma
+Augmented Obs
+Obs
+
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+3.2
+2.4
+1.6
+0.8
+0.0
+0.8
+1.6
+2.4
+
+gamma
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+500
+
+#Episode
+
+450
+400
+350
+300
+250
+
+GP mean
+
+2.0
+1.5
+1.0
+0.5
+0.0
+0.5
+1.0
+1.5
+2.0
+
+gamma
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+
+gamma
+
+Acquisition
+
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+0.15
+0.00
+
+3.6
+3.2
+2.8
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+
+Cost
+
+c
+
+1.4
+1.3
+1.2
+1.1
+1.0
+0.9
+0.8
+0.7
+0.6
+
+Decision /
+
+c
+
+2.7
+2.4
+2.1
+1.8
+1.5
+1.2
+0.9
+0.6
+0.3
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Acquisition
+
+0.48
+0.42
+0.36
+0.30
+0.24
+0.18
+0.12
+0.06
+0.00
+
+2.8
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+
+Cost
+
+c
+
+1.36
+1.28
+1.20
+1.12
+1.04
+0.96
+0.88
+0.80
+0.72
+0.64
+
+Decision /
+
+c
+
+2.25
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Acquisition
+
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+0.15
+0.00
+
+3.2
+2.8
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+
+Cost
+
+c
+
+1.36
+1.28
+1.20
+1.12
+1.04
+0.96
+0.88
+0.80
+0.72
+0.64
+
+Decision /
+
+c
+
+4.0
+3.5
+3.0
+2.5
+2.0
+1.5
+1.0
+0.5
+0.0
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Acquisition
+
+0.200
+0.175
+0.150
+0.125
+0.100
+0.075
+0.050
+0.025
+0.000
+
+4.2
+3.6
+3.0
+2.4
+1.8
+1.2
+0.6
+0.0
+
+Cost
+
+c
+
+1.36
+1.28
+1.20
+1.12
+1.04
+0.96
+0.88
+0.80
+0.72
+0.64
+
+Decision /
+
+c
+
+3.5
+3.0
+2.5
+2.0
+1.5
+1.0
+0.5
+0.0
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Acquisition
+
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+0.15
+0.00
+
+3.6
+3.2
+2.8
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+
+Cost
+
+c
+
+1.28
+1.20
+1.12
+1.04
+0.96
+0.88
+0.80
+0.72
+0.64
+
+Decision /
+
+c
+
+3.6
+3.2
+2.8
+2.4
+2.0
+1.6
+1.2
+0.8
+0.4
+0.0
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Figure 7: Illustration of BOIL on a 2-dimensional optimization task of DDQN on CartPole. The
+augmented observations fill the joint hyperparameter-iteration space quickly to inform our surrogate.
+Our decision balances utility α against cost τ for iteration-efficiency. Especially in situations of
+multiple locations sharing the same utility value, our algorithm prefers to select the cheapest option.
+
+Table 2: Dueling DQN algorithm on CartPole problem.
+Variables
+
+Min
+
+Max
+
+Best Found x∗
+
+γ discount factor
+learning rate model
+#Episodes
+
+0.8
+1e−6
+300
+
+1
+0.01
+800
+
+0.95586
+0.00589
+-
+
+14
+
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+2.0
+
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+
+gamma
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+1.6
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+
+gamma
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+gamma
+Augmented Obs
+Obs
+500
+
+GP mean
+
+#Episode
+
+450
+400
+350
+300
+250
+
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+gamma
+Augmented Obs
+Obs
+
+500
+
+#Episode
+
+450
+400
+350
+300
+250
+
+GP mean
+
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+2.0
+
+GP variance
+
+200
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+
+gamma
+
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+0.15
+0.00
+
+Acquisition
+
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+0.00
+
+Cost
+
+c
+
+1.80
+1.65
+1.50
+1.35
+1.20
+1.05
+0.90
+0.75
+0.60
+
+Decision /
+
+c
+
+2.4
+2.1
+1.8
+1.5
+1.2
+0.9
+0.6
+0.3
+0.0
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+0.15
+0.00
+
+Acquisition
+
+2.25
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+0.00
+
+Cost
+
+c
+
+1.80
+1.65
+1.50
+1.35
+1.20
+1.05
+0.90
+0.75
+0.60
+
+Decision /
+
+c
+
+1.8
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+0.4
+0.2
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+0.64
+0.56
+0.48
+0.40
+0.32
+0.24
+0.16
+0.08
+0.00
+
+Acquisition
+
+2.25
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+
+Cost
+
+c
+
+1.65
+1.50
+1.35
+1.20
+1.05
+0.90
+0.75
+0.60
+
+Decision /
+
+c
+
+1.65
+1.50
+1.35
+1.20
+1.05
+0.90
+0.75
+0.60
+0.45
+0.30
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0.0
+
+Acquisition
+
+2.25
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+0.00
+
+Cost
+
+c
+
+1.4
+1.3
+1.2
+1.1
+1.0
+0.9
+0.8
+0.7
+0.6
+
+Decision /
+
+c
+
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0.0
+
+Acquisition
+
+2.25
+2.00
+1.75
+1.50
+1.25
+1.00
+0.75
+0.50
+0.25
+0.00
+
+Cost
+
+c
+
+1.4
+1.3
+1.2
+1.1
+1.0
+0.9
+0.8
+0.7
+0.6
+
+Decision /
+
+c
+
+1.8
+1.6
+1.4
+1.2
+1.0
+0.8
+0.6
+0.4
+0.2
+
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+0.80 0.85 0.90 0.95 1.00
+Augmented Obs
+Obs
+Augmented Obs
+Obs
+Selected
+
+Figure 8: Illustration of the Continuous Multi task/fidelity BO (CM-T/F-BO) -- this is the case of
+BOIL without using augmented observations (same setting as Fig. 7). This version leads to less
+efficient optimization as the additional iteration dimension requires more evaluation than optimizing
+the hyperparameters on their own.
+
+15
+
+Table 3: A2C algorithm on Reacher (left) and InvertedPendulum (right).
+Variables
+
+Min
+
+Max
+
+Best Found x∗
+
+Min
+
+Max
+
+Best Found x∗
+
+γ discount factor
+learning rate actor
+learning rate critic
+#Episodes
+
+0.8
+1e−6
+1e−6
+200
+
+1
+0.01
+0.01
+500
+
+0.8
+0.00071
+0.00042
+-
+
+0.8
+1e−6
+1e−6
+700
+
+1
+0.01
+0.01
+1500
+
+0.95586
+0.00589
+0.00037
+-
+
+Table 4: Convolutional Neural Network.
+Variables
+
+Min
+
+Max
+
+Best Found x∗
+
+filter size
+pool size
+batch size
+learning rate
+momentum
+decay
+number of epoch
+
+1
+1
+16
+1e−6
+0.8
+0.9
+30
+
+8
+5
+1000
+0.01
+0.999
+0.999
+150
+
+5
+5
+8
+0.000484
+0.82852
+0.9746
+-
+
+In both cases, we plot the GP predictive mean in Eq. (1), GP predictive variance in Eq. (2), the
+acquisition function in Eq. (3), the predicted function and the final decision function in Eq. (8).
+These equations are defined in the main manuscript.
+As shown in the respective figures the final decision function balances between utility and cost of
+any pair (γ,t) to achieve iteration efficiency. Especially in situations where multiple locations share
+the same utility value, our decision will prefer to select the cheapest option. Using the augmented
+observations in Fig. 7, our joint space is filled quicker with points and the uncertainty (GP variance)
+across it reduces faster than in Fig. 8 – the case of vanilla CM-T/F-BO without augmenting observations. A second advantage of having augmented observations is that the algorithm is discouraged
+to select the same hyperparameter setting at lower fidelity than a previous evaluation. We do not add
+the full curve as it can be redundant while causing the conditioning problem of the GP covariance
+matrix.
+B.1
+
+Experiment settings
+
+We summarize the hyperparameter search ranges for A2C on Reacher and InvertedPendulum in
+Table 3, CNN on SHVN in Table 4 and DDQN on CartPole in Table 2. Additionally, we present the
+best found parameter x∗ for these problems. Further details of the DRL agents are listed in Table 5.
+B.2
+
+Learning Logistic Function
+
+We first present the Logistic curve l(u | x,t) = 1+exp(−g1 [u−m ]) using different choices of g0 and m0
+0
+0
+in Fig. 10. We then learn from the data to get the optimal choices g∗0 and m∗0 presented in Fig. 11.
+Table 5: Further specification for DRL agents
+Hyperparameter
+
+Value
+
+A2C
+Critic-network architecture
+Actor-network architecture
+Entropy coefficient
+
+[32, 32]
+[32, 32]
+0.01
+
+Dueling DQN
+Q-network architecture
+ε-greedy (start, final, number of steps)
+Buffer size
+Batch size
+PER-α [33]
+PER-β (start, final, number of steps)
+
+16
+
+[50, 50]
+(1.0, 0.05, 10000)
+10000
+64
+1.0
+(1.0, 0.6, 1000)
+
+Preference Curve as Sigmoid
+
+Preference Curve as Sigmoid
+
+30
+
+Reward
+
+Average Reward
+
+20
+40
+50
+60
+
+Best Found Reward Curve
+Sigmoid Curve
+
+70
+0
+
+200
+
+300
+
+Episodes
+
+400
+
+500
+
+Preference Curve as Log
+
+10
+20
+
+20
+
+30
+
+40
+
+40
+50
+
+Best Found Reward Curve
+Log Curve
+
+60
+0
+
+100
+
+200
+
+300
+
+Episodes
+
+400
+
+0
+
+100
+
+Preference Curve as Average
+
+300
+
+Episodes
+
+400
+
+500
+
+60
+
+100
+
+500
+
+200
+
+Preference Curve as Log
+
+Best Found Reward Curve
+Log Curve
+
+80
+0
+
+100
+
+200
+
+300
+
+Episodes
+
+400
+
+500
+
+Preference Curve as Average
+
+0
+
+20
+
+20
+
+30
+
+Reward
+
+Average Reward
+
+Best Found Reward Curve
+Sigmoid Curve
+
+0
+
+Reward
+
+Average Reward
+
+100
+
+10
+20
+30
+40
+50
+60
+70
+80
+90
+
+40
+50
+
+Best Found Reward Curve
+Average Curve
+
+60
+0
+
+100
+
+200
+
+300
+
+Episodes
+
+400
+
+40
+60
+
+Best Found Reward Curve
+Average Curve
+
+80
+
+500
+
+0
+
+100
+
+200
+
+300
+
+Episodes
+
+400
+
+500
+
+Figure 9: To highlight the robustness, we examine the results using different preference functions
+such as Sigmoid curve, Log curve, and Average curve on Reacher experiments. The results include
+the best found reward curve with different preference choices that show the robustness of our model.
+Left column: the best found curve using averaged reward over 100 consecutive episodes. Right
+column: the best found curve using the original reward.
+
+17
+
+m0     g0     
+   
+   
+   
+
+   
+
+   
+
+   
+
+   
+
+m0     g0     
+
+   
+
+   
+   
+   
+
+   
+
+   
+
+   
+   
+   
+
+   
+
+   
+
+   
+   
+   
+
+   
+
+   
+   
+   
+
+   
+
+    
+
+   
+
+   
+
+   
+
+   
+
+   
+
+m0     g0   
+
+   
+
+   
+
+   
+
+   
+
+m0     g0   
+
+    
+
+   
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+   
+
+   
+
+   
+
+   
+
+   
+
+m0     g0   
+
+   
+
+   
+
+   
+
+   
+
+m0     g0   
+
+    
+
+   
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+   
+
+   
+
+   
+
+m0    g0   
+
+   
+
+   
+
+   
+
+   
+
+m0    g0   
+
+    
+
+   
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+   
+
+   
+
+   
+
+m0    g0   
+
+   
+
+   
+
+   
+
+   
+
+m0    g0   
+
+    
+
+   
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+m0    g0   
+
+    
+
+    
+
+   
+
+   
+
+    
+   
+
+    
+
+   
+
+   
+
+m0    g0   
+
+    
+
+    
+
+   
+
+   
+
+    
+   
+
+    
+
+   
+
+   
+
+m0     g0   
+
+    
+
+    
+
+   
+
+   
+
+    
+   
+
+    
+
+   
+
+   
+
+m0     g0   
+
+    
+
+    
+
+    
+   
+
+Figure 10: Examples of Logistic function l(u) =
+parameter m0 and growth parameter g0 .
+B.3
+
+    
+   
+
+    
+
+    
+
+   
+
+   
+
+    
+
+    
+
+   
+
+m0    g0     
+
+   
+
+    
+
+    
+
+   
+
+   
+
+    
+
+    
+
+   
+
+m0    g0     
+
+   
+
+    
+
+    
+
+    
+
+   
+
+   
+
+    
+
+   
+
+m0     g0   
+
+    
+
+    
+
+   
+
+m0     g0     
+
+m0     g0   
+
+    
+
+    
+
+    
+
+   
+
+   
+
+m0     g0   
+
+    
+
+   
+
+   
+
+   
+
+   
+
+1
+1+exp(−g0 [u−m0 ])
+
+   
+
+   
+
+   
+
+   
+
+   
+
+   
+
+with different values of middle
+
+Robustness over Different Preference Functions
+
+We next study the learning effects with respect to different choices of the preference functions. We
+pick three preference functions including the Sigmoid, Log and Average to compute the utility score
+for each learning curve. Then, we report the best found reward curve under such choices. The
+experiments are tested using A2C on Reacher-v2. The results presented in Fig. 9 demonstrate the
+robustness of our model with the preference functions.
+B.4
+
+Applying Freeze-Thaw BO in the settings considered
+
+While both the exponential decay in Freeze-Thaw BO [42] and our compression function encode
+preferences regarding training development, there is an important distinction between the two approaches. Freeze-thaw BO utilises the exponential decay property to terminate the training curve,
+while BOIL only uses the sigmoid curve to guide the search. We refer to Fig. 13 for further illustration of why Freeze-thaw BO struggles in DRL settings.
+B.5
+
+Ablation Study using Freeze-Thraw Kernel for Time
+
+In the joint modeling framework of hyperparameter and time (iteration), we can replace the kernel
+either k(x, x) or k(t,t) with different choices. We, therefore, set up a new baseline of using the timekernel k(t,t 0 ) in Freeze-Thaw approach [42] which encodes the monotonously exponential decay
+from the curve. Particularly, we use the kernel defined as
+k(t,t 0 ) =
+
+βα
+(t + t 0 + β )α
+
+for parameters α, β > 0 which are optimized in the GP models.
+18
+
+Estimated l( . | m0* ,g0* ) for CartPole
+m0* =-3.266
+0.8
+g0* =3.0
+0.6
+
+Estimated l(m0* ,g0* ) for CNN_SHVN
+m0* =2.245
+0.8
+g0* =2.092
+0.6
+
+1.0
+
+1.0
+
+0.4
+
+0.4
+
+0.2
+
+0.2
+
+0.0
+
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+0.0
+
+6
+
+Estimated l(m0* ,g0* ) for InvPendulum
+m0* =1.649
+0.8
+g0* =1.833
+0.6
+
+1.0
+
+0.4
+
+0.4
+
+0.2
+
+0.2
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Estimated l( . | m0* ,g0* ) for Cifar10
+m0* =-4.0
+0.8
+g0* =1.476
+0.6
+
+1.0
+
+0.0
+
+6
+
+0.0
+
+6
+
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Estimated l( . | m0* ,g0* ) for Reacher
+m0* =2.779
+0.8
+g0* =1.973
+0.6
+1.0
+
+0.4
+0.2
+0.0
+
+6
+
+4
+
+2
+
+0
+
+2
+
+4
+
+6
+
+Figure 11: We learn the suitable transformation curve directly from the data. We parameterized
+the Logistic curve as l (m0 , g0 ) = 1+exp(−g1 [1−m ]) then estimate g0 and m0 . The estimated function
+0
+0
+l(m∗0 , g∗0 ) is then used to compress our curve. The above plots are the estimated l() at different
+environments and datasets.
+
+ > $  &  , Q Y H U W H G 3 H Q G X O X P @  7 X Q L Q J     1  D Q G 
+
+2
+   
+
+   
+
+   
+
+ 8 W L O L W \  6 F R U H
+
+ 8 W L O L W \  6 F R U H
+
+ > $  &  , Q Y H U W H G 3 H Q G X O X P @  7 X Q L Q J     1  D Q G 
+   
+
+   
+
+   
+
+  
+
+  
+
+ 5 D Q G
+ % 2
+
+  
+ 
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+  
+
+ % 2  , W H U D W L R Q V
+
+ + \ S H U E D Q G
+ % 2 , /
+  
+
+  
+
+ 5 D Q G
+ % 2
+
+  
+ 
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+   
+
+   
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+ + \ S H U E D Q G
+ % 2 , /
+   
+
+ > & 1 1  & L I D U   @  7 X Q L Q J    + \ S H U S D U D P H W H U V
+
+ > & 1 1  & L I D U   @  7 X Q L Q J    + \ S H U S D U D P H W H U V
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+ $ F F X U D F \
+
+ $ F F X U D F \
+
+2
+
+    
+    
+
+    
+    
+    
+
+    
+
+ 5 D Q G
+ % 2
+
+    
+ 
+
+  
+
+  
+
+ % 2  /
+ & 0  7  )  % 2
+  
+
+ % 2  , W H U D W L R Q V
+
+ + \ S H U E D Q G
+ % 2 , /
+  
+
+ 5 D Q G
+ % 2
+
+    
+   
+
+   
+
+   
+
+ % 2  /
+ & 0  7  )  % 2
+   
+
+   
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+ + \ S H U E D Q G
+ % 2 , /
+   
+
+   
+
+Figure 12: Tuning hyperparameters of a DRL on InvertedPendulum and a CNN model on CIFAR10.
+
+19
+
+Reward Curves Examples using A2C on Inverted Pendulum
+
+120
+
+Reward
+
+100
+80
+60
+40
+
+Reward Curve
+Freeze-thaw
+
+20
+0
+
+0
+
+250 500 750 1000 1250 1500
+
+150
+
+150
+
+150
+
+100
+
+100
+
+100
+
+50
+
+50
+
+50
+
+0
+
+Epoch
+
+0
+
+250 500 750 1000 1250 1500
+
+0
+
+Epoch
+
+0
+
+250 500 750 1000 1250 1500
+
+0
+
+0
+
+Epoch
+
+250 500 750 1000 1250 1500
+
+Epoch
+
+Figure 13: Illustration of Freeze-thaw BO in DRL. Freeze-thaw BO will terminate training processes
+when training performance (in blue) significantly drops (i.e. at the red locations) as the exponential
+decay model will predict low final performance. In most RL enviroments noisy training curves are
+unavoidable. Thus, Freeze-thaw BO will dismiss all curves including good setting, never completing
+a single training run before the final epoch.
+ > $  &  5 H D F K H U @  7 X Q L Q J     1  D Q G 
+   
+
+   
+
+   
+
+ 8 W L O L W \  6 F R U H
+
+ 8 W L O L W \  6 F R U H
+
+ > $  &  5 H D F K H U @  7 X Q L Q J     1  D Q G  2
+   
+
+   
+   
+   
+
+ & 0  7  )  % 2  ) U H H ] H 7 K D Z
+ % 2 , /  ) U H H ] H 7 K D Z
+
+   
+   
+
+ 
+
+  
+
+  
+
+  
+
+ % 2  , W H U D W L R Q V
+
+ > $  &  , Q Y H U W H G 3 H Q G X O X P @  7 X Q L Q J     1  D Q G 
+
+   
+
+   
+   
+   
+
+   
+
+  
+
+2
+
+   
+
+   
+
+   
+
+   
+
+  
+
+  
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+  
+
+   
+
+ > $  &  , Q Y H U W H G 3 H Q G X O X P @  7 X Q L Q J     1  D Q G 
+
+2
+
+   
+   
+   
+
+   
+
+ &  0  7  % 2  ) U H H ] H 7 K D Z
+ % 2 , /  ) U H H ] H 7 K D Z
+
+  
+  
+
+  
+
+   
+
+   
+
+   
+
+ & 0  7  )  % 2  ) U H H ] H 7 K D Z
+ % 2 , /  ) U H H ] H 7 K D Z
+
+   
+
+ 8 W L O L W \  6 F R U H
+
+ 8 W L O L W \  6 F R U H
+
+  
+
+2
+
+ 
+
+  
+
+  
+
+  
+
+ % 2  , W H U D W L R Q V
+
+  
+
+ & 0  7  )  % 2  ) U H H ] H 7 K D Z
+ % 2 , /  ) U H H ] H 7 K D Z
+
+  
+  
+
+  
+
+ 
+
+  
+
+   
+
+   
+
+   
+
+ ( Y D O X D W L R Q  7 L P H   0 L Q X W H V 
+
+   
+
+   
+
+Figure 14: Comparison using freezethaw kernel for time component.
+We present the result in Fig. 14 that CM-T/F-BO is still less competitive to BOIL using this specific
+time kernel. The results again validate the robustness our approach cross different choices of kernel.
+B.6
+
+Additional Experiments for Tuning DRL and CNN
+
+We present the additional experiments for tuning a DRL model using InvertedPendulum environment and a CNN model using a subset of CIFAR10 in Fig. 12. Again, we show that the proposed
+model clearly gain advantages against the baselines in tuning hyperparameters for model with iterative learning information available.
+B.7
+
+Examples of Deep Reinforcement Learning Training Curves
+
+Finally, we present examples of training curves produced by the deep reinforcement learning algorithm A2C in Fig. 15. These fluctuate widely and it may not be trivial to define good stopping
+criteria as done for other applications in previous work [42].
+
+20
+
+90
+100
+110
+
+70
+80
+0
+10
+20
+30
+40
+50
+60
+70
+
+200
+
+400
+
+0
+
+200
+
+90
+100
+110
+
+400
+
+20
+
+60
+
+30
+
+70
+
+40
+
+80
+
+50
+0
+
+200
+
+400
+
+200
+
+70
+
+400
+
+75
+
+30
+
+80
+
+40
+
+85
+
+50
+0
+
+200
+
+60
+
+400
+
+200
+
+400
+
+0
+
+80
+
+90
+
+90
+
+100
+200
+
+0
+
+40
+
+70
+
+80
+
+80
+
+90
+
+90
+0
+
+200
+
+100
+
+400
+
+20
+30
+40
+50
+60
+70
+0
+
+200
+
+20
+30
+40
+50
+60
+70
+
+400
+
+50
+200
+60
+150
+70
+100
+80
+
+200
+
+400
+
+0
+
+00
+
+500200
+
+1000400 1500
+
+60
+200
+65
+150
+70
+
+00
+
+500200
+
+1000400 1500
+
+200
+
+400
+
+80
+90
+0
+
+200
+
+100
+
+400
+
+0
+
+200
+
+400
+
+200
+20
+150
+30
+10040
+5050
+00
+
+500200 1000 400 1500
+
+060
+
+00
+
+500200 1000 400 1500
+
+20020
+
+00
+
+500200 1000 400 1500
+
+150
+40
+100
+60
+50
+80
+0
+
+00
+
+500200 1000 400 1500
+
+200
+20
+150
+40
+100
+60
+50
+80
+0
+200
+50
+15060
+70
+10080
+5090
+100
+0
+
+200
+
+200
+
+200
+
+200
+
+150
+
+150
+
+150
+
+150
+
+100
+
+100
+
+100
+
+100
+
+50
+
+50
+
+50
+
+50
+
+0
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+0
+
+200
+
+400
+
+0
+
+200
+
+400
+
+0
+
+200
+
+400
+
+0
+
+200
+
+400
+
+20
+30
+40
+50
+60
+70
+
+70
+
+5095
+
+100
+0
+
+20
+30
+40
+50
+60
+70
+80
+
+60
+
+200
+80
+150
+85
+10090
+
+75
+100
+
+400
+
+50
+
+200
+60
+15070
+10080
+90
+50
+100
+0
+
+200
+
+100
+0
+
+400
+
+100
+
+400
+70
+
+200
+
+70
+
+80
+
+60
+
+80
+
+400
+
+70
+
+20
+
+60
+
+200
+
+60
+
+0
+
+0
+
+10
+20
+30
+40
+50
+60
+70
+
+90
+0
+
+20
+
+80
+50
+85
+0
+
+0
+
+50
+
+70
+
+90
+50
+100
+0
+
+60
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+200
+
+200
+
+200
+
+200
+
+200
+
+200
+
+200
+
+200
+
+150
+
+150
+
+150
+
+150
+
+100
+
+100
+
+100
+
+100
+
+50
+
+50
+
+50
+
+50
+
+0
+
+21 0
+
+00
+
+500 200 1000 4001500
+
+00
+
+500 200 1000 4001500
+
+0
+
+500
+
+1000
+
+1500
+
+Figure 15: Examples of reward curves using A2C on Reacher-v2 (rows 1 − 3) and on
+150
+150
+150
+InvertedPendulum-v2
+(rows
+4 − 6). Y-axis is the 150
+reward averaged over 100
+consecutive episodes.
+X-axis
+is the episode. The100noisy performance illustrated
+is typical of DRL 100
+settings and complicates
+100
+100
+the design of early stopping criteria. Due to the property of DRL, it is not trivial to decide when to
+50
+50
+50
+50
+stop the training curve. In addition, it will be misleading if we only take average over the last 100
+0
+0
+0
+0
+iterations.
+0
+500
+1000
+1500
+0
+500
+1000
+1500
+0
+500
+1000
+1500
+0
+500
+1000
+1500
+
+0
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+500
+
+1000
+
+1500
+
+0
+
+200
+
+200
+
+200
+
+200
+
+150
+
+150
+
+150
+
+150
+
+0
+
+500
+
+1000
+
+1500
+
+

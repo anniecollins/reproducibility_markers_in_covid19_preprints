@@ -1,0 +1,1379 @@
+F ORMAL L ANGUAGE C ONSTRAINED
+M ARKOV D ECISION P ROCESSES
+Eleanor Quint∗ † , Dong Xu‡ , Samuel W. Flint† , Stephen Scott† , Matthew Dwyer‡
+University of Nebraska-Lincoln† , University of Virginia‡
+
+arXiv:1910.01074v3 [cs.LG] 13 Oct 2020
+
+A BSTRACT
+In order to satisfy safety conditions, an agent may be constrained from acting freely.
+A safe controller can be designed a priori if an environment is well understood,
+but not when learning is employed. In particular, reinforcement learned (RL)
+controllers require exploration, which can be hazardous in safety critical situations.
+We study the benefits of giving structure to the constraints of a constrained Markov
+decision process by specifying them in formal languages as a step towards using
+safety methods from software engineering and controller synthesis. We instantiate
+these constraints as finite automata to efficiently recognise constraint violations.
+Constraint states are then used to augment the underlying MDP state and to learn a
+dense cost function, easing the problem of quickly learning joint MDP/constraint
+dynamics. We empirically evaluate the effect of these methods on training a variety
+of RL algorithms over several constraints specified in Safety Gym, MuJoCo, and
+Atari environments.
+
+1
+
+I NTRODUCTION
+
+The ability to impose safety constraints on an agent is key to the deployment of reinforcement
+learning (RL) systems in real-world environments (Amodei et al., 2016). Controllers that are derived
+mathematically typically rely on a full a priori analysis of agent behavior remaining within a predefined envelope of safety in order to guarantee safe operation (Aréchiga & Krogh, 2014). This
+approach restricts controllers to pre-defined, analytical operational limits, but allows for verification
+of safety properties (Huth & Kwiatkowska, 1997) and satisfaction of software contracts (Helm et al.,
+1990), which enables their use as a component in larger systems. By contrast, RL controllers are
+free to learn control trajectories that better suit their tasks and goals; however, understanding and
+verifying their safety properties is challenging. A particular hazard of learning an RL controller is the
+requirement of exploration in an unknown environment. It is desirable not only to obey constraints in
+the final policy, but also throughout the exploration and learning process (Ray et al., 2019).
+The goal of safe operation as an optimization objective is formalized by the constrained Markov
+decision process (CMDP) (Altman, 1999), which adds to a Markov decision process (MDP) a cost
+signal similar to the reward signal, and poses a constrained optimization problem in which discounted
+reward is maximized while the total cost must remain below a pre-specified limit per constraint. We
+use this framework and propose specifying CMDP constraints in formal languages to add useful
+structure based on expert knowledge, e.g., building sensitivity to proximity into constraints on object
+collision or converting a non-Markovian constraint into a Markovian one (De Giacomo et al., 2020).
+A significant advantage of specifying constraints with formal languages is that they already form a
+well-developed basis for components of safety-critical systems (Huth & Kwiatkowska, 1997; Clarke
+et al., 2001; Kwiatkowska et al., 2002; Baier et al., 2003) and safety properties specified in formal
+languages can be verified a priori (Kupferman et al., 2000; Bouajjani et al., 1997). Moreover, the
+recognition problem for many classes of formal languages imposes modest computational requirements, making them suitable for efficient runtime verification (Chen & Roşu, 2007). This allows for
+low-overhead incorporation of potentially complex constraints into RL training and deployment.
+We propose (1) a method for posing formal language constraints defined over MDP trajectories as
+CMDP cost functions; (2) augmenting MDP state with constraint automaton state to more explicitly
+∗
+
+Correspondence to equint4@huskers.unl.edu
+
+1
+
+MDP
+
+state
+
+at+1 , st+1
+
+at , st
+
+Translation
+Function TC
+
+MDP
+
+Action
+Shaping
+
+token
+
+`
+
+Translation
+Function TC
+token
+
+q1
+
+n,f
+
+Cost QC
+
+start
+
+q2
+
+r
+
+`
+
+q3
+r
+
+q0
+
+qv
+`
+
+r
+Recognizer DC
+
+state
+
+q4
+
+Recognizer DC
+
+(a)
+
+q5
+
+`
+
+r
+
+q6
+
+(b)
+
+Figure 1: (a) Illustration of the formal language constraint framework operating through time. State
+is carried forward through time by both the MDP and the recognizer, DC . (b) No-1D-dithering
+constraint employed in the Atari and MuJoCo domains: .∗ (` r)2 |(r `)2 (note, all unrepresented
+transitions return to q0 ).
+encourage learning of joint MDP/constraint dynamics; (3) a method for learning a dense cost function
+given a sparse cost function from joint MDP/constraint dynamics; and (4) a method based on
+constraint structure to dynamically modify the set of available actions to guarantee the prevention
+of constraint violations. We validate our methods over a variety of RL algorithms with standard
+constraints in Safety Gym and hand-built constraints in MuJoCo and Atari environments.
+The remainder of this work is organized as follows. Section 2 presents related work in CMDPs,
+using expert advice in RL and safety, as well as formal languages in similar settings. Section 3
+describes our definition of a formal language-based cost function, as well as how it’s employed in
+state augmentation, cost shaping, and action shaping. Section 4 details our experimental setup and
+results and finally, discussion of limitations and future work are located in Section 5.
+
+2
+
+R ELATED WORK
+
+Safety and CMDP Framework The CMDP framework doesn’t prescribe the exact form of constraints or how to satisfy the constrained optimization problem. Chow et al. (2017) propose conditional
+value-at-risk of accumulated cost and chance constraints as the values to be constrained and use a
+Lagrangian formulation to derive a Bellman optimality condition. Dalal et al. (2018) use a different
+constraint for each MDP state and a safety layer that analytically solves a linearized action correction
+formulation per state. Similarly, Pham et al. (2018) introduce a layer that corrects the output of a
+policy to respect constraints on the dynamic of a robotic arm.
+Teacher Advice A subset of RL safety uses expert advice during exploration with potential-based
+reward shaping mechanisms (Ng et al., 1999). Wiewiora et al. (2003) introduce a general method for
+incorporating arbitrary advice into the reward structure. Saunders et al. (2017) use a human in the
+loop to learn an effective RL agent while minimizing cost accumulated over training. Camacho et al.
+(2017a;b) use DFAs with static reward shaping attached to states to express non-Markovian rewards.
+We build on this with a learned reward shaping function in the case of dense soft constraints, and by
+adding the translation of MDP transitions into the symbols of the DFA alphabet. Similar to teacher
+advice is shielding (Jansen et al., 2018; Alshiekh et al., 2018), in which an agent’s actions are filtered
+through a shield that blocks actions that would introduce an unsafe state (similar to hard constraints;
+section 3).
+Formal Languages Formal languages and automata have been used before in RL for task specification or as task abstractions (options) in hierarchical reinforcement learning (Icarte et al., 2018b; Li
+et al., 2017; Wen et al., 2017; Hasanbeig et al., 2018; Mousavi et al., 2014). In some cases, these
+automata were derived from Linear Temporal Logic (LTL) formulae, in others LTL or other formal
+language formulae have been directly used to specify tasks (Icarte et al., 2018a). Littman et al. (2017)
+2
+
+defines a modified LTL designed for use in reinforcement learning. In robotics, LTL is used for task
+learning (Li et al., 2017), sometimes in conjunction with teacher demonstrations (Li et al., 2018).
+
+3
+
+F ORMAL L ANGUAGE C ONSTRAINED MDP S
+
+The constrained Markov decision process (CMDP) (Altman, 1999) extends the Markov decision
+process (Sutton & Barto, 2018) to incorporate constraints. The difference is an additional set of cost
+functions ci : S × A × S → R and set of cost limits di ∈ R. Then, the constrained optimization
+problem is
+arg max Jr (π)
+π
+
+s.t.
+
+Jci (π) ≤ di , i = 1, . . . , k
+
+where P
+Jr (π) is a return-based objective, e.g., finite horizon discounted return defined Jr (π) =
+Eτ ∼π [ t∈τ γ t rt ] and Jci is a cost-based constraint function defined similarly, replacing rt with ci,t .
+We propose formal language constrained MDPs (FLCMDPs) as a subset of CMDPs in which
+each constraint Ci ⊂ (S × A × S)∗ is defined by a set of prohibited trajectories. (Subscript i is
+suppressed from this point without loss of generality). Because C is defined by a formal language,
+it can be recognized efficiently by an automaton, which we use to construct the cost function.
+We define three functions for interacting with the constraint automaton: a translation function
+TC : (S × A × S) → ΣC that converts MDP transitions into a symbol in the recognizer’s input
+language, a recognizer function DC : ΣC → QC that steps the recognizer automaton using the input
+symbol and returns the state, and finally a cost assignment GC : QC → R that assigns a real-valued
+cost to each recognizer state. The composition of these three functions forms a CMDP cost function
+defined c = GC ◦ DC ◦ TC : (S × A × S) → R. The interaction of these functions with the
+underlying MDP framework is illustrated in Figure 1(a), where the constraint uses the MDP state
+and action at time t to calculate the cost signal at time t and, if action shaping is being employed as
+discussed below, influence the action at time t + 1.
+Translation Function TC The translation function accepts as input the MDP state and action at
+each time step, and outputs a token in the discrete, finite language of the associated recognizer. This
+allows the recognizer automaton to be defined in a small, discrete language, rather than over unwieldy
+and potentially non-discrete MDP transitions. Further, freedom in choice of input language allows
+for flexible design of the constraint automaton to encode the desired inductive bias, and thus more
+meaningful structured states.
+Recognizer Function DC Each constraint is instantiated with a finite automaton recognizer that
+decides whether a trajectory is in the constraint set. The only necessary assumption about the
+recognizer is that it defines some meaningful state that may be used for learning the constraint
+dynamics. Our implementation uses a deterministic finite automaton (DFA) as the recognizer for
+each constraint, defined as (Q, Σ, δ, q0 , F ), where Q is the set of the DFA’s states, Σ is the alphabet
+over which the constraint is defined, δ : Q × A → Q is the transition function, q0 ∈ Q is the start
+state, and F ⊂ Q is the set of accepting states that represent constraint violations. The DFA is set to
+its initial state at the start of each episode and is advanced at each time step with the token output
+by the translation layer. Although our experiments use DFAs as a relatively simple recognizer, the
+framework can be easily modified to work with automata that encode richer formal languages like
+pushdown automata or hybrid automata.
+Constraint State Augmentation In order to more efficiently learn constraint dynamics, the MDP
+state st is augmented with a one-hot representation of the recognizer state qt . To preserve the Markov
+property of the underlying MDP, state augmentation should contain sufficient information about the
+recognizer state and, if it is stateful, the translation function. To enhance performance, the one-hot
+state is embedded to blog2 (|Q|)c dimensions before being input into any network and the embedding
+is learned with gradients backpropagated through the full network.
+Cost Assignment Function The cost assignment function GC assigns a real-valued cost to each
+state of the recognizer. This cost can be used in optimization to enforce the constraint with a
+3
+
+Lagrangian-derived objective penalty, or via reward shaping, which updates the reward function to
+rt − λct , where λ is a scaling coeffficient.
+Cost assignments are frequently sparse, where GC is only non-zero at accepting states that recognize
+a constraint violation. This poses a learning problem for optimization-based methods that use
+reward shaping or an objective penalty to solve the CMDP. A goal of constrained RL is to minimize
+accumulated constraint violations over training but, to ensure that the frequency of violations is small,
+the optimization penalty can be large relative to the reward signal. This can lead to a situation in
+which an unnecessarily conservative policy is adopted early in training, slowing exploration. We
+next propose a method for learning a dense cost function that takes advantage of the structure of the
+constraint automaton to more quickly learn constraint dynamics and avoid unnecessarily conservative
+behavior.
+Learned Dense Cost The goal of learning a dense cost is not to change the optimality or nearoptimality of a policy with respect to the constrained learning problem. Thus, we use the form of
+potential-based shaping: F (st−1 , at , st ) = γΦ(st ) − Φ(st−1 ), where Φ is a potential function (see
+Ng et al. (1999) for details). This is added as a shaping term to the sparse cost to get the dense cost
+G0C (qt−1 , qt ) = GC (qt ) + β(γΦ(qt ) − Φ(qt−1 )) ,
+where β scales the added dense cost relative to the sparse cost, and Φ is a function of the recognizer
+state rather than the MDP state, which requires st−2 and at−2 as additional inputs to calculate qt−1 .
+Generally, if the value of Φ increases as the automaton state is nearer to a violation, then the added
+shaping terms have the effect of adding cost for moving nearer to a constraint violation and refunding
+cost for backing away from a potential violation.
+In our experiments, the potential Φπ (qt ) is defined using tv (qt ), which is a random variable defined
+as the number of steps between visiting recognizer state qt and an accepting recognizer state. This
+variable’s distribution is based on π and the MDP’s transition function. Its value is small if a violation
+is expected to occur soon after reaching qt and vice-versa. We then define the potential function as
+ (Eπ [tv (qt )]/tbaseline
+)
+v
+1
+Φ (qt ) =
+,
+2
+π
+
+which ensures that its value is always in [0, 1] and rises exponentially as the expected time to a
+violation becomes smaller. If the expected time to next violation is much larger than the provided
+baseline, tbaseline
+, then the potential value becomes small, as shaping is unnecessary in safe states.
+v
+The expected value of tv (qt ) may be estimated empirically from rollouts, and is updated between
+episodes to ensure that it’s stationary in each rollout. We set tbaseline
+to be the ratio of estimated
+v
+or exact length of an episode and the constraint limit di , but find empirically that the the method is
+resilient to the exact choice.
+Hard Constraints and Action Shaping When safety constraints are strict, i.e., when the limit
+on the number of constraint violations d is zero, the set of available actions is reduced to ensure
+a violation cannot occur. If a constraint isn’t fully state-dependent (i.e., there is always an action
+choice that avoids violation), then action shaping can guarantee that a constraint is never violated.
+Otherwise, knowledge of which actions lead to future violating trajectories requires knowledge of the
+underlying MDP dynamics, which is possible by learning a model that converts state constraints into
+state-conditional action constraints as in Dalal et al. (2018).
+Our implementation of hard constraints initially allows the agent to freely choose its action, but
+before finalizing that choice, simulates stepping the DFA with the resulting token from the translation
+function and, if that lookahead step would move it into a violating state, it switches to the next
+best choice until a non-violating action is found. For the constraints in our experiments, it is
+always possible to choose a non-violating action. A known safe fallback policy can be employed
+in the case when an episode cannot be terminated. Action shaping can be applied during training
+or deployment, as opposed to reward shaping, which is only applied during training. Thus, we
+experiment with applying action shaping only during training, only during evaluation, or in both
+training and evaluation.
+4
+
+Table 1: Metrics averaged over the last 25 episodes of training in Safety Gym environments with PPOLagrangian methods, normalized relative to unconstrained PPO metrics. Cost rate is the accumulated
+cost regret over the entirety of training.
+FLCMDP State Augmented
+
+4
+
+Baseline
+
+Environment
+
+Return
+
+Violation
+
+Cost Rate
+
+Return
+
+Violation
+
+Cost Rate
+
+Point-Goal1
+Point-Goal2
+Point-Button1
+Point-Button2
+Point-Push1
+Point-Push2
+Car-Goal1
+Car-Goal2
+Car-Button1
+Car-Button2
+Car-Push1
+Car-Push2
+
+0.750
+0.195
+0.252
+0.251
+0.549
+0.938
+0.825
+0.005
+0.022
+0.031
+0.737
+0.256
+
+0.427
+0.083
+0.129
+0.130
+0.042
+0.173
+0.295
+0.011
+0.083
+0.147
+0.032
+0.086
+
+0.281
+0.078
+0.128
+0.141
+0.061
+0.148
+0.284
+0.079
+0.071
+0.076
+0.069
+0.124
+
+0.918
+0.021
+0.343
+0.166
+0.692
+0.670
+0.803
+0.021
+0.018
+0.009
+0.882
+0.025
+
+0.925
+0.062
+0.296
+0.255
+0.496
+0.295
+0.475
+0.046
+0.039
+0.009
+0.387
+0.115
+
+0.503
+0.155
+0.218
+0.118
+0.543
+0.258
+0.445
+0.108
+0.118
+0.078
+0.420
+0.202
+
+E XPERIMENTAL E VALUATION
+
+4.1
+
+C ONSTRAINTS
+
+We evaluated FLCMDPs on four families of constraints, which we define with regular expressions.
+No-dithering: A no-dithering constraint prohibits movements in small, tight patterns that cover very
+small areas. In one dimension, we define dithering as actions are taken to move left, right, left, and
+right in order or the opposite, i.e., .∗ (` r)2 |(r `)2 . The automaton encoding this constraint is depicted
+in Figure 1(b). In environments with two-dimensional action spaces, such as Atari Seaquest, we
+generalize this to vertical and diagonal moves and constrains actions that take the agent back to where
+it started in at most four steps1 . In MuJoCo, constraints are applied per joint and the translation
+function maps negative and positive-valued actions to ‘`’ and ‘r’, respectively.
+No-overactuating: A no-overactuating constraint prohibits repeated movements in the same direction
+over a long period of time. In Atari environments, this forbids moving in the same direction four
+times in a row, i.e., .∗ (`4 ∪ r4 ). In two dimensions, this is extended to include moving vertically:
+.∗ (L4 ∪ R4 ∪ U 4 ∪ D4 ). Each of the left (L), right (R), up (U ) and down (D) tokens is produced by
+the translation function from the primary direction it’s named after or diagonal moves that contain
+the primary direction, e.g., L = ` ∪ `+u ∪ `+d, where “`+u” is the atomic left-up diagonal action. In
+MuJoCo environments, overactuation is modelled as occurring when the sum of the magnitudes of
+joint actuations exceeds a threshold. This requires the translation function to discretize the magnitude
+in order for a DFA to calculate an approximate sum. The MDP state-based version is “dynamic
+actuation”, which sets the threshold dynamically based on a discretized distance from the goal.
+Proximity: The proximity constraint, used in Safety Gym, encodes the distance to a collision with
+any of the variety of hazards found in its environments. The translation function uses the max value
+over all the hazard lidars, which have higher value as a hazard comes closer, and discretizes it into
+one of ten values. The constraint is defined as being violated if the agent contacts the hazard, which is
+identical to the constraint defined in the Safety Gym environments and described in Ray et al. (2019).
+Domain-specific: In addition to the previously described simple constraints, we define hand-built
+constraints for the Breakout and Space Invaders Atari environments. These constraints are designed to
+mimic specific human strategies in each environment for avoiding taking actions that end the episode.
+In Atari Breakout, we define the “paddle-ball” constraint, which limits the allowed horizontal distance
+between the ball and the center of the paddle. In Atari Space Invaders, we define the “danger zone”
+constraint, which puts a floor on the the allowed distance between the player’s ship and the bullets
+fired by enemies. We provide more details of each constraint in Appendix B.
+1
+
+The regex describing this constraint is included in Appendix D.
+
+5
+
+Figure 2: Performance/conformance curves in selected Safety Gym environments with Pareto frontiers
+plotted per reward shaping method. We observe that using state augmentation (green) consistently
+outperforms the baseline (blue) at all levels of reward shaping, which are anti-correlated with episodic
+cost and episodic return. The use of cost shaping (purple) produces gains in return at a given amount
+of cost only at small reward shaping values correlating to high return and cost. Consequently, the
+combination of state augmentation and cost shaping inherits this behavior of being more effectiveness
+when cost/return are higher. The full set of plots is included in Appendix C.
+4.2
+
+E NVIRONMENTS
+
+In Safety Gym, the Spinning Up implementation of PPO with Lagrangian optimization penalization
+was employed, with hyperparameters as chosen identically to Ray et al. (2019). We modified each
+network to concatenate the constraint state augmentation with the input and used d = 25 for the
+expected cost limit. All safety requirements are accounted for in a single constraint and we report the
+constraint violations as accounted for in the Safety Gym environments rather than as reported by the
+finite automaton (though these are identical when not using cost shaping). Each environment, which
+is randomly re-arranged each episode, is made up of a pairing of a robot and a task. The robots are
+Point, which turns and moves, and Car, which is wheeled with differential drive control. The tasks are
+Goal, which requires moving into a goal area, Button, which requires pressing a series of buttons, and
+Push, which requires moving a box into a goal area. More details can be found in Ray et al. (2019).
+In Atari environments (Bellemare et al., 2013), we modified the DQN implemented in OpenAI
+Baselines (Dhariwal et al., 2017) by appending the state augmentation to the output of its final
+convolutional layer. Reward shaping was used for soft constraint enforcement with the penalty fixed
+at one of {0, −0.001, −0.0025, −0.005, −0.01}, and each agent was trained for 10M steps before
+collecting data from an evaluation phase of 100K steps for 15 or more train/eval seed pairs for each
+hyperparameter combination. For MuJoCo environments (Brockman et al., 2016), we trained the
+Baselines PPO agent (Schulman et al., 2017) with dense constraints and the state augmentation
+concatenated to the input MDP observation. Reward shaping similar to Atari was employed for
+constraint enforcement. Atari and MuJoCo environments do not have constraints built in, so we
+report the number of constraint violations per episode from the custom constraints and minimize
+them without a specific goal value.
+4.3
+
+R ESULTS
+
+We experiment with our methods to evaluate the usefulness of formal language constraints in
+optimizing three objectives. In the final policy output by the training process, it is desirable to
+6
+
+Table 2: Atari reward shaping with state augmentation, choosing hyperparameters that minimize
+constraint violations per episode. “Dense” refers to whether the dense cost term was used and “reward
+shaping” refers to the fixed reward shaping coefficient λ.
+FLCMDP State Augmented
+
+Baseline
+
+Environment
+
+Constraint
+
+Dense
+
+Reward
+Shaping
+
+Mean
+Episode Reward
+
+Mean
+Step Reward
+
+Mean
+Viols/100 steps
+
+Mean
+Episode Reward
+
+Mean
+Step Reward
+
+Mean
+Viols/100 steps
+
+Breakout
+
+actuation
+dithering
+paddle ball
+
+False
+False
+True
+
+−0.001
+−0.001
+−0.0025
+
+297.12 ± 8.07
+263.57 ± 11.14
+314.79 ± 15.09
+
+0.15 ± 0.0039
+0.15 ± 0.0068
+0.17 ± 0.0056
+
+0.45 ± 0.00067
+0.0008 ± 8.4e − 06
+6.15 ± 0.0031
+
+272.19 ± 43.12
+272.19 ± 43.12
+272.19 ± 43.12
+
+0.14 ± 0.01
+0.14 ± 0.01
+0.14 ± 0.01
+
+13.59 ± 0.025
+0.12 ± 0.001
+13.40 ± 0.022
+
+Seaquest
+
+actuation
+dithering
+
+False
+False
+
+−0.01
+−0.01
+
+1858.65 ± 478.56
+1608.66 ± 41.25
+
+0.76 ± 0.18
+0.75 ± 0.013
+
+2.71 ± 0.0066
+0.081 ± 0.001
+
+2250.13 ± 647.92
+2250.13 ± 647.92
+
+0.96 ± 0.21
+0.96 ± 0.21
+
+9.74 ± 0.017
+1.61 ± 0.007
+
+SpaceInvaders
+
+actuation
+dangerzone
+dithering
+
+False
+True
+True
+
+−0.01
+−0.005
+−0.01
+
+598.78 ± 39.98
+629.32 ± 28.72
+595.25 ± 20.25
+
+0.63 ± 0.033
+0.65 ± 0.017
+0.63 ± 0.021
+
+5.39 ± 0.017
+0.00 ± 0.00
+0.00 ± 0.00
+
+604.86 ± 44.86
+604.86 ± 44.86
+604.86 ± 44.86
+
+0.62 ± 0.04
+0.62 ± 0.04
+0.62 ± 0.04
+
+10.88 ± 0.011
+0.00 ± 0.00
+0.53 ± 0.0064
+
+Table 3: Atari reward shaping with state augmentation, choosing hyperparameters that maximize
+cumulative reward per episode. “Dense” refers to whether the dense cost term was used and “reward
+shaping” refers to the fixed reward shaping coefficient λ.
+FLCMDP State Augmented
+
+Baseline
+
+Environment
+
+Constraint
+
+Dense
+
+Reward
+Shaping
+
+Mean
+Episode Reward
+
+Mean
+Step Reward
+
+Mean
+Viols/100 Steps
+
+Mean
+Episode Reward
+
+Mean
+Step Reward
+
+Mean
+Viols/100 Steps
+
+Breakout
+
+actuation
+dithering
+paddle ball
+
+False
+True
+True
+
+−0.001
+−0.005
+−0.0025
+
+297.12 ± 8.07
+302.24 ± 43.81
+314.79 ± 15.09
+
+0.15 ± 0.0039
+0.14 ± 0.02
+0.17 ± 0.0056
+
+0.45 ± 0.00067
+0.11 ± 0.001
+6.15 ± 0.0031
+
+272.19 ± 43.12
+272.19 ± 43.12
+272.19 ± 43.12
+
+0.14 ± 0.01
+0.14 ± 0.01
+0.14 ± 0.01
+
+13.59 ± 0.025
+0.12 ± 0.001
+13.40 ± 0.022
+
+Seaquest
+
+actuation
+dithering
+
+True
+False
+
+−0.0025
+−0.001
+
+2339.54 ± 442.02
+1997.91 ± 539.75
+
+0.93 ± 0.11
+0.86 ± 0.23
+
+4.43 ± 0.016
+1.58 ± 0.011
+
+2250.13 ± 647.92
+2250.13 ± 647.92
+
+0.96 ± 0.21
+0.96 ± 0.21
+
+9.74 ± 0.017
+1.61 ± 0.007
+
+SpaceInvaders
+
+actuation
+dangerzone
+dithering
+
+False
+False
+False
+
+−0.005
+−0.001
+−0.001
+
+646.99 ± 50.55
+687.37 ± 16.75
+640.35 ± 25.94
+
+0.64 ± 0.04
+0.63 ± 0.01
+0.67 ± 0.09
+
+29 ± 0.0053
+0.00 ± 0.00
+0.17 ± 0.00027
+
+604.86 ± 44.86
+604.86 ± 44.86
+604.86 ± 44.86
+
+0.62 ± 0.04
+0.62 ± 0.04
+0.62 ± 0.04
+
+10.88 ± 0.011
+0.00 ± 0.00
+0.53 ± 0.0064
+
+simultaneously maximize return per episode and minimize constraint violations per episode, or
+keep them below the specified limit. The third objective is to minimize accumulated cost regret
+over the course of training. To examine the proposed methods, we investigate two questions. First,
+what effect do the proposed methods have on accumulated regret? In Section 4.3.1, we compare the
+proposed methods against a baseline when combined with PPO using a Lagrangian approach in Safety
+Gym (Ray et al., 2019). Second, how should hyperparameters be chosen to minimize or maximize
+each objective respectively? In Section 4.3.2 we examine which hyperparameter choices worked well
+in various Atari and MuJoCo environments using reward shaping. Finally, in Section 4.3.3 we see
+what effect enforcing zero constraint violations with action shaping has on Atari environments.
+4.3.1
+
+L AGRANGIAN RESULTS AND ACCUMULATED COST
+
+Table 1 compares PPO with Lagrangian constraint enforcement with and without constraint state
+augmentation. The clearest trend is in the reduction of the cost rate, which measures accumulated cost
+regret, often by between almost one half and an order of magnitude. This results from the inclusion of
+the helpful inductive bias provided by the constraint structure. This result is not surprising, but does
+quantify the magnitude of the benefit that a low-overhead method like formal language constraints can
+have. Qualitatively, we noted that the earliest steps of training had decreased performance generally as
+the embedding of the constraint state was being learned, but quickly surpassed baseline performance
+once the updates of the embedded representation became small.
+Ray et al. (2019) says that algorithm A1 dominates A2 when they are evaluated under the same
+conditions, the cost and return of A1 are at least as good as that of A2 , and at least one of cost and
+return is strictly better for A1 . By this definition, the state augmented approach strictly dominates the
+baseline in 6 of 12 environments, while coming close in most of the rest. Specifically, we also note
+that state augmentation allowed a significant step to be taken in closing the gap between unconstrained
+PPO return and PPO-Lagrangian in the Point-Goal2 and Car-Push2 environments, with increases of
+roughly an order of magnitude in each.
+4.3.2
+
+R EWARD SHAPING RESULTS AND SENSITIVITY TO REWARD SHAPING
+
+The most basic function of the proposed framework is to reduce constraint violations. Table 2 presents
+the mean and standard deviation of violations per 100 evaluation steps, episode length, and episode
+reward for reward shaping-enforced constraints with the choice of hyperparameters that produced
+the minimum number of violations for each environment/constraint pair in evaluation. We note that
+7
+
+Table 4: Mean per-episode MuJoCo rewards and violations with soft dense constraints and constraint
+state augmentation. Top row displays the reward shaping coefficient λ.
+Environment
+
+Half cheetah
+Reacher
+
+Reward Shaping Value
+
+Baseline
+
+Constraint
+
+−1
+
+0
+
+dithering
+actuation
+dynamic actuation
+
+−10
+
+−100
+
+−1000
+
+rewards
+
+violations
+
+rewards
+
+violations
+
+rewards
+
+violations
+
+rewards
+
+violations
+
+rewards
+
+violations
+
+rewards
+
+violations
+
+1555.30 ± 27.42
+
+82.84 ± 6.26
+0.61 ± 0.06
+0.00 ± 0.00
+
+1458.68 ± 32.23
+−6.28 ± 0.51
+−5.93 ± 1.67
+
+80.57 ± 5.74
+0.59 ± 0.04
+0.00 ± 0.00
+
+2054.84 ± 451.78
+−6.55 ± 0.98
+−5.69 ± 1.02
+
+73.06 ± 13.37
+0.02 ± 0.03
+0.00 ± 0.00
+
+2524.10 ± 436.68
+−5.28 ± 0.22
+−5.53 ± 1.32
+
+62.31 ± 11.25
+0.00 ± 0.00
+0.00 ± 0.00
+
+1495.21 ± 165.21
+−8.36 ± 0.40
+−4.75 ± 0.88
+
+43.27 ± 10.21
+0.00 ± 0.00
+0.00 ± 0.00
+
+639.00 ± 30.38
+−13.44 ± 0.61
+−11.40 ± 0.61
+
+16.73 ± 6.70
+0.00 ± 0.00
+0.00 ± 0.00
+
+−6.55 ± 0.94
+
+Table 5: Atari results with hard constraints, choosing hyperparameters which maximize reward when
+applying action shaping in training and evaluation, only in training, or only in evaluation.
+Training and Evaluation
+
+Training Only
+
+Evaluation Only
+
+Environment
+
+Constraint
+
+Mean
+Episode Reward
+
+Mean
+Viols/100 Steps
+
+Mean
+Episode Reward
+
+Mean
+Viols/100 Steps
+
+Mean
+Episode Reward
+
+Mean
+Viols/100 Steps
+
+Breakout
+
+actuation
+dithering
+paddle ball
+
+302.00 ± 20.75
+295.31 ± 29.07
+218.14 ± 22.85
+
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+
+320.31 ± 6.09
+276.72 ± 15.50
+281.77 ± 11.03
+
+0.092 ± 0.00026
+0.0073 ± 3.1e-05
+0.11 ± 0.00029
+
+314.91 ± 13.80
+275.25 ± 12.67
+229.00 ± 11.65
+
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+
+Seaquest
+
+actuation
+dithering
+
+1926.97 ± 430.24
+2284.78 ± 15.45
+
+0.0 ± 0.0
+0.0 ± 0.0
+
+1899.78 ± 502.27
+2256.06 ± 30.53
+
+8.30 ± 0.043
+0.01 ± 2.8e-05
+
+1895.77 ± 366.79
+2267.53 ± 23.94
+
+0.0 ± 0.0
+0.0 ± 0.0
+
+SpaceInvaders
+
+actuation
+dangerzone
+dithering
+
+586.66 ± 58.69
+613.61 ± 24.05
+627.40 ± 31.43
+
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+
+582.79 ± 51.47
+733.52 ± 16.95
+624.33 ± 25.27
+
+14.62 ± 0.012
+0.0 ± 0.0
+0.008 ± 3e-05
+
+583.13 ± 60.60
+613.82 ± 27.52
+626.59 ± 31.04
+
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+
+the highest value of reward shaping available is generally the best choice for minimizing constraint
+violations, which were often reduced by an order of magnitude or more from the baseline. Minimizing
+constraint violations has a small deleterious effect on mean episode reward, but because mean reward
+per step didn’t decrease, this implies that episodes were shorter as a result of constraint enforcement.
+In addition to minimizing constraint violations, we found that the application of soft constraints can
+also increase reward per episode. Table 3 presents results for soft constraints with the choice of
+hyperparameters that produced the maximum reward in each environment/constraint pair. In this case,
+lower reward shaping values perform best. The hyperparameter values that minimized constraint
+violations with the Breakout actuation and paddle ball constraints also maximized reward, implying
+that the objectives were correlated under those constraints. Table 4 presents results for soft constraints
+with constraint state augmentation in three MuJoCo environments. We find, similar to Atari, that
+there is one value of reward shaping that is most effective in each environment/constraint pair and
+that reward degrades smoothly as is shifted from the optimal value.
+4.3.3
+
+H ARD ACTION S HAPING R ESULTS
+
+Table 5 presents results for hard constraints with the hyperparameters that produced the maximum
+return for each environment/constraint pair. Results for cases where hard action shaping was only
+applied during training or only applied during evaluation are presented as well. There is a slight trend
+indicating that using action shaping at train time in addition to evaluation increases performance. For
+those constraints that are qualitatively observed to constrain adaptive behavior, performance rises
+when using hard shaping only in training, at the cost of allowing constraint violations.
+
+5
+
+D ISCUSSION
+
+The ability to specify MDP constraints in formal languages opens the possibility for using model
+checking (Kupferman et al., 2000; Bouajjani et al., 1997), agnostic to the choice of learning algorithm,
+to verify properties of a safety constraint. Formal language constraints might be learned from
+exploration, given a pre-specified safety objective, and, because of their explicitness, used without
+complication for downstream applications or verification. This makes formal language constraints
+particularly useful in multi-component, contract-based software systems (Meyer, 1992), where one
+or more components is learned using the MDP formalism.
+Experiments with more complex constraints are necessary to explore yet unaddressed challenges,
+the primary challenge being that the constraints used with action shaping in this work were all “best
+effort”, i.e., the allowed set of actions was never be empty. If this is not the case, lookahead might be
+required to guarantee zero constraint violations. Further, the tested hard constraints were only used
+with DQN, which provides a ranked choice over discrete actions. Future work might investigate how
+8
+
+to choose optimal actions which are not the first choice in the absence of ranked choice or an explicit
+fallback policy.
+
+9
+
+R EFERENCES
+Mohammed Alshiekh, Roderick Bloem, Rüdiger Ehlers, Bettina Könighofer, Scott Niekum, and Ufuk
+Topcu. Safe reinforcement learning via shielding. In Proceedings of AAAI 18, pp. 2669–2678,
+2018.
+Eitan Altman. Constrained Markov decision processes, volume 7. CRC Press, 1999.
+Dario Amodei, Chris Olah, Jacob Steinhardt, Paul Christiano, John Schulman, and Dan Mané.
+Concrete problems in AI safety. arXiv preprint arXiv:1606.06565, 2016.
+N. Aréchiga and B. Krogh. Using verified control envelopes for safe controller design. In 2014
+American Control Conference, pp. 2918–2923, June 2014.
+Christel Baier, Boudewijn Haverkort, Holger Hermanns, and Joost-Pieter Katoen. Model-checking
+algorithms for continuous-time Markov chains. IEEE Transactions on software engineering, (6):
+524–541, 2003.
+M. G. Bellemare, Y. Naddaf, J. Veness, and M. Bowling. The arcade learning environment: An
+evaluation platform for general agents. Journal of Artificial Intelligence Research, 47:253–279,
+jun 2013.
+Ahmed Bouajjani, Javier Esparza, and Oded Maler. Reachability analysis of pushdown automata:
+Application to model-checking. In International Conference on Concurrency Theory, pp. 135–150.
+Springer, 1997.
+Greg Brockman, Vicki Cheung, Ludwig Pettersson, Jonas Schneider, John Schulman, Jie Tang, and
+Wojciech Zaremba. OpenAI gym. arXiv preprint arXiv:1606.01540, 2016.
+Alberto Camacho, Oscar Chen, Scott Sanner, and Sheila A. McIlraith. Non-markovian rewards
+expressed in LTL: guiding search via reward shaping. In Proceedings of the Tenth International
+Symposium on Combinatorial Search, SOCS 2017, 16-17 June 2017, Pittsburgh, Pennsylvania,
+USA., pp. 159–160, 2017a.
+Alberto Camacho, Oscar Chen, Scott Sanner, and Sheila A McIlraith. Decision-making with
+non-markovian rewards: From LTL to automata-based reward shaping. In Proceedings of the
+Multi-disciplinary Conference on Reinforcement Learning and Decision Making (RLDM), pp.
+279–283, 2017b.
+Feng Chen and Grigore Roşu. Mop: An efficient and generic runtime verification framework. In
+Proceedings of the 22Nd Annual ACM SIGPLAN Conference on Object-oriented Programming
+Systems and Applications, OOPSLA ’07, 2007.
+Yinlam Chow, Mohammad Ghavamzadeh, Lucas Janson, and Marco Pavone. Risk-constrained
+reinforcement learning with percentile risk criteria. The Journal of Machine Learning Research,
+18(1):6070–6120, 2017.
+Edmund M. Clarke, Orna Grumberg, and Doron A. Peled. Model checking. MIT Press, 2001. ISBN
+978-0-262-03270-4.
+Gal Dalal, Krishnamurthy Dvijotham, Matej Vecerik, Todd Hester, Cosmin Paduraru, and Yuval
+Tassa. Safe exploration in continuous action spaces. arXiv preprint arXiv:1801.08757, 2018.
+Giuseppe De Giacomo, Marco Favorito, Luca Iocchi, Fabio Patrizi, and Alessandro Ronca. Temporal
+logic monitoring rewards via transducers. 2020.
+Prafulla Dhariwal, Christopher Hesse, Oleg Klimov, Alex Nichol, Matthias Plappert, Alec Radford,
+John Schulman, Szymon Sidor, Yuhuai Wu, and Peter Zhokhov. OpenAI baselines. https:
+//github.com/openai/baselines, 2017.
+Mohammadhosein Hasanbeig, Alessandro Abate, and Daniel Kroening. Logically-constrained neural
+fitted q-iteration. CoRR, abs/1809.07823, 2018.
+Richard Helm, Ian M Holland, and Dipayan Gangopadhyay. Contracts: specifying behavioral
+compositions in object-oriented systems. ACM Sigplan Notices, 25(10):169–180, 1990.
+10
+
+Michael Huth and Marta Z. Kwiatkowska. Quantitative analysis and model checking. In Proceedings,
+12th Annual IEEE Symposium on Logic in Computer Science, Warsaw, Poland, June 29 - July 2,
+1997, pp. 111–122, 1997.
+Rodrigo Toro Icarte, Toryn Q. Klassen, Richard Anthony Valenzano, and Sheila A. McIlraith.
+Teaching multiple tasks to an RL agent using LTL. In Proceedings of the 17th International
+Conference on Autonomous Agents and MultiAgent Systems, AAMAS 2018, Stockholm, Sweden,
+July 10-15, 2018, pp. 452–461, 2018a.
+Rodrigo Toro Icarte, Toryn Q. Klassen, Richard Anthony Valenzano, and Sheila A. McIlraith.
+Using reward machines for high-level task specification and decomposition in reinforcement
+learning. In Proceedings of the 35th International Conference on Machine Learning, ICML 2018,
+Stockholmsmässan, Stockholm, Sweden, July 10-15, 2018, pp. 2112–2121, 2018b.
+Nils Jansen, Bettina Könighofer, Sebastian Junges, and Roderick Bloem. Shielded decision-making
+in mdps. arXiv preprint arXiv:1807.06096, 2018.
+Orna Kupferman, Moshe Y Vardi, and Pierre Wolper. An automata-theoretic approach to branchingtime model checking. Journal of the ACM (JACM), 47(2):312–360, 2000.
+Marta Kwiatkowska, Gethin Norman, and David Parker. Prism: Probabilistic symbolic model checker.
+In International Conference on Modelling Techniques and Tools for Computer Performance
+Evaluation, pp. 200–204. Springer, 2002.
+Xiao Li, Cristian Ioan Vasile, and Calin Belta. Reinforcement learning with temporal logic rewards. In
+2017 IEEE/RSJ International Conference on Intelligent Robots and Systems, IROS 2017, Vancouver,
+BC, Canada, September 24-28, 2017, pp. 3834–3839, 2017.
+Xiao Li, Yao Ma, and Calin Belta. Automata guided reinforcement learning with demonstrations.
+CoRR, abs/1809.06305, 2018.
+Michael L. Littman, Ufuk Topcu, Jie Fu, Charles Lee Isbell Jr., Min Wen, and James MacGlashan.
+Environment-independent task specifications via GLTL. CoRR, abs/1704.04341, 2017.
+Bertrand Meyer. Applying ‘design by contract’. Computer, 25(10):40–51, 1992.
+Seyed Sajad Mousavi, Behzad Ghazanfari, Nasser Mozayani, and Mohammad Reza Jahed-Motlagh.
+Automatic abstraction controller in reinforcement learning agent via automata. Appl. Soft Comput.,
+25:118–128, 2014.
+Andrew Y. Ng, Daishi Harada, and Stuart J. Russell. Policy invariance under reward transformations:
+Theory and application to reward shaping. In Proceedings of the Sixteenth International Conference
+on Machine Learning (ICML 1999), Bled, Slovenia, June 27 - 30, 1999, pp. 278–287, 1999.
+Tu-Hoa Pham, Giovanni De Magistris, and Ryuki Tachibana. Optlayer-practical constrained optimization for deep reinforcement learning in the real world. In 2018 IEEE International Conference
+on Robotics and Automation (ICRA), pp. 6236–6243. IEEE, 2018.
+Alex Ray, Joshua Achiam, and Dario Amodei. Benchmarking safe exploration in deep reinforcement
+learning. arXiv preprint arXiv:1910.01708, 2019.
+William Saunders, Girish Sastry, Andreas Stuhlmueller, and Owain Evans. Trial without error:
+Towards safe reinforcement learning via human intervention. arXiv preprint arXiv:1707.05173,
+2017.
+John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy
+optimization algorithms. arXiv preprint arXiv:1707.06347, 2017.
+Richard S Sutton and Andrew G Barto. Reinforcement learning: An introduction. MIT press, 2018.
+Stéfan van der Walt, Johannes L. Schönberger, Juan Nunez-Iglesias, François Boulogne, Joshua D.
+Warner, Neil Yager, Emmanuelle Gouillart, Tony Yu, and the scikit-image contributors. scikitimage: image processing in Python. PeerJ, 2:e453, 6 2014. ISSN 2167-8359. doi: 10.7717/peerj.
+453. URL https://doi.org/10.7717/peerj.453.
+11
+
+Min Wen, Ivan Papusha, and Ufuk Topcu. Learning from demonstrations with high-level side
+information. In Proceedings of the Twenty-Sixth International Joint Conference on Artificial
+Intelligence, IJCAI 2017, Melbourne, Australia, August 19-25, 2017, pp. 3055–3061, 2017.
+Eric Wiewiora, Garrison W Cottrell, and Charles Elkan. Principled methods for advising reinforcement learning agents. In Proceedings of the 20th International Conference on Machine Learning
+(ICML-03), pp. 792–799, 2003.
+
+12
+
+A
+A.1
+
+AGENT AND E NVIRONMENT D ETAILS
+ATARI
+
+We used the OpenAI Baselines implementation of DQN with default settings with all Atari environments. The only modification to the model was the concatenation of any state augmentation
+(where employed) with the output of the convolutional layers. From a previous set of experiments,
+we found that the use of prioritized replay dramatically shrinks the optimal values of the reward
+shaping coefficient, but that the optimal choice is still strongly based on the choice of environment.
+We hypothesize that this is largely due to the differing MDP dynamics and reward frequency.
+A.2
+
+MUJOCO
+
+We used the unmodified OpenAI baselines implementation of PPO in all MuJoCo environments,
+simply appending any state augmentation to the MDP observation as input to the model.
+
+B
+B.1
+
+C ONSTRAINTS AND T RANSLATION F UNCTIONS
+ATARI B REAKOUT PADDLE BALL D ISTANCE
+
+We designed the “paddle ball distance” constraint for the Breakout environment. The translation
+function uses the last frame from each environment observation and calculates, using rudimentary
+computer vision provided by scikit-image van der Walt et al. (2014), the horizontal distance between
+the center of the ball and the center of the paddle. Then, if the paddle was too far to the left relative to
+the ball and the “move right” action wasn’t taken that frame, the “L” token is output and similar for
+the “R” token. Otherwise, if the ball is outside the area under the bricks or no other token is output, a
+zero token is output.
+The constraint is a simple counter that increments an L counter for each successive L token and
+similar for R and accepts on 3 successive, identical tokens. Receiving a zero token or a token from
+the other direction resets each counter.
+We chose 10 pixels as the maximum allowed distance between ball and paddle under this constraint,
+but this turned out to be too restrictive for good performance under hard constraints.
+B.2
+
+ATARI : S PACE I NVADERS
+
+The translation function for “dangerzone” uses scikit-learn to find the position of each downwardtravelling bullet fired by enemies in the area immediately above the player’s ship, as well as the
+position of the player’s ship. Then, it calculates the distance between the closest bullet and the ship,
+as well as whether the bullet is to the right, left, or above the ship. Each token is a concatenation of
+the direction of the bullet (left, right, or above) and a discretization of the distance (x ≤ 12 pixels,
+12 < x ≤ 24 pixels, or x > 24 pixels).
+The constraint is violated if a bullet is at the closest distance, < 12 pixels, and an action to dodge isn’t
+taken, i.e., moving right from a bullet to the left, moving left from a bullet on the right, or moving in
+either direction from a bullet above.
+B.3
+
+M U J O C O : R EACHER
+
+Two related constraints were explored in the Reacher environment: an actuation constraint similar to
+those presented in Atari, and a dynamic actuation constraint that was modified to take the relative
+position of the ball to the goal into account. The translation function each used discretizes the action
+in increments of 0.2. Each used a DFA to track the sum of actuation values which accepts, if the sum
+over 3 timesteps is greater than a threshold of 4.0. In the dynamic reacher constraint, the acceptance
+threshold varies by how close the goal is.
+13
+
+B.4
+
+M U J O C O : H ALF C HEETAH
+
+The Half Cheetah environment uses the one dimensional no-dithering constraint (similar to Atari) on
+each of the six joints of the simulated robot. The translation function discretizes positive and negative
+joint forces to be right and left, respectively.
+
+C
+
+S AFETY G YM R EWARD S HAPING P LOTS
+
+Figure 3: Performance/Conformance curves for CarButton environments, with Pareto frontiers plotter
+per reward shaping method.
+
+Figure 4: Performance/Conformance curves for CarGoal environments, with Pareto frontiers plotted
+per reward shaping method.
+
+Figure 5: Performance/Conformance curves for DoggoButton environments, with Pareto frontiers
+plotted per reward shaping method.
+
+14
+
+Figure 6: Performance/Conformance curves for DoggoGoal environments, with Pareto frontiers
+plotted per reward shaping method.
+
+Figure 7: Performance/Conformance curves for PointButton environments, with Pareto frontiers
+plotted per reward shaping method.
+
+Figure 8: Performance/Conformance curves for PointGoal environments, with Pareto frontiers plotted
+per reward shaping method.
+
+D
+
+F ULL 2D N O -D ITHERING R EGEX
+
+The no-2d-dithering constraint used with the Seaquest environment was generated by a simple Python
+script which generated all sequences of up to 4 moves and filtered them to those which end where
+they begin with no side effects (e.g., pressing the fire button).
+((2|A)(2|A)(5|D)(5|D))|((2|A)(5|D)(2|A)(5|D))|((2|A)(5|D)(5|D)(2|A
+))|((5|D)(2|A)(2|A)(5|D))|((5|D)(2|A)(5|D)(2|A))|((5|D)(5|D)(2|A)(
+2|A))|((2|A)(2|A)(8|G)(9|H))|((2|A)(2|A)(9|H)(8|G))|((2|A)(8|G)(2|
+15
+
+A)(9|H))|((2|A)(8|G)(9|H)(2|A))|((2|A)(9|H)(2|A)(8|G))|((2|A)(9|H)
+(8|G)(2|A))|((8|G)(2|A)(2|A)(9|H))|((8|G)(2|A)(9|H)(2|A))|((8|G)(9
+|H)(2|A)(2|A))|((9|H)(2|A)(2|A)(8|G))|((9|H)(2|A)(8|G)(2|A))|((9|H
+)(8|G)(2|A)(2|A))|((2|A)(3|B)(4|C)(5|D))|((2|A)(3|B)(5|D)(4|C))|((
+2|A)(4|C)(3|B)(5|D))|((2|A)(4|C)(5|D)(3|B))|((2|A)(5|D)(3|B)(4|C))
+|((2|A)(5|D)(4|C)(3|B))|((3|B)(2|A)(4|C)(5|D))|((3|B)(2|A)(5|D)(4|
+C))|((3|B)(4|C)(2|A)(5|D))|((3|B)(4|C)(5|D)(2|A))|((3|B)(5|D)(2|A)
+(4|C))|((3|B)(5|D)(4|C)(2|A))|((4|C)(2|A)(3|B)(5|D))|((4|C)(2|A)(5
+|D)(3|B))|((4|C)(3|B)(2|A)(5|D))|((4|C)(3|B)(5|D)(2|A))|((4|C)(5|D
+)(2|A)(3|B))|((4|C)(5|D)(3|B)(2|A))|((5|D)(2|A)(3|B)(4|C))|((5|D)(
+2|A)(4|C)(3|B))|((5|D)(3|B)(2|A)(4|C))|((5|D)(3|B)(4|C)(2|A))|((5|
+D)(4|C)(2|A)(3|B))|((5|D)(4|C)(3|B)(2|A))|((2|A)(3|B)(9|H))|((2|A)
+(3|B)(9|H))|((2|A)(9|H)(3|B))|((2|A)(9|H)(3|B))|((2|A)(3|B)(9|H))|
+((2|A)(9|H)(3|B))|((3|B)(2|A)(9|H))|((3|B)(2|A)(9|H))|((3|B)(9|H)(
+2|A))|((3|B)(9|H)(2|A))|((3|B)(2|A)(9|H))|((3|B)(9|H)(2|A))|((9|H)
+(2|A)(3|B))|((9|H)(2|A)(3|B))|((9|H)(3|B)(2|A))|((9|H)(3|B)(2|A))|
+((9|H)(2|A)(3|B))|((9|H)(3|B)(2|A))|((2|A)(3|B)(9|H))|((2|A)(9|H)(
+3|B))|((3|B)(2|A)(9|H))|((3|B)(9|H)(2|A))|((9|H)(2|A)(3|B))|((9|H)
+(3|B)(2|A))|((2|A)(4|C)(8|G))|((2|A)(4|C)(8|G))|((2|A)(8|G)(4|C))|
+((2|A)(8|G)(4|C))|((2|A)(4|C)(8|G))|((2|A)(8|G)(4|C))|((4|C)(2|A)(
+8|G))|((4|C)(2|A)(8|G))|((4|C)(8|G)(2|A))|((4|C)(8|G)(2|A))|((4|C)
+(2|A)(8|G))|((4|C)(8|G)(2|A))|((8|G)(2|A)(4|C))|((8|G)(2|A)(4|C))|
+((8|G)(4|C)(2|A))|((8|G)(4|C)(2|A))|((8|G)(2|A)(4|C))|((8|G)(4|C)(
+2|A))|((2|A)(4|C)(8|G))|((2|A)(8|G)(4|C))|((4|C)(2|A)(8|G))|((4|C)
+(8|G)(2|A))|((8|G)(2|A)(4|C))|((8|G)(4|C)(2|A))|((2|A)(5|D)(6|E)(9
+|H))|((2|A)(5|D)(9|H)(6|E))|((2|A)(6|E)(5|D)(9|H))|((2|A)(6|E)(9|H
+)(5|D))|((2|A)(9|H)(5|D)(6|E))|((2|A)(9|H)(6|E)(5|D))|((5|D)(2|A)(
+6|E)(9|H))|((5|D)(2|A)(9|H)(6|E))|((5|D)(6|E)(2|A)(9|H))|((5|D)(6|
+E)(9|H)(2|A))|((5|D)(9|H)(2|A)(6|E))|((5|D)(9|H)(6|E)(2|A))|((6|E)
+(2|A)(5|D)(9|H))|((6|E)(2|A)(9|H)(5|D))|((6|E)(5|D)(2|A)(9|H))|((6
+|E)(5|D)(9|H)(2|A))|((6|E)(9|H)(2|A)(5|D))|((6|E)(9|H)(5|D)(2|A))|
+((9|H)(2|A)(5|D)(6|E))|((9|H)(2|A)(6|E)(5|D))|((9|H)(5|D)(2|A)(6|E
+))|((9|H)(5|D)(6|E)(2|A))|((9|H)(6|E)(2|A)(5|D))|((9|H)(6|E)(5|D)(
+2|A))|((2|A)(5|D)(7|F)(8|G))|((2|A)(5|D)(8|G)(7|F))|((2|A)(7|F)(5|
+D)(8|G))|((2|A)(7|F)(8|G)(5|D))|((2|A)(8|G)(5|D)(7|F))|((2|A)(8|G)
+(7|F)(5|D))|((5|D)(2|A)(7|F)(8|G))|((5|D)(2|A)(8|G)(7|F))|((5|D)(7
+|F)(2|A)(8|G))|((5|D)(7|F)(8|G)(2|A))|((5|D)(8|G)(2|A)(7|F))|((5|D
+)(8|G)(7|F)(2|A))|((7|F)(2|A)(5|D)(8|G))|((7|F)(2|A)(8|G)(5|D))|((
+7|F)(5|D)(2|A)(8|G))|((7|F)(5|D)(8|G)(2|A))|((7|F)(8|G)(2|A)(5|D))
+|((7|F)(8|G)(5|D)(2|A))|((8|G)(2|A)(5|D)(7|F))|((8|G)(2|A)(7|F)(5|
+D))|((8|G)(5|D)(2|A)(7|F))|((8|G)(5|D)(7|F)(2|A))|((8|G)(7|F)(2|A)
+(5|D))|((8|G)(7|F)(5|D)(2|A))|((2|A)(5|D))|((2|A)(5|D))|((2|A)(5|D
+))|((5|D)(2|A))|((5|D)(2|A))|((5|D)(2|A))|((2|A)(5|D))|((2|A)(5|D)
+)|((5|D)(2|A))|((5|D)(2|A))|((2|A)(5|D))|((5|D)(2|A))|((3|B)(3|B)(
+4|C)(4|C))|((3|B)(4|C)(3|B)(4|C))|((3|B)(4|C)(4|C)(3|B))|((4|C)(3|
+B)(3|B)(4|C))|((4|C)(3|B)(4|C)(3|B))|((4|C)(4|C)(3|B)(3|B))|((3|B)
+(3|B)(7|F)(9|H))|((3|B)(3|B)(9|H)(7|F))|((3|B)(7|F)(3|B)(9|H))|((3
+|B)(7|F)(9|H)(3|B))|((3|B)(9|H)(3|B)(7|F))|((3|B)(9|H)(7|F)(3|B))|
+((7|F)(3|B)(3|B)(9|H))|((7|F)(3|B)(9|H)(3|B))|((7|F)(9|H)(3|B)(3|B
+))|((9|H)(3|B)(3|B)(7|F))|((9|H)(3|B)(7|F)(3|B))|((9|H)(7|F)(3|B)(
+3|B))|((3|B)(4|C)(6|E)(9|H))|((3|B)(4|C)(9|H)(6|E))|((3|B)(6|E)(4|
+C)(9|H))|((3|B)(6|E)(9|H)(4|C))|((3|B)(9|H)(4|C)(6|E))|((3|B)(9|H)
+(6|E)(4|C))|((4|C)(3|B)(6|E)(9|H))|((4|C)(3|B)(9|H)(6|E))|((4|C)(6
+|E)(3|B)(9|H))|((4|C)(6|E)(9|H)(3|B))|((4|C)(9|H)(3|B)(6|E))|((4|C
+)(9|H)(6|E)(3|B))|((6|E)(3|B)(4|C)(9|H))|((6|E)(3|B)(9|H)(4|C))|((
+6|E)(4|C)(3|B)(9|H))|((6|E)(4|C)(9|H)(3|B))|((6|E)(9|H)(3|B)(4|C))
+|((6|E)(9|H)(4|C)(3|B))|((9|H)(3|B)(4|C)(6|E))|((9|H)(3|B)(6|E)(4|
+C))|((9|H)(4|C)(3|B)(6|E))|((9|H)(4|C)(6|E)(3|B))|((9|H)(6|E)(3|B)
+(4|C))|((9|H)(6|E)(4|C)(3|B))|((3|B)(4|C)(7|F)(8|G))|((3|B)(4|C)(8
+16
+
+|G)(7|F))|((3|B)(7|F)(4|C)(8|G))|((3|B)(7|F)(8|G)(4|C))|((3|B)(8|G
+)(4|C)(7|F))|((3|B)(8|G)(7|F)(4|C))|((4|C)(3|B)(7|F)(8|G))|((4|C)(
+3|B)(8|G)(7|F))|((4|C)(7|F)(3|B)(8|G))|((4|C)(7|F)(8|G)(3|B))|((4|
+C)(8|G)(3|B)(7|F))|((4|C)(8|G)(7|F)(3|B))|((7|F)(3|B)(4|C)(8|G))|(
+(7|F)(3|B)(8|G)(4|C))|((7|F)(4|C)(3|B)(8|G))|((7|F)(4|C)(8|G)(3|B)
+)|((7|F)(8|G)(3|B)(4|C))|((7|F)(8|G)(4|C)(3|B))|((8|G)(3|B)(4|C)(7
+|F))|((8|G)(3|B)(7|F)(4|C))|((8|G)(4|C)(3|B)(7|F))|((8|G)(4|C)(7|F
+)(3|B))|((8|G)(7|F)(3|B)(4|C))|((8|G)(7|F)(4|C)(3|B))|((3|B)(4|C))
+|((3|B)(4|C))|((3|B)(4|C))|((4|C)(3|B))|((4|C)(3|B))|((4|C)(3|B))|
+((3|B)(4|C))|((3|B)(4|C))|((4|C)(3|B))|((4|C)(3|B))|((3|B)(4|C))|(
+(4|C)(3|B))|((3|B)(5|D)(7|F))|((3|B)(5|D)(7|F))|((3|B)(7|F)(5|D))|
+((3|B)(7|F)(5|D))|((3|B)(5|D)(7|F))|((3|B)(7|F)(5|D))|((5|D)(3|B)(
+7|F))|((5|D)(3|B)(7|F))|((5|D)(7|F)(3|B))|((5|D)(7|F)(3|B))|((5|D)
+(3|B)(7|F))|((5|D)(7|F)(3|B))|((7|F)(3|B)(5|D))|((7|F)(3|B)(5|D))|
+((7|F)(5|D)(3|B))|((7|F)(5|D)(3|B))|((7|F)(3|B)(5|D))|((7|F)(5|D)(
+3|B))|((3|B)(5|D)(7|F))|((3|B)(7|F)(5|D))|((5|D)(3|B)(7|F))|((5|D)
+(7|F)(3|B))|((7|F)(3|B)(5|D))|((7|F)(5|D)(3|B))|((4|C)(4|C)(6|E)(8
+|G))|((4|C)(4|C)(8|G)(6|E))|((4|C)(6|E)(4|C)(8|G))|((4|C)(6|E)(8|G
+)(4|C))|((4|C)(8|G)(4|C)(6|E))|((4|C)(8|G)(6|E)(4|C))|((6|E)(4|C)(
+4|C)(8|G))|((6|E)(4|C)(8|G)(4|C))|((6|E)(8|G)(4|C)(4|C))|((8|G)(4|
+C)(4|C)(6|E))|((8|G)(4|C)(6|E)(4|C))|((8|G)(6|E)(4|C)(4|C))|((4|C)
+(5|D)(6|E))|((4|C)(5|D)(6|E))|((4|C)(6|E)(5|D))|((4|C)(6|E)(5|D))|
+((4|C)(5|D)(6|E))|((4|C)(6|E)(5|D))|((5|D)(4|C)(6|E))|((5|D)(4|C)(
+6|E))|((5|D)(6|E)(4|C))|((5|D)(6|E)(4|C))|((5|D)(4|C)(6|E))|((5|D)
+(6|E)(4|C))|((6|E)(4|C)(5|D))|((6|E)(4|C)(5|D))|((6|E)(5|D)(4|C))|
+((6|E)(5|D)(4|C))|((6|E)(4|C)(5|D))|((6|E)(5|D)(4|C))|((4|C)(5|D)(
+6|E))|((4|C)(6|E)(5|D))|((5|D)(4|C)(6|E))|((5|D)(6|E)(4|C))|((6|E)
+(4|C)(5|D))|((6|E)(5|D)(4|C))|((5|D)(5|D)(6|E)(7|F))|((5|D)(5|D)(7
+|F)(6|E))|((5|D)(6|E)(5|D)(7|F))|((5|D)(6|E)(7|F)(5|D))|((5|D)(7|F
+)(5|D)(6|E))|((5|D)(7|F)(6|E)(5|D))|((6|E)(5|D)(5|D)(7|F))|((6|E)(
+5|D)(7|F)(5|D))|((6|E)(7|F)(5|D)(5|D))|((7|F)(5|D)(5|D)(6|E))|((7|
+F)(5|D)(6|E)(5|D))|((7|F)(6|E)(5|D)(5|D))|((6|E)(6|E)(9|H)(9|H))|(
+(6|E)(9|H)(6|E)(9|H))|((6|E)(9|H)(9|H)(6|E))|((9|H)(6|E)(6|E)(9|H)
+)|((9|H)(6|E)(9|H)(6|E))|((9|H)(9|H)(6|E)(6|E))|((6|E)(7|F)(8|G)(9
+|H))|((6|E)(7|F)(9|H)(8|G))|((6|E)(8|G)(7|F)(9|H))|((6|E)(8|G)(9|H
+)(7|F))|((6|E)(9|H)(7|F)(8|G))|((6|E)(9|H)(8|G)(7|F))|((7|F)(6|E)(
+8|G)(9|H))|((7|F)(6|E)(9|H)(8|G))|((7|F)(8|G)(6|E)(9|H))|((7|F)(8|
+G)(9|H)(6|E))|((7|F)(9|H)(6|E)(8|G))|((7|F)(9|H)(8|G)(6|E))|((8|G)
+(6|E)(7|F)(9|H))|((8|G)(6|E)(9|H)(7|F))|((8|G)(7|F)(6|E)(9|H))|((8
+|G)(7|F)(9|H)(6|E))|((8|G)(9|H)(6|E)(7|F))|((8|G)(9|H)(7|F)(6|E))|
+((9|H)(6|E)(7|F)(8|G))|((9|H)(6|E)(8|G)(7|F))|((9|H)(7|F)(6|E)(8|G
+))|((9|H)(7|F)(8|G)(6|E))|((9|H)(8|G)(6|E)(7|F))|((9|H)(8|G)(7|F)(
+6|E))|((6|E)(9|H))|((6|E)(9|H))|((6|E)(9|H))|((9|H)(6|E))|((9|H)(6
+|E))|((9|H)(6|E))|((6|E)(9|H))|((6|E)(9|H))|((9|H)(6|E))|((9|H)(6|
+E))|((6|E)(9|H))|((9|H)(6|E))|((7|F)(7|F)(8|G)(8|G))|((7|F)(8|G)(7
+|F)(8|G))|((7|F)(8|G)(8|G)(7|F))|((8|G)(7|F)(7|F)(8|G))|((8|G)(7|F
+)(8|G)(7|F))|((8|G)(8|G)(7|F)(7|F))|((7|F)(8|G))|((7|F)(8|G))|((7|
+F)(8|G))|((8|G)(7|F))|((8|G)(7|F))|((8|G)(7|F))|((7|F)(8|G))|((7|F
+)(8|G))|((8|G)(7|F))|((8|G)(7|F))|((7|F)(8|G))|((8|G)(7|F))
+
+17
+
+
