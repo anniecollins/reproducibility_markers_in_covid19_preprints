@@ -25,13 +25,13 @@ citation('aRxiv')
 #### Get metadata ####
 # Get count of number of papers using the same terms as before
 arxiv_count('all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2"')
-# Result on 22 May is: 4,054
+# Result on 22 May is: 4,352
 
 # All records up to 1 May, 2021
-arxiv_count('submittedDate:[20200101* TO 20210501*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# Result on 22 May is: 3,932
+arxiv_count('submittedDate:[20200101* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
+# Result on 22 May is: 4281
 
-arxiv_results <- arxiv_search(query = 'submittedDate:[20200101* TO 20210501*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2)"',
+arxiv_results <- arxiv_search(query = 'submittedDate:[20200101* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2)"',
                     limit = 5000,
                     batchsize = 500)
 
@@ -72,14 +72,14 @@ arxiv_result_april_to_aug_iiii <-
                start = 1700)
 
 # Spetember 2020 to May 2021 (present)
-arxiv_count('submittedDate:[20200901* TO 20210501*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
+arxiv_count('submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
 # There are 1829 to get
 arxiv_result_sep_to_today <- 
-  arxiv_search(query = 'submittedDate:[20200901* TO 20210501*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
+  arxiv_search(query = 'submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
                limit = 3500)
 arxiv_result_sep_to_today_ii <- 
-  arxiv_search(query = 'submittedDate:[20200901* TO 20210501*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
+  arxiv_search(query = 'submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
                start = 400,
                limit = 3500)
@@ -249,7 +249,7 @@ oddpub::pdf_convert(arxiv_pdf_folder, arxiv_txt_folder)
 arxiv_count('submittedDate:[20190101* TO 20191231*]')
 # Result on 22 May is: 155,455
 
-arxiv_results <- arxiv_search(query = 'submittedDate:[20190101* TO 20210501*]',
+arxiv_results <- arxiv_search(query = 'submittedDate:[20190101* TO 20210630*]',
                               limit = 5000,
                               batchsize = 500)
 

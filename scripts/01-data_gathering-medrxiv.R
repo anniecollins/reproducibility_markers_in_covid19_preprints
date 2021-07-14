@@ -32,7 +32,7 @@ med_data_2019 <- med_data %>% filter(date <= "2019-12-31")
 
 # Search database for COVID-19-related articles by keyword across title, abstract, and category. Sort results from oldest to newest.
 # Output exclude duplicate title, abstract, and DOI
-med_data <- med_data %>% filter(date >= "2019-12-01", date <= "2021-05-01")
+med_data <- med_data %>% filter(date >= "2019-12-01", date <= "2021-06-30")
 med_results <- mx_search(data = med_data, query = c("COVID-19",
                                                     "COVID 19",
                                                     "covid-19",
@@ -47,7 +47,7 @@ med_results <- mx_search(data = med_data, query = c("COVID-19",
                                                     "Corona Virus",
                                                     "coronavirus", 
                                                     "2019-nCoV",
-                                                    "coronavirus-2"), auto_caps = TRUE) # n = 12,060
+                                                    "coronavirus-2"), auto_caps = TRUE) # n = 13,194
 med_results <- med_results[order(med_results$date),]
 
 # Save results - this is sampling frame (info for all medRxiv COVID-19 papers)
@@ -70,13 +70,20 @@ write_csv(med_sample, "outputs/data/med_sample.csv")
 med_pdf_folder = paste0(getwd(), "/outputs/data/pdf-medRxiv")
 med_txt_folder = paste0(getwd(), "/outputs/data/text-medRxiv")
 
-# Download first 500 papers and latest 500 and save to computer
-# head(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
-# tail(med_results, 500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
+downloaded_pdf <- list.files("outputs/data/pdf-medRxiv")
+downloaded_txt <- list.files("outputs/data/text-medRxiv")
+# Remove files not in sample
+pdf_file <- downloaded_pdf[!str_sub(downloaded_pdf, start = -23, end = -5) %in% str_sub(med_sample$doi, start=9)]
+txt_file <- downloaded_txt[!str_sub(downloaded_txt, start = 15) %in% paste0(str_sub(med_sample$doi, start=9), ".txt")]
+file.remove(paste0(getwd(), "/outputs/data/pdf-medrxiv/", pdf_file))
+file.remove(paste0(getwd(), "/outputs/data/text-medrxiv/", txt_file))
+
+downloaded_pdf <- list.files("outputs/data/pdf-medRxiv")
+get_covid_med_results <- med_sample %>% filter(!str_sub(doi, start=9) %in% str_sub(downloaded_pdf, start = 15, end = -5))
 
 # Download randomly sampled PDFs (will not)
 # Stopped at row 1067 (broken URL?); added slice to skip entry after pause
-med_sample %>% slice(1068:1500) %>% mx_download(directory = med_pdf_folder, create = FALSE)
+get_covid_med_results %>% mx_download(directory = med_pdf_folder, create = FALSE)
 
 # Convert PDFs to text and saves in new folder
 pdf_convert(med_pdf_folder, med_txt_folder)
@@ -84,14 +91,14 @@ pdf_convert(med_pdf_folder, med_txt_folder)
 # PROBLEM: some PDFs won't convert to text
 downloaded_pdf <- list.files("outputs/data/pdf-medRxiv")
 downloaded_txt <- list.files("outputs/data/text-medRxiv")
-not_working <- med_sample %>% filter(!paste0(ID, "_10.1101_", str_sub(doi, start=9), ".txt") %in% downloaded_txt)
+not_working <- med_sample %>% filter(!paste0(str_sub(doi, start=9), ".txt") %in% str_sub(downloaded_txt, start = -23))
 # Remove file that isn't working
 pdf_file <- paste0(getwd(), "/outputs/data/pdf-medRxiv/", not_working$ID, "_10.1101_", str_sub(not_working$doi, start=9), ".pdf")
 file.remove(pdf_file)
 med_sample <- med_sample %>% filter(!doi %in% not_working$doi)
 
 # Sample new papers (may need to change seed if this step is repeated)
-set.seed(50)
+set.seed(51)
 medrxiv_sample_new <- med_results[sample(nrow(med_results), nrow(not_working)),]
 # Check that new papers are not currently in the sample
 # If line 99 returns any true values, repeat sample with different seed and check again
@@ -101,14 +108,12 @@ paste0(medrxiv_sample_new$ID, "_10.1101_", str_sub(medrxiv_sample_new$doi, start
 med_sample <- rbind(med_sample, medrxiv_sample_new)
 write_csv(med_sample, "outputs/data/med_sample.csv")
 # Re-download PDFs
-med_pdf_folder = paste0(getwd(), "/outputs/data/pdf-medRxiv")
+# med_pdf_folder = paste0(getwd(), "/outputs/data/pdf-medRxiv")
 med_txt_folder = paste0(getwd(), "/outputs/data/text-medRxiv")
-med_sample[1500,] %>% mx_download(directory = med_pdf_folder, create = FALSE)
+med_sample %>% mx_download(directory = med_pdf_folder, create = FALSE)
 
 # Convert PDFs (will not duplicte)
 pdf_convert(med_pdf_folder, med_txt_folder)
-
-
 
 
 

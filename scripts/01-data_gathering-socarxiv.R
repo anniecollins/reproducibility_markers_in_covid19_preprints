@@ -50,8 +50,8 @@ get_meta_data_socarxiv <-
 # Set up the dataset that we're going to walk though
 # Check how many pages of results exist at https://api.osf.io/v2/preprints/?filter%5Bprovider%5D=socarxiv&page= and adjust numeric range accordingly
 get_these <- 
-  tibble(number = c(1:811),
-         location  = paste0("inputs/socarxiv/", number, ".csv"))
+  tibble(number = c(1:39),   # Only the new stuff as July 13
+         location  = paste0("inputs/socarxiv/", number, "-July.csv"))
 
 safely_get_meta_data_socarxiv <- purrr::safely(get_meta_data_socarxiv)
 
@@ -127,7 +127,7 @@ write_csv(all_socarxiv_metadata, "outputs/all_socarxiv_metadata.csv")
 #### Download PDFs ####
 covid_socarxiv_metadata <- 
   all_socarxiv_metadata %>% 
-  filter(covid_flag == TRUE, date_created <= as.Date("2021-05-01")) # Take up to May 1, 2021
+  filter(covid_flag == TRUE, date_created <= as.Date("2021-06-30")) # Take up to May 1, 2021
 
 write_csv(covid_socarxiv_metadata, "outputs/data/socarxiv_results.csv")
 
@@ -158,7 +158,7 @@ get_covid_socarxiv_results <-
 safely_download_pdfs <- purrr::safely(download_pdfs)
 
 # Check what's already been downloaded
-already_got <- list.files(path = "/outputs/data/pdf-socarxiv", full.names = TRUE)
+already_got <- list.files(path = "outputs/data/pdf-socarxiv", full.names = TRUE)
 # Remove those rows
 get_covid_socarxiv_results <- 
   get_covid_socarxiv_results %>% 
@@ -205,19 +205,7 @@ downloaded_pdf <- list.files("outputs/data/pdf-socarxiv")
 downloaded_txt <- list.files("outputs/data/text-socarxiv")
 
 # for each pdf, cycle through all txt files, and if there is no key from sample that corresponds to the pdf, remove it
-docx_files <- data.frame()
-for (pdf in downloaded_pdf) {
-  x <- FALSE
-  for (txt in downloaded_txt) {
-    if(grepl(substr(txt, 1, 5), pdf)) {   # if there is a txt that matches the pdf, x is true
-      x <- TRUE     # doi in downloads
-    }
-  } 
-  if (!x) {  # if there is no txt that matches the pdf, remove it
-    file <- get_covid_socarxiv_results %>% filter(grepl(substr(pdf, 1, 5), link_pdf)) # Extract rows with pdf that's not converting
-    docx_files <- rbind(docx_files, file)
-  } 
-}
+docx_files <- get_covid_socarxiv_results %>% filter(!paste0(id, ".txt") %in% downloaded_txt)
 
 # Change save_name to refer to doc-socarxiv folder, create new save_name column to refer to text-socarxiv
 substr(docx_files$save_name, 14, 16) <- "doc"
@@ -236,7 +224,7 @@ docx_files <-
 
 # Download docs
 purrr::walk2(docx_files$link_pdf,
-             docx_files$save_name,
+             docx_files$link_doc,
              safely_download_pdfs)
 
 # NEXT: read in docx files, either convert to text and save, or figure out way to make into "sentences" object for processing

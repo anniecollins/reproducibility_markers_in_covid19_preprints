@@ -18,16 +18,20 @@
 library(oddpub)
 library(tidyverse)
 
+downloaded_txt <- list.files(path = paste0(getwd(), "/outputs/data/text-socarxiv"), full.names = TRUE) %>% as.data.frame()
+not_analyzed <- downloaded_txt %>% filter(!str_sub(downloaded_txt$., -9, -5) %in% socarxiv_open_data_results$id)
+walk2(not_analyzed, rep("/Users/AnniesMac/reproducibility-new/outputs/data/text-socarxiv2/", nrow(not_analyzed)), file.copy)
+
 # Load text files into list of string vectors for use in text mining algorithm.
 # Returns list of lists, with one list for each document (paper)
-socarxiv_text_sentences <- 
+socarxiv_open_data_results <- 
   oddpub::pdf_load(here::here("outputs/data/text-socarxiv/")) # Requires closing backslash
 
 #### Identify open data markers ####
 socarxiv_open_data_results <- 
-  oddpub::open_data_search(socarxiv_text_sentences)
+  oddpub::open_data_search(socarxiv_open_data_results)
 
-
+covid_socarxiv_metadata <- covid_socarxiv_metadata %>% filter(id %in% socarxiv_open_data_results$id)
 # DONE up to here, rest TODO
 
 # Join covid_socarxiv_metadata to socarxiv_open_data_results and save as socarxiv_open_data_results
@@ -39,11 +43,9 @@ socarxiv_open_data_results$is_open_code <- as.integer(socarxiv_open_data_results
 socarxiv_open_data_results$is_open_data <- as.integer(socarxiv_open_data_results$is_open_data)
 
 # TODO: Add variable for type of paper - "machine learning", "model"/"modeling", "simulation", "simulate"?
-
 # Save it 
 class(socarxiv_open_data_results)
 write_csv(socarxiv_open_data_results, 'outputs/data/socarxiv_open_data_results.csv')
-
 
 #### Summary statistics ####
 # Read in data
