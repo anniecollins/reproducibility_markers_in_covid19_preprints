@@ -20,8 +20,6 @@ library(tidyverse)
 # Returns list of lists, with one list for each document (paper)
 bio_text_sentences <- 
   oddpub::pdf_load(here::here("outputs/data/text-bioRxiv/")) # Requires closing backslash
-
-
 # TODO: Maybe want to change this to something else more mainstream.
 # Example starts here
 # install.packages("readtext")

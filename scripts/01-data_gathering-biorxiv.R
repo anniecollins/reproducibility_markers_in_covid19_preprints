@@ -24,8 +24,8 @@ library(oddpub)
 
 #### Get metadata ####
 # Download copy of current database
-dates_2020 <- seq.Date(from = as.Date("2019-12-01"), to = as.Date("2020-12-31"), by = 2)
-dates_2021 <- seq.Date(from = as.Date("2021-01-01"), to = as.Date("2021-05-01"), by = "d")
+dates_2020 <- seq.Date(from = as.Date("2020-01-01"), to = as.Date("2020-12-31"), by = 2)
+dates_2021 <- seq.Date(from = as.Date("2021-05-01"), to = as.Date("2021-06-30"), by = "d")
 bio_data <- mx_api_content(from_date = as.character(dates_2020[1]), to_date = as.character(dates_2020[2]), server = "biorxiv")
 i <- 2
 j <- 1
@@ -62,10 +62,15 @@ while (j < (length(dates_2021) - 1)) {
     j <- j + 1
   }
 }
+# TO HERE
+bio_data_original <- read_csv("outputs/data/bio_results.csv")
+bio_data <- rbind(bio_data_original, bio_data)
+bio_data <- bio_data %>% distinct(doi, .keep_all = TRUE)
+bio_data <- bio_data %>% filter(date < "2021-07-01" & year(date) > "2019")
 
 # Depending on j at end of loop may need to add in last few days of 2021 range manually (if dates_2020[j] is 2021-04-30, run following)
 # n = 101,654 (total) as of 23 May, 2021
-bio_data_next <- mx_api_content(from_date = as.character(dates_2021[j]), to_date = as.character(dates_2021[j+1]), server = "biorxiv")
+bio_data_next <- mx_api_content(from_date = as.character(dates_2021[j]), to_date = "2021-07-01", server = "biorxiv")
 bio_data <- rbind(bio_data, bio_data_next)
 
 # Raw stats as of 31 Jan, 2021
@@ -77,7 +82,7 @@ bio_results <- bio_data %>% filter(grepl("COVID-19|COVID 19|SARS-CoV-2|SARSCoV-2
                                      grepl("COVID-19|COVID 19|SARS-CoV-2|SARSCoV-2|novel corona virus|novel coronavirus|2019-nCoV|coronavirus-2", abstract, ignore.case = TRUE))
 
 # Sometimes a paper has multiple versions
-# Filter to only uniques and keep latest version of the paper (n = 3,714)
+# Filter to only uniques and keep latest version of the paper (n = 4,146)
 bio_results <- bio_results[order(bio_results$version, decreasing = TRUE),] %>% distinct(doi, .keep_all = TRUE)
 
 # Save results - this is sampling frame (info for all bioRxiv COVID-19 papers)
@@ -104,26 +109,12 @@ bio_txt_folder = paste0(getwd(), "/outputs/data/text-bioRxiv")
 # Use this if the bio_sample is changed but you want to keep any of the pdfs that are already saved locally so they don't have to be redownloaded
 downloaded_pdf <- list.files("outputs/data/pdf-bioRxiv")
 downloaded_txt <- list.files("outputs/data/text-bioRxiv")
-count <- 0
-# Take all but first 8 digits for each DOI in sample
-sub_doi <- substr(bio_sample$doi, start = 9, stop = 100)
-# for each pdf, cycle through all dois, and if there is no doi from sample that corresponds to the pdf, remove it
-for (pdf in downloaded_pdf) {
-  x <- FALSE
-  for (doi in sub_doi) {
-    if(grepl(doi, pdf)) {   # if there is a doi that matches the pdf, x is true
-      x <- TRUE     # doi in downloads
-    }
-  } 
-  if (!x) {  # if there is no doi that matches the pdf, remove it
-    count <- count + 1
-    # pdf_file <- paste(getwd(), "/outputs/data/pdf-bioRxiv", pdf, sep="/")
-    # file.remove(pdf_file)
-  } 
-}
-count
 
-
+# Remove files not in sample
+pdf_file <- downloaded_pdf[!str_sub(downloaded_pdf, start = 10, end = -5) %in% str_sub(bio_sample$doi, start=9)]
+txt_file <- downloaded_txt[!str_sub(downloaded_txt, start = 10, end = -5) %in% str_sub(bio_sample$doi, start=9)]
+file.remove(paste0(getwd(), "/outputs/data/pdf-biorxiv/", pdf_file))
+file.remove(paste0(getwd(), "/outputs/data/text-biorxiv/", txt_file))
 
 # Download sampled papers as pdf
 bio_sample %>% mx_download(directory = bio_pdf_folder, create = FALSE)
@@ -133,23 +124,23 @@ bio_sample %>% mx_download(directory = bio_pdf_folder, create = FALSE)
 pdf_convert(bio_pdf_folder, bio_txt_folder)
 
 # Remove paper that did not download and sample another paper to replace file that does not exist
-bio_sample <- bio_sample %>% filter(doi != "10.1101/2020.10.10.334664")
+not_working <- bio_sample %>% filter(!str_sub(doi, start = 9) %in% str_sub(downloaded_txt, start = 10, end = -5)) %>% select(doi)
+not_working <- downloaded_pdf[!str_sub(downloaded_pdf, start = 10, end = -5) %in% str_sub(downloaded_txt, start = 10, end = -5)]
+file.remove(paste0(getwd(), "/outputs/data/pdf-biorxiv/", str_sub(not_working, end = -5), ".pdf"))
+bio_sample <- bio_sample %>% filter(!str_sub(doi, start = 9) %in% str_sub(not_working, 10, -5))
 # Sample additional paper from bio_data_2019
-set.seed(30)
-bio_new <- bio_results[sample(nrow(bio_results), 1),]
+set.seed(190)
+bio_new <- bio_results[sample(nrow(bio_results), length(not_working)),]
 # Check that paper is not currently in the sample
 downloaded_pdf <- list.files("outputs/data/pdf-bioRxiv") # Same as before
-paste0("_10.1101_", substr(bio_new$doi, start=9, stop=14), ".pdf") %in% downloaded_pdf
+paste0("_10.1101_", str_sub(bio_new$doi, start=9), ".pdf") %in% downloaded_pdf
 # If above is FALSE, bind to end of sample data and download pdf
 bio_sample <- rbind(bio_sample, bio_new)
-bio_sample[1000,] %>% mx_download(directory = bio_pdf_folder, create = FALSE)
+bio_sample %>% mx_download(directory = bio_pdf_folder, create = FALSE)
 # Re-write sample csv
 write_csv(bio_sample, "outputs/data/bio_sample.csv")
-
 # Re-convert PDFs to text and saves in same folder (won't duplicate)
 pdf_convert(bio_pdf_folder, bio_txt_folder)
-
-
 
 #### Pre-pandemic data ####
 

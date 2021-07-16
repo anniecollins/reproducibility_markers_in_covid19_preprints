@@ -1,0 +1,2050 @@
+PCT-TEE: Trajectory-based Private Contact Tracing System
+with Trusted Execution Environment
+
+arXiv:2012.03782v4 [cs.CR] 27 Jun 2021
+
+FUMIYUK KATO, YANG CAO, and YOSHIKAWA MASATOSHI, Kyoto University, Japan
+Existing Bluetooth-based private contact tracing (PCT) systems can privately detect whether people have come
+into direct contact with patients with COVID-19. However, we find that the existing systems lack functionality
+and flexibility, which may hurt the success of contact tracing. Specifically, they cannot detect indirect contact
+(e.g., people may be exposed to COVID-19 by using a contaminated sheet at a restaurant without making
+direct contact with the infected individual); they also cannot flexibly change the rules of “risky contact”, such
+as the duration of exposure or the distance (both spatially and temporally) from a patient with COVID-19 that
+is considered to result in a risk of exposure, which may vary with the environmental situation.
+In this paper, we propose an efficient and secure contact tracing system that enables us to trace both direct
+contact and indirect contact. To address the above problems, we need to utilize users’ trajectory data for PCT,
+which we call trajectory-based PCT. We formalize this problem as a spatiotemporal private set intersection that
+satisfies both the security and efficiency requirements. By analyzing different approaches such as homomorphic
+encryption, that could be extended to solve this problem, we identify the trusted execution environment (TEE)
+as a candidate method to achieve our requirements. The major challenge is how to design algorithms for a
+spatiotemporal private set intersection under the limited secure memory of the TEE. To this end, we design
+a TEE-based system with flexible trajectory data encoding algorithms. Our experiments on real-world data
+show that the proposed system can process hundreds of queries on tens of millions of records of trajectory
+data within a few seconds.
+CCS Concepts: • Security and privacy → Domain-specific security and privacy architectures; Privacy
+protections.
+Additional Key Words and Phrases: Private Contact Tracing, Trusted Execution Environment, Intel SGX
+ACM Reference Format:
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi. 2020. PCT-TEE: Trajectory-based Private Contact Tracing
+System with Trusted Execution Environment. J. ACM 37, 4, Article 111 (August 2020), 35 pages.
+
+1
+
+INTRODUCTION
+
+Since the beginning of 2020, the emergence of COVID-19 has caused a worldwide pandemic.
+Many governments and companies are developing various measures and technologies to prevent
+the spread of the virus [15, 48, 53, 71]. At present, contact tracing is expected to be a powerful
+countermeasure for controlling the spread of infection. The effectiveness of contact tracing has
+already been shown by several previous studies [8, 23, 49, 62]. However, conducting effective
+contact tracing often requires collecting citizens’ personal information, such as their locations
+[73] or telephone numbers [64], which raises ethical issues and serious privacy violations [33].
+Therefore, acceptable private contact tracing (PCT) is urgently needed.
+Authors’ address: Fumiyuk Kato, fumiyuki@db.soc.i.kyoto-u.ac.jp; Yang Cao, yang@i.kyoto-u.ac.jp; Yoshikawa Masatoshi,
+yoshikawa@i.kyoto-u.ac.jp, Kyoto University, Yoshida-Honcho, Sakyo, Kyoto, Japan, 606-8501.
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee
+provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and
+the full citation on the first page. Copyrights for components of this work owned by others than ACM must be honored.
+Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires
+prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+© 2020 Association for Computing Machinery.
+0004-5411/2020/8-ART111 $15.00
+https://doi.org/
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111
+
+111:2
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Recently, Bluetooth-based PCT has been intensively studied [7, 30, 51, 67, 68]. Decentralized
+privacy-preserving proximity tracing (DP3T) [68], which is an open protocol for PCT that uses
+Bluetooth low-energy (BLE) beacons, is already being used in applications developed worldwide.
+To strongly protect users’ privacy, it uses only the contact (proximity) history detected by the BLE
+beacons. In DP3T, the applications use the Bluetooth signal of a smartphone to broadcast a random
+ID that does not include sensitive information such as the user’s identity or location, and nearby
+smartphone devices receive and store the data for a limited time. Users who are then discovered
+to be infected with COVID-19 send a report to the server that includes the random IDs they have
+generated. Moreover, each user routinely checks to see if the random IDs received from devices
+they have contacted in the past have been uploaded to the server. Additionally, there are similar
+methods for adopting decentralized architecture, such as Epione [67], the PACT protocol [51], CEN
+[7, 63] and Google and Apple specifications [30].
+However, Bluetooth-based PCT has several limitations in terms of functionality and flexibility.
+First, Bluetooth-based PCT detects only direct contact (i.e., human-human contact) but cannot detect
+indirect contact (i.e., human-object contact, e.g., when a person visits the same shop shortly after a
+patient with COVID-19 visited it). The Centers for Disease Control and Prevention (CDC) in the
+US showed that it is possible for a person to become infected with COVID-19 by touching a surface
+or object that has the virus on it and then touching their own mouth, nose, or eyes [24] — despite
+not making direct contact with patients with COVID-19. Moreover, recent studies [69, 74] followed
+this idea and highlighted the need to trace indirect contact. Second, Bluetooth-based PCT lacks
+flexibility in terms of determining the rule of “risky contact". Essentially, the rule of risky contact
+in Bluetooth-based PCT is hard-wired into the Bluetooth device since risky contact is implicitly
+defined as two devices being in close proximity to each other’s signal ranges. In practice, whether
+or not risky contact occurs varies with the environmental situation and the nature of the virus.
+The rules of risky contact in the case of COVID-19 have been updated as our understanding of the
+virus [22] has improved. For example, in the beginning of the pandemic, professionals believed
+that transmission took place only through direct human-human contact; however, it was recently
+argued that airborne transmission should be taken into account [66, 69]. In addition to the nature
+of the virus, a recent epidemiological study [43] showed the importance of appropriate selection
+of the proximity detection range (PDR), which also supports the necessity of flexibility in PCT.
+Moreover, recent reviews have pointed out the current PCT application limitations [41, 75], which
+are the inability to detect infections that do not involve direct contact and radio signal limitations
+in contact detection [1, 23].
+In this work, we propose secure and efficient trajectory-based PCT to enable both direct and
+indirect contact tracing. By comparing the trajectory data between a user and infected patients, we
+can check whether or not the user visits “infected locations” within a certain time period. The rule
+of risky contact can be flexibly defined according to the condition of the location and the nature of
+the virus. The four requirements for trajectory-based PCT are as follows.
+(1) Efficiency: The central server must be able to handle the query throughput.
+(2) Security: A client’s trajectory data must be protected from the server and any other clients.
+However, nothing about the server-side data is disclosed to the client except the query result.
+(3) Flexibility: The rule of risky contact should be simple to change when necessary.
+(4) Accuracy: The server should carefully return accurate results because these results are very
+sensitive and can significantly affect users.
+As shown in Figure 1, we assume that the health agency (e.g., the government or official healthcare
+institute) registers the trajectory data of patients confirmed to have COVID-19 (these data are
+encrypted or released under the consent of the patients) to a server that is untrusted by clients (i.e.,
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:3
+
+Fig. 1. Trajectory-based PCT overview.
+
+OT-based PSI [68]
+HE-based PSI [14, 50]
+TEE-based PSI [61]
+MPC-based PCT [49]
+Our work
+
+Functionality
+
+Efficiency
+
+Security
+
+Flexibility
+
+Accuracy
+
+⃝
+⃝
+
+⃝
+⃝
+⃝
+
+⃝
+⃝
+⃝
+⃝
+⃝
+
+⃝
+
+⃝
+⃝
+⃝
+⃝
+
+Table 1. Comparison with existing approaches.
+
+queriers). The server receives queries and encrypted personal trajectories from clients and returns
+a Boolean value indicating whether there is risky contact or not by computing an intersection
+between server and client trajectories in a private manner.
+Although the problem of trajectory-based PCT is similar to the well-studied problem of a private
+set intersection (PSI), the existing approaches for the PSI cannot satisfy all four of the abovementioned requirements. A PSI ensures that two (or more) parties can collaboratively calculate the
+intersection of their private sets without their private data being disclosed to the other party, only
+the existing information of the intersection or the result. However, the existing PSI techniques,
+based mostly on cryptographic primitives, cannot achieve all of the abovementioned requirements. The state-of-the-art cryptography-based PSI approaches, such as oblivious transfer [50]
+and homomorphic encryption [14] have limitations in terms of the efficiency, and there are still
+performance problems [42, 49] under medium or large workloads, due mainly to the heavy use of
+time-consuming cryptographic primitives. Recently, approaches based on secure hardware (such
+as Intel SGX or ARM TrustZone) have received increasing attention. Secure hardware enables to
+make trusted execution environment (TEE) [16, 52], which is used to speed up secure computations
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:4
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+on an untrusted party. Tamrakar et al. [61] proposed the first efficient TEE-based PSI. It is efficient
+but does not satisfy our accuracy requirement since it introduces unpredictable error because of
+the use of probabilistic data structures. Moreover, flexibility is not considered because their work is
+based on a general hash function for hash-based dictionary structures. In our method, we use a
+flexible encoding hash function to satisfy the requirements. Thus, we compare their work with
+ours in Table 1, adding [49] which is an MPC-based PCT system using trajectories. Functionality
+means the capability to detect indirect contact.
+Our contributions in this paper are threefold. First, we formulate the problem of trajectory-based
+PCT. We show that our problem is a generalization of the well-studied private proximity testing
+[42] and PSI. Our formulation is parameterized for both time and space and can be used in general
+settings. We name this formulation the spatiotemporal PSI. Second, we propose PCT-TEE, a TEEbased efficient algorithm for trajectory-based PCT. In addition to satisfying the abovementioned
+requirements, a challenge in designing the TEE-based algorithm is the constraint of secure memory
+(i.e., enclave) on secure hardware. We solve these problems by designing a novel trajectory data
+encoding method, TrajectoryHash, and combining it with fast succinct trie [77]. TrajectoryHash and
+the fast succinct trie enable algorithmic flexibility, more efficient compression, and deterministic
+and fast search performance for a high-speed PSI in a TEE. Third, we implement the proposed
+system on Intel SGX and open source the prototype code in GitHub1 . Our experiments on real-world
+datasets show that the proposed system is efficient and effective in practical scenarios. Specifically,
+the proposed encoding and data structure compresses the actual trajectory data to one-sixth the
+size of the Hashmap (also known as a hash table) with the same performance, and as a result, the
+total execution time is substantially reduced. Moreover, we show that our system, implemented on
+a single machine equipped with SGX, can handle hundreds of queries on tens of millions of records
+of trajectory data in a few seconds.
+Outline. In Section 2, as preliminaries, we show that certain features of Intel SGX are related
+to our system design and discuss the TEE-based PSI and conventional cryptography-based PSI
+performances. In Section 3, we offer the problem statement and formulate the PCT problem. In
+Section 4, we give an overview of our architecture, and in Section 5.1, we present the algorithm and
+trajectory-based data compression. In Section 6, we show the experimental results and evaluation.
+In Section 7, we present related works, including related recent PCT applications and our position.
+Finally, we provide the conclusions in Section 8.
+1.1
+
+Relation to the Preliminary Version
+
+A preliminary version of this article appeared in [34]. Compared to the preliminary version [34],
+there are three significant differences. : First, while the preliminary version does not contains
+clear problem definition for trajectory-based PCT, we formulate the problem as spatiotemporal PSI,
+which can better capture the connection between the geospatial proximity testing problem and
+PSI problem. Moreover, we extend the problem to consider the duration of exposure to a virus.
+Second, we propose a novel encoding TrajectoryHash for compression that preserves trajectory data
+similarity and compressibility by storing trie-like data structures. TrajectoryHash is a generalization
+of our previous encoding and keeps the single trajectory point small. We analyze closely how
+the approximation of PCT to PSI by TrajectoryHash causes errors in contact detection. Third, we
+evaluate the accuracy of our proposed method. Our previous work lacks an accuracy evaluation,
+but the approximation of PCT to PSI causes nonnegligible false negatives. In this work, we evaluate
+the accuracy by the extensive empirical experiments, which includes a comparison to the existing
+
+1 https://github.com/ylab-public/PCT
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:5
+
+work on PCT using trajectory data [49]. Based on the results, we discuss how we should apply
+these PCT techniques to pandemic situations.
+
+2
+2.1
+
+PRELIMINARIES
+Intel SGX
+
+Before explaining our system, we introduce the secure hardware used in this paper for ease of
+understanding our system. Below, we focus on Intel SGX, which is a representative implementation
+of the TEE. The architecture and algorithms proposed in this paper can be applied to any other type
+of secure hardware. Intel SGX[16] is the extended instruction set of Intel x86 processors, which
+enables the creation of an isolated TEE, called the enclave. In addition to powerful server machines,
+SGX is installed on some PCs. SGX is also available on some public cloud platforms, such as Azure
+Confidential Computing, Alibaba Cloud, and IBM Cloud. We show a brief overview of SGX in the
+following paragraphs.
+The enclave resides in the protected memory region, called the Enclave Page Cache (EPC), in
+which all programs and data can be unencrypted and quickly processed as well as transparently
+encrypted outside the CPU package by a memory encryption engine using a secret key that
+only processor hardware can access. In other words, SGX adopts a model that considers the CPU
+package as a trust boundary and everything outside as untrusted. In this trusted space, accesses
+from any untrusted software, including the OS/Hypervisor, are prohibited by the CPU, protecting
+the confidentiality and integrity of the program and data inside the enclave. Therefore, programs
+using SGX must use two types of instructions called OCALL/ECALL to invoke functions across
+trust boundaries under strict control. These instructions often require too many clock cycles [65],
+and does uploading data to the enclave. This observation is important to improve our system
+performance.
+Memory size limitation. A challenge in designing algorithms for Intel SGX is the size constraint
+of the EPC. The maximum size of the EPC is limited to 128 MB, including 32 MB of metadata
+for secure management (or 256 MB including 64 MB of metadata in the recent Intel high-end
+processor[37]). This limitation may be gradually improved but will continue to be a problem
+regarding hardware and memory-securing performance. Assume that memory is allocated beyond
+this memory size constraint. In this case, SGX with Linux allows paging with special encryption.
+However, many studies have shown that the performance is greatly degraded by severe overhead
+[26, 29, 60], which is derived from a requirement to preserve confidentiality and integrity even
+outside the enclave. Therefore, it is necessary to design an efficient algorithm that works within
+SGX. This is still an important problem, and Kockan et al. [35] presented a method to overcome the
+severe memory limitation of TEEs for genomic data analysis.
+Attestation. SGX supports two types of attestations, i.e., local and remote, which can verify the
+correct initial state and genuineness of the trusted environment of the enclave from the outside. In
+our paper, we focus on remote attestation (RA)[16]. We can request RA to the enclave and receive
+a report with measurements (e.g., MRENCLAVE and MRSIGNER) based on the hash of the initial
+enclave state and another environment as a hash chain, which can identify the programs, complete
+memory layout, and even builder’s key information. This measurement cannot be tampered with.
+Intel Enhanced Privacy ID signs this measurement, and Intel Attestation Service can verify the
+correctness of the signature as a role of a trusted third party. In addition to verifying the SGX
+environment, secure key exchange between the enclave and remote client is performed within this
+RA protocol. Therefore, after applying the protocol, we can communicate over a secure channel
+with a remote enclave by a fast encryption scheme such as AES-GCM, and finally, we can safely
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:6
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+perform a confidential calculation in the remote enclave. Our system utilizes this primitive for
+private computation.
+2.2
+
+Private Set Intersection
+
+The PSI is a well-studied and important problem. The PSI refers to a setting where multiple parties
+each hold a set of private sets and wish to learn the intersection of their sets without revealing any
+information except for the intersection itself. The existing main approach is to use cryptographic
+primitives, which are summarized as follows. We can classify the conventional approaches into
+two categories; methodology and security model.
+Regarding the former, first, there are methods based on the commutative properties of the
+Diffie–Hellman (DH) key exchange [18]. They require computing the polynomial interpolation,
+which requires a high computational cost. Huang et al. [32] described a garbled circuit-based
+approach. Their proposed SCS circuit family improved the efficiency at that time. This approach is
+similar to the secure-hardware-based approach described later in terms of leveraging a generalpurpose secure computation. Oblivious transfer (OT) [46, 47, 50] is one of the most promising
+approaches. While it is generally used for semi-honest adversaries, [50] extended the OT method to
+a malicious adversary using the dual execution technique [40]. Homomorphic encryption (HE) [13, 14]
+is suitable for an unbalanced setting where the server-side data are large and the client-side data
+are small, because it can replace the oblivious pseudorandom function in the OT-based approach
+with leveled fully HE and substantially reduce the amount of data to be transmitted. Last, there is
+a method extended from private information retrieval [19]. Thus, many improvements have been
+proposed based on these extensions; however, there is still no method to achieve practical efficiency
+on large scale data in terms of the execution time and communication bandwidth.
+Regarding the latter category, there are semi-honest [27] or malicious adversaries. Roughly
+speaking, a semi-honest adversary is an attacker who tries to infer secret information from the
+information he obtains, while following correct protocols and not crafting send and receive data,
+while a malicious adversary is an attacker who crafts send and receive data and executes the
+protocol as many times as possible to extract secret information. Generally, the malicious client
+setting requires a more secure standard and higher costs. Which model we should secure depends
+on the applications and situations, but in our scenario, we consider a malicious adversary because
+it is reasonable to consider that an untrusted server can control and access any computation on the
+server. The TEE-based approach can achieve malicious security [59].
+We consider the secure-hardware-based approach to be the better option. Regarding the methodology, we do not have to use the abovementioned cryptographic primitives. Using Intel SGX,
+platform verification and transparent memory encryption by the hardware occurs so quickly and
+thoroughly that a highly efficient PSI can be achieved. The difference in efficiency is significant,
+being especially impactful on our choice. Additionally, the TEE provides a refined security model
+for a malicious adversary. [59] shows that no operation or inputs expose information regarding the
+inner state or data of the TEE. All we need to consider is privacy leakage from outside the TEE and
+software implementation bugs.
+We present a deeper comparison between the existing cryptography-based PSI and the securehardware-based PSI in terms of the efficiency. We recognize the state-of-the-art approaches as [50]
+in terms of the balanced data size setting in the server and client and [14] in terms of the unbalanced
+case. The latter assumes a semi-honest server and is faster than others in the malicious server model.
+Table 2 shows a comparison of the properties between them and secure hardware (Intel SGX). It
+includes a relatively rough estimate of the asymptotic bandwidth and computational costs at every
+PSI execution. We denote 𝑛, 𝑁 as the client data size and server data size, respectively, assuming
+𝑛 << 𝑁 . Asymptotic comparisons are acceptable for one purpose because of the large impact of
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+TEE
+OT [50]
+HE [14]
+
+bandwidth
+
+computation
+
+requirements
+
+O (𝑛)
+
+O (𝑛)
+
+O (𝑁 )
+O (𝑛 log 𝑁 )
+
+O (𝑁 log 𝑁 )
+O (𝑁 )
+
+attestation
+hardware
+nothing
+nothing
+
+111:7
+
+server
+security
+malicious
+malicious
+semi-honest
+
+Table 2. PSI comparison: cryptography-based(OT, HE) v.s. TEE-based: TEE needs to special hardware, but it
+has advantages in efficiency and security.
+
+different coefficients. However, with secure hardware, both communication and computing costs
+are dramatically more efficient, as they are proportional only to the client data size (Table 2). On the
+other hand, the secure-TEE-based approach requires RA in advance and a hardware with special
+functionality on the server side. Cryptography-based methods do not need any special devices; they
+consist solely of algorithms. Rindal et al. [50] reduce communication cost to (𝑁 ) from the naive
+(𝑁 2 ) cost by using a variant of Cuckoo hashing in a OT-based method. In [14], the communication
+cost is efficiently reduced to O (𝑛 log 𝑁 ), and the server computational cost is O (𝑛) homomorphic
+evaluations on large circuits of size O (𝑁 /𝑛). These facts show that the secure-hardware-based
+method demands an extra cost such as special hardware, but is a better choice for large-scale
+deployment because of the significant efficiency.
+3
+
+PROBLEM FORMULATION
+
+We first introduce the trajectory-based PCT scenario, and then we formulate our problem based on
+the well-studied private proximity testing.
+3.1
+
+Scenario
+
+In our scenario, we assume that trajectory-based PCT is used to prevent the spread of COVID-19.
+We consider a centralized architecture that stores the trajectory data of patients with COVID-19
+on a central server and accepts PCT requests from users with their trajectory data. In practice,
+these patients’ trajectories can be received in bulk from public institutions such as a government
+or health agency.
+In the system operation, based on the incubation period of the virus, the server always keeps
+the trajectory data of the infected patients for the past 14 days [25]. All the data are periodically
+updated in batches (e.g., once per day at night), with data being added and deleted. The server
+transforms the trajectory data into an appropriate structure in advance and is always ready to
+accept PCT requests from clients. A client sends encrypted trajectory data for the past 14 days
+as a PCT request, and the server performs contact detection and then returns the results to the
+client. The results can be time-stamped and signed in SGX as needed so that they can be verified
+by a third party using an authenticated public key of SGX, allowing clients to use the results for
+various agencies and events to show that the risk of infection is low. While client data are protected
+from any other parties except the TEE by encryption, server-side infected people trajectories can
+be either confidential or open access ( i.e., the South Korea case [76]. Our system can be applied
+to both situations; if the infection data should be confidential, a health agency can encrypt the
+data before uploading the TEE by RA. Note that the infection data are generally large in size and
+need to be kept in memory outside of the enclave. This means that the encrypted data initially
+uploaded to the TEE are encrypted in the enclave and placed in memory outside of the enclave.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:8
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+In our experimental implementation, we consider the confidential case which causes additional
+decryption overheads.
+3.2
+
+Problem Statement
+
+Trajectory-based PCT. The trajectory-based PCT protocol is an asymmetric protocol between a
+client and a server. When a client wants to know the contact with trajectories stored on a server,
+this protocol returns 1 or 0 to the client depending on the result, and does not disclose the private
+information of the client to the server. In the use case for infections, each client has a set of trajectory
+data for one person, and the server has trajectory data for many infected patients.
+In conventional private proximity testing [42], when two people, user 𝑢 and 𝑣, have geographic
+data 𝑋𝑖 that consist of location 𝑙𝑡(𝑖) (= (latitude, longitude), e.g., (40.74836, -73.98562)) of time 𝑡
+(𝑖 = 𝑢, 𝑣), user 𝑢 executes the protocol and obtains the following result:
+(
+1 ( ||𝑙𝑡(𝑢) − 𝑙𝑡(𝑣) || ≤ Θ )
+0 ( 𝑜𝑡ℎ𝑒𝑟𝑠 )
+where Θ is a proximity threshold. After that, 𝑣 does not learn any information about 𝑋𝑢 and 𝑢 does
+not learn information except whether ||𝑙𝑡(𝑢) − 𝑙𝑡(𝑣) || ≤ Θ.
+In a similar vein, trajectory-based PCT can be represented as an extension of this formulation. For
+contact tracings, a contact can be determined according to human time-series tracking data. We can
+perform private proximity testing by extending single geographic data to time-series trajectory data.
+The threshold can also be extended to 2D thresholds to check the spatiotemporal proximity. PCT
+allows capturing indirect contacts by examining whether patients are in the proximate place within
+a specific time period. Therefore, we obtain the following formula denoting the trajectory data
+of user 𝑖 as 𝑋𝑖 = (𝑥 1(𝑖) = (𝑡 1(𝑖) , 𝑙 1(𝑖) ), ..., 𝑥𝑛(𝑖) = (𝑡𝑛(𝑖) , 𝑙𝑛(𝑖) )) (e.g., 𝑥 100 =(2020/12/20 12:00:00, 40.74836,
+-73.98562)), with which the result of contact between 𝑢 and 𝑣 can be obtained:
+
+
+1 (∃ 𝑥𝑖(𝑢) ∈ 𝑋𝑢 , 𝑥 𝑗(𝑣) ∈ 𝑋 𝑣 𝑠.𝑡 .
+
+
+
+(1)
+||𝑙𝑖(𝑢) − 𝑙 𝑗(𝑣) || ≤ Θ𝑔𝑒𝑜 and ||𝑡𝑖(𝑢) − 𝑡 𝑗(𝑣) || ≤ Θ𝑡𝑖𝑚𝑒 )
+
+
+ 0 ( 𝑜𝑡ℎ𝑒𝑟𝑠 )
+
+where Θ𝑔𝑒𝑜 and Θ𝑡𝑖𝑚𝑒 are the spatial and temporal proximity thresholds, respectively. Furthermore,
+𝑣 does not learn any information about 𝑋𝑢 , and 𝑢 can obtain only 1 or 0 regarding 𝑋 𝑣 in this protocol.
+The thresholds are generally given by medical and epidemiological experts and may be updated.
+We define this procedure as trajectory-based PCT, which can capture indirect contacts by having a
+certain width in the time direction. Moreover, we can extend the definition so that the duration
+of exposure to an infected user can be considered, which is recognized as an important factor of
+COVID-19 transmission [10, 25]. Let Θ𝑑𝑜𝑒 be the risky duration of exposure, the following formula
+is obtained:
+
+
+1 ( ∃𝜏 𝑠.𝑡 . ∀𝑖 = (𝜏, 𝜏 + 1, ..., 𝜏 + Θ𝑑𝑜𝑒 )
+
+
+
+(2)
+∃ 𝑥𝑖(𝑢) ∈ 𝑋𝑢 , 𝑥 𝑗(𝑣) ∈ 𝑋 𝑣 , 𝑠.𝑡 . ||𝑙𝑖(𝑢) − 𝑙 𝑗(𝑣) || ≤ Θ𝑔𝑒𝑜 and ||𝑡𝑖(𝑢) − 𝑡 𝑗(𝑣) || ≤ Θ𝑡𝑖𝑚𝑒 )
+
+
+ 0 ( 𝑜𝑡ℎ𝑒𝑟𝑠 )
+
+Finding the exact solution of Eq.(1) and Eq.(2) for the sampled discrete trajectory data is computationally inefficient. Therefore, we simplify this problem by mapping continuous space to discrete
+space for computational efficiency, where we approximate the PCT problem to the PSI problem. We
+denote A as the set of all symbols in a discrete space and 𝐴𝑖 ∈ A as the 𝑖-th element. By mapping
+𝑓Θ : 𝑥 → 𝐴, we can map any point 𝑥 in the trajectory data to a single symbol 𝐴. We call this
+mapping an “encoding" and introduce the corresponding method in Section 5.1. The encoding, 𝑓Θ ,
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:9
+
+Fig. 2. Spatiotemporal Private Set Intersection.
+
+must be adjustable according to the granularity parameters Θ𝑔𝑒𝑜 and Θ𝑡𝑖𝑚𝑒 , which correspond to
+the size of the predefined subspace in the 3D spatiotemporal space, and each subspace corresponds
+to one unique symbol, as shown in Figure 2. For example, suppose 𝑓Θ (𝑥 1 ) = 𝐴1 , 𝑓Θ (𝑥 2 ) = 𝐴2 ,
+𝑓Θ (𝑥 3 ) = 𝐴2 , 𝑓Θ (𝑥 4 ) = 𝐴2 , 𝑓Θ (𝑥 5 ) = 𝐴2 , trajectory point 𝑥 1 is mapped to 𝐴1 , and 𝑥 2 ,𝑥 3 ,𝑥 4 , and 𝑥 5 are
+mapped to 𝐴2 in Figure 2. We determine contact by considering the intersection of these symbol
+sets between 𝑢 and 𝑣. This can be formulated as follows:
+
+
+1 ∃ A (𝑢) ∩ A (𝑣) ≠ ∅ 𝑠.𝑡 .
+
+
+
+
+A (𝑢) = { 𝑓Θ (𝑥𝑖(𝑢) ) | 𝑥𝑖(𝑢) ∈ 𝑋𝑢 } and A (𝑣) = { 𝑓Θ (𝑥 𝑗(𝑣) ) | 𝑥 𝑗(𝑣) ∈ 𝑋 𝑣 }
+
+
+ 0 ( 𝑜𝑡ℎ𝑒𝑟𝑠 )
+
+
+(3)
+
+𝑣 does not learn any information about 𝑋𝑢 , and 𝑢 can obtain only 1 or 0 regarding 𝑋 𝑣 in this problem.
+We name this problem the spatiotemporal PSI or stPSI for short. Considering the duration of exposure
+and given threshold parameters Θ = (Θ𝑔𝑒𝑜 , Θ𝑡𝑖𝑚𝑒 ) and Θ𝑑𝑜𝑒 , the problem can be formulated as
+follows:
+∃𝜏 𝑠.𝑡 . ∀𝑖 = (𝜏, 𝜏 + 1, ..., 𝜏 + Θ𝑑𝑜𝑒 )
+(∃ A (𝑢) ∩ A (𝑣) ≠ ∅ 𝑠.𝑡 .
+
+
+A (𝑢) = { 𝑓Θ (𝑥𝑖(𝑢) ) | 𝑥𝑖(𝑢) ∈ 𝑋𝑢 } and A (𝑣) = { 𝑓Θ (𝑥 𝑗(𝑣) ) | 𝑥 𝑗(𝑣) ∈ 𝑋 𝑣 })
+
+
+
+ 0 ( 𝑜𝑡ℎ𝑒𝑟𝑠 )
+
+
+1
+
+
+
+
+
+
+
+(4)
+
+Note that the worst computational complexity this problem causes is the same as in Eq.(3) since we
+need to sequentially check the 𝑢’s of all the data only once, both of which are checked O (|𝑋𝑢 |)
+times.
+In this work, we consider the stPSI as a contact between 𝑢 and 𝑣. Hence, we can reduce the
+problem to one that is simple enough to be computed with existing confidential computing stacks
+in a practical computational time. However, the problem is basically an approximation of trajectorybased PCT. Given the threshold parameter Θ, this approximation causes some detection errors.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:10
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+We carefully analyze these errors in Section 5.3 and show that there is a trade-off between false
+positives and false negatives due to the proposed algorithms and thresholds.
+Additionally, we describe the important requirements of trajectory-based PCT.
+Efficiency. Trajectory-based PCT requires efficiency in several aspects.
+• The first is the response throughput since the server will always be exposed to requests from
+a large number of users. It can be a substantial workload in this centralized protocol.
+• The second aspect is the bandwidth. Since the protocol is applied to many users, it is necessary
+to reduce the bandwidth for communication efficiency.
+• The third aspect is scalability. For instance, for COVID-19, the size of the infected patient
+data and the user data may increase in the event of infection spreading.
+The efficiency requirements depend entirely on the context in which PCT is deployed and are
+determined by the amount of users, frequency of use, number of data, etc.
+Security. Security concerns in general PCT systems are manifold. The concerns must include
+violating the privacy of participants by revealing personal information such as location, inducing
+errors in PCT results by introducing false information, and violating the integrity and availability
+of the system. In our scenario, we believe it is reasonable to assume a malicious client, a malicious
+server, and a semi-honest health agency as the attacker models. Because any client can participate
+in a service, and because it is not obvious how the server runs in a remote environment, we should
+assume that it has a full control over the operating system and/or hypervisor, memory hardware
+units, and packet flow in the network and uses them to attack the system. In addition, the selected
+health agency is publicly authenticated. In the centralized architecture used in our scenario, some
+of the attacks that are often of concern in BLE-based PCT methods are not possible (e.g., carryover
+attack [7], paparazzi attack [70], Orwell attack [5], etc.). On the other hand, we should consider the
+following attacks;
+• Denial-of-service (DoS) attacks: malicious clients send many requests to the server to bring
+down the system.
+• Query-abusing attacks: privacy violation attacks are performed to obtain an infected person’s
+data by a malicious client’s queries.
+• Side-channel attacks: the malicious server causes information leakage by side-channel attacks
+on communication paths and within the server.
+• False answering: the malicious server answers clients by sending fake results.
+• Fake data injection: the malicious server injects fake infected data into the system.
+• Replay: someone catches the client request information by communication interception and
+reuses it to obtain the client’s PCT result.
+Our proposed trajectory-based PCT system should have countermeasures to prevent or mitigate all
+of these attacks.
+Flexibility. The rules of risky contact in the case of COVID-19 have been updated as the understanding of the virus has improved [22] as we explained Section 1. In the trajectory-based PCT,
+flexibility requires that (Θ𝑔𝑒𝑜 , Θ𝑡𝑖𝑚𝑒 , Θ𝑑𝑜𝑒 ) be parameterized and changeable in the PCT system.
+For example, these parameters need to be changed to minimal values if it is found after the system
+is released that only direct contact needs to be captured because of the virus’s capacity for transmission. However, we do not believe that these parameters need to be parameterized at the client
+query level (i.e., clients can choose the parameters). In other words, we assume that there is one
+global condition that is epidemiologically determined to be important for infection prevention. In
+addition, if the client has control over the parameters, it can expose information about the infected
+person’s data, creating an unnecessary security risk.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:11
+
+We believe that these parameters should be updated only once a day at most. Therefore, it is
+reasonable to apply the changes in these parameters to the data at the same time as the batch
+update of the infected data on the server, which justifies our proposed method. In our proposed
+method, we encode the data in advance with a granularity that matches the parameters and then
+use the PSI to detect contact decisions.
+Accuracy. Accuracy requires to achieve the high correct detection rate. Since virus infection
+information is very sensitive, it is necessary to reduce the percentage of responses to clients that
+contain false positives or false negatives. In addition, when a response is false, what kind of false it
+is, i.e., whether it is nearly correct or randomly generated, has completely different meanings in
+terms of whether there is an upper limit to the error or not. For example, even if the epidemiological
+false positive is somewhat large, it may be effective in preventing infection depending on the phase
+of infection [43].
+There are several aspects of trajectory-based PCT that can cause a false outcome. The first one is
+the error of trajectory data collection. Many studies have shown that the accuracy of GPS-based
+trajectory data collection is improved [4, 31]; however, the accuracy is degraded especially in indoor
+environments. Also, if they stay somewhere for too short a time, they may not be captured when the
+trajectory data is collected. On the other hand, it is possible to improve the collection accuracy by
+combining wireless devices such as indoor Wi-Fi [36]. Our work assumes that these state-of-the-art
+devices collect highly accurate trajectory data, and this false is beyond the scope. The second is a
+false result caused by the stPSI approximation. It is necessary to clarify how many false positives
+and false negatives are generated by the approximation and what is the upper limit of the error.
+Through extensive experiments, we empirically clarify how much error is caused by the stPSI. The
+third is the false result caused by the physical environment, which cannot be captured by location
+information alone. For example, if a person is riding in a car or spending time in an adjacent room,
+a false positive may occur if only trajectory data are used. This error is difficult to determine from
+the trajectory data and requires a different type of data; we consider it to be the topic of future
+work.
+4
+
+SYSTEM OVERVIEW
+
+We introduce an overview of the system. Table 3 shows the symbols and parameters that are used
+in the rest of the paper.
+Figure 3 shows an overview of our architecture with a trusted enclave. Our method consists
+of several steps, including the transformation of data maintained on the server side and the
+transformation of data sent from the clients, as follows.
+First, we describe the data of infected patients on the server.
+1 : (Update master data) The health agency updates the infected patient data 𝐷 in batch processing.
+𝐷 is in the raw form of trajectory data 𝐷 = [(𝑡 1, 𝑙 1 ), ..., (𝑡𝑛𝑅 , 𝑙𝑛𝑅 )] and does not have to include the
+user IDs since there is no need to distinguish trajectory data by infected users.
+2 : (Mapping) Step 2 is executed in the same batch processing as step 1. We map from the raw data
+format 𝐷 to efficient dictionary representation 𝑅 with the function mapToChunkedDictionary.
+This mapping function includes encoding, chunking, and transforming into the dictionary representation. Encoding is to encode each piece of trajectory data into 1D bytes of representation. It
+corresponds to 𝑓Θ in Eq. (3) (4). Chunking is to split the dataset into 𝑁𝑅 chunks. Transforming is
+to transform each chunk into a dictionary representation and into 𝑅 that consists of 𝑁𝑅 chunks
+𝑟𝑖 (𝑖 = 1, ..., 𝑁𝑅 ), where each chunk fits in the enclave memory limitation. How to represent the
+chunked data specialized in the PSI under the SGX memory constraint is our challenge. These
+encoding and compression schemes are described in Section 5.1. In the case where the infected
+data are to be kept secret, the encrypted infected data are uploaded to SGX by the health agency,
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:12
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Symbols
+𝑁𝐷
+𝐷
+𝑁𝐶
+𝑐𝑖 ∈ C
+𝑁𝑅
+𝑅
+𝑟𝑖
+𝑞𝑖
+𝑄
+𝑁𝑄
+𝜃
+(𝑡𝑖 , 𝑙𝑖 )
+
+Explanation
+number of raw trajectory data of infected people
+raw trajectory data of infected people
+number of clients
+a client 𝑖 (∈ {1, ..., 𝑁𝐶 }) and all clients set
+number of chunks of central data
+mapped 𝐷, array of efficient chunks (= (𝑟 1, ..., 𝑟 𝑁𝑅 ))
+𝑖-th chunked data of 𝑅, efficient representation (e.g., FSA)
+client 𝑖’s query data (raw trajectory data)
+merged and mapped 𝑁𝐶 query data (e.g., unique array)
+unique size of 𝑄
+parameter of PCT, 𝜃 = (𝜃 𝑡𝑖𝑚𝑒 , 𝜃𝑔𝑒𝑜 )
+𝑖-th row of trajectory data, time 𝑡𝑖 and location 𝑙𝑖 = (𝑙𝑖𝑙𝑎𝑡 , 𝑙𝑖𝑙𝑜𝑛 )
+Table 3. Symbols and parameters.
+
+Fig. 3. Architecture overview: circled numbers correspond to the steps shown in System Overview.
+
+step 2 is performed in SGX, and the binary data of the encrypted 𝑅 are placed in the memory of
+the untrusted server. The key used for encryption during the upload is obtained from SGX by the
+health agency through RA.
+The next part is the processing of queries from clients.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:13
+
+3 : (Remote attestation) The client verifies the remote enclave through the RA protocol before
+sending the request to the server. The client can confirm that the enclave has not been tampered
+with and then securely exchange the key with the enclave. After that, the shared key are used to
+encrypt the data, which enables secret communication to the remote enclave through a secure
+channel. Note that a secure channel is a communication channel where only the query data in
+the request are encrypted and kept secret. Client metadata (e.g., IP address) exchanged in the
+application layer is not kept secret from the server side and need to be used in the response. The
+response data are encrypted and kept secret, as well as the request query data.
+4 : (Request) Many clients send PCT requests to the server. In the figure, 𝑐𝑖 sends 𝑞𝑖 as a request
+parameter that contains 14 days of her trajectory data. Trajectory data are encoded by 𝑓Θ before
+encryption; thus, the server and client share the parameter Θ in advance. 𝑞𝑖 is encrypted in all the
+untrusted areas after leaving the client environment and is visible only in the verified enclave.
+5 : (Queuing) Until a certain number (𝑁𝑐 ) of requests are accumulated, 𝑞𝑖 is queued outside the
+enclave, and they are passed to the enclave together by the loadToEnclave function. This function
+is actually implemented by the so-called ECALL to invoke an SGX function. We aim to optimize
+the loading process for multiple (e.g. 1000) users by batch processing, mitigating the overheads
+invoked.
+6 : (Mapping) After uploaded to the trusted enclave, the data are finally decrypted. Inside the
+enclave, all 𝑞𝑖 are grouped together and mapped to query representation 𝑄 using mapToArray.
+While these query data are private and cannot be handled outside the enclave, the size of the
+enclave memory is strictly limited. Therefore, encoding trajectory data to small bytes is critical.
+7 : (Contact detection) The chunked data 𝑟𝑖 are imported into the enclave one by one, and we
+compute the set intersection of 𝑟𝑖 and 𝑄 in the enclave. This can be done by checking the bytes-based
+match. In the result, only queries with a true result for a set intersection are recorded as positive.
+If a query is found to be positive, we can reduce some overhead by not computing the PSI for
+subsequent 𝑟𝑖 for the query.
+8 : (Response construction) After the iterations for all the chunks are completed, responses for all
+clients are constructed from the results and complete query data 𝑞𝑖 (𝑖 = 1, ..., 𝑁𝐶 ) inside the trusted
+enclave by constructResponses. This process can be carried out by simply encrypting the results
+(positive or negative) for each client inside the enclave. Finally, the process returns the encrypted
+result through the secure channel to each client.
+5
+5.1
+
+SPATIOTEMPORAL PSI
+Trajectory Data Representation
+
+In this subsection we focus on the trajectory data representation, which is optimized for PSI
+processing in the memory constraint of Intel SGX. The most important issue is how to represent
+each trajectory data point. This is called encoding and corresponds to 𝑓Θ in Eq. (3) (4). We need to
+encode different trajectory data into unique 1D data to solve the trajectory-based PCT as the stPSI,
+as described in Section 3.2. In addition, we need to make the encoded data as small as possible.
+The compact representation contributes to the whole system performance, and the compressibility
+contributes to the performance of the PSI part which is the core component of our system.
+Additionally, we carefully develop the dictionary representation 𝑅 (= (𝑟 1, ...𝑟 𝑁𝑅 )) obtained by
+the mapping in step 2. 𝑅 should satisfy the following constraints: First, a memory-efficient data
+structure storing trajectory data should be used to overcome the severe memory constraints of
+SGX. Second, a fast search should be implemented for a fast PSI. Third, a deterministic search
+method for an accurate PSI should be provided. The standard dictionary representations do not
+fulfill these requirements. We consider Hashmap as a baseline. Hashmap ideally supports the O (1)
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:14
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Fig. 4. An overview of running example from raw trajectory to the final risk assessment.
+
+key-based search. While it provides desirable search performance and allows a deterministic search,
+it fails to satisfy the efficiency requirements because its size increases linearly with the size of the
+data. A smaller data structure is preferable in our setting because the overheads caused by SGX are
+considerably heavy. While probabilistic data structures such as the Bloom filter provide the same
+search speed performance as that of Hashmap and superior memory efficiency, they do not satisfy
+deterministic search requirement. It causes random and unpredicted false positives.
+Our proposed method to achieve the desired dictionary representation is a combination of
+effective trajectory data encoding and storing into a fast succinct trie (FST) [77]. An FST is a data
+structure proposed in [77] and is the base of Succinct Range Filter (SuRF). The SuRF can improve
+efficiency for queries such as match and range in exchange for false positives, while the FST does not
+allow any false positives. The FST has basically the same properties as those of trie, but its internal
+representation is closer to being succinct, and it has a particular strength in spatial efficiency. For
+more information on the FST, please refer to [77]. Similar to the basic trie, the FST provides high
+compression performance for highly similar data by sharing a common prefix of encoded bytes
+in a single node. Essentially, our aim is to ensure that the encoding process transforms trajectory
+data into highly similar byte sequence representations and then utilizes the similarity to create a
+compressed dictionary representation using an FST.
+Figure 4 shows an overview of running example from raw trajectory to the final risk assessment.
+5.1.1 TrajectoryHash. We introduce encoding, which corresponds to 𝑓Θ in the stPSI as described
+in Section 3.2. The encoding should satisfy the following 3 properties. First, there is an injective
+function between different trajectory data and unique byte sequences. Obviously, if this property is
+not satisfied, the PSI cannot be performed correctly. Second, the encoded value should be small in
+size. The space after mapping should be as small as possible because if it is small, all data, including
+both the server data and the queries from the client, will be small. This is the ideal situation for
+TEE-based secure computation. Our previous work [34] lacks this aspect; string-level merging
+caused the binary size of the encoded values to grow. The other desired property is that the encoded
+values should have many similarities because we can efficiently store within the FST. We introduce
+TrajectoryHash encoding and show that it satisfies all properties.
+The trajectory data 𝑋 consist of an array of tuples of temporal data and geographical data, such
+as the UNIX epoch and tuples of latitude and longitude, as follows.
+X = [𝑥 1 = (𝑡 1, 𝑙 1 ), ..., 𝑥𝑛 = (𝑡𝑛 , 𝑙𝑛 )]
+𝑡𝑘 ∈ time (UNIX epoch)
+𝑙𝑘 = (𝑙𝑘,𝑙𝑎𝑡 , 𝑙𝑘,𝑙𝑜𝑛 ) ∈ coordinate ((latitude, longtitude))
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:15
+
+Algorithm 1 TrajectoryHash
+Input: 𝑡,, (𝑙𝑙𝑎𝑡 , 𝑙𝑙𝑛𝑔 ), 𝜃 𝑡𝑖𝑚𝑒 , 𝜃𝑔𝑒𝑜 , 𝑡𝑠𝑡𝑎𝑟𝑡 , 𝑡𝑒𝑛𝑑
+Output: ℎ𝑎𝑠ℎ
+1: 𝑏 1, 𝑏 2 ← QuadKeyEncode(𝑙𝑙𝑎𝑡 , 𝑙𝑙𝑛𝑔 , 𝜃𝑔𝑒𝑜 )
+⊲ 𝑏 1 , 𝑏 2 are binary sequence with 𝜃𝑔𝑒𝑜 length
+2: 𝑏 3 ← PeriodicEncode(𝑡, 𝜃 𝑡𝑖𝑚𝑒 )
+⊲ 𝑏 3 are binary sequence
+3: 𝑏𝑖𝑛𝑎𝑟𝑦 ← BitMix(𝑏 1, 𝑏 2, 𝑏 3 )
+4: ℎ𝑎𝑠ℎ ← ByteEncode(𝑏𝑖𝑛𝑎𝑟𝑦)
+5: return ℎ𝑎𝑠ℎ
+6: procedure QuadKeyEncode(𝑙𝑙𝑎𝑡 , 𝑙𝑙𝑛𝑔 , 𝜃𝑔𝑒𝑜 )
+7:
+𝑚𝑎𝑥𝐿𝑎𝑡𝑖𝑡𝑢𝑑𝑒 ← 360 arctan(exp(𝜋))/𝜋 − 90
+⊲ ≃ 85.05112877980659
+8:
+𝑙𝑙𝑎𝑡 ← min(𝑚𝑎𝑥𝐿𝑎𝑡𝑖𝑡𝑢𝑑𝑒, max(−𝑚𝑎𝑥𝐿𝑎𝑡𝑖𝑡𝑢𝑑𝑒, 𝑙𝑙𝑎𝑡 ))
+⊲ for clipping
+𝑙𝑙𝑛𝑔 + 180
+⊲ transform to the Tile Coordinates
+9:
+𝑝𝑥 ←
+360
+
+1 1
+1 + sin (𝑙𝑙𝑎𝑡 × 𝜋/180)
+10:
+𝑝𝑦 ←
+− log
+2 𝜋
+1 − sin (𝑙𝑙𝑎𝑡 × 𝜋/180)
+11:
+𝑚𝑎𝑝𝑆𝑖𝑧𝑒 ← 2𝜃𝑔𝑒𝑜
+⊲ map consists of 2𝜃𝑔𝑒𝑜 × 2𝜃𝑔𝑒𝑜 areas
+12:
+𝑥 ← Floor(𝑝𝑥 × 𝑚𝑎𝑝𝑆𝑖𝑧𝑒)
+⊲ round down function
+13:
+𝑦 ← Floor(𝑝𝑦 × 𝑚𝑎𝑝𝑆𝑖𝑧𝑒)
+14:
+𝑋𝑏𝑖𝑛𝑎𝑟𝑦 ← AsBinary(𝑥)
+⊲ get as bit array representation
+15:
+𝑋𝑏𝑖𝑛𝑎𝑟𝑦 ← ZeroPadding(𝑋𝑏𝑖𝑛𝑎𝑟𝑦, 𝜃𝑔𝑒𝑜 )
+⊲ padding 0 to 𝜃𝑔𝑒𝑜 length
+16:
+𝑌𝑏𝑖𝑛𝑎𝑟𝑦 ← AsBinary(𝑦)
+17:
+𝑌𝑏𝑖𝑛𝑎𝑟𝑦 ← ZeroPadding(𝑋𝑏𝑖𝑛𝑎𝑟𝑦, 𝜃𝑔𝑒𝑜 )
+18:
+return 𝑋𝑏𝑖𝑛𝑎𝑟𝑦, 𝑌𝑏𝑖𝑛𝑎𝑟𝑦
+19: end procedure
+20: procedure PeriodicEncode(𝑡, 𝑡𝑠𝑡𝑎𝑟𝑡 , 𝑡𝑒𝑛𝑑 , 𝜃 𝑡𝑖𝑚𝑒 )
+21:
+𝑚𝑎𝑥𝐿𝑒𝑛𝑔𝑡ℎ ← Length(AsBinary(𝑡𝑒𝑛𝑑 − 𝑡𝑠𝑡𝑎𝑟𝑡 ))
+22:
+⊲ maximum bit length to represent the period 𝑡𝑠𝑡𝑎𝑟𝑡 to 𝑡𝑒𝑛𝑑
+23:
+𝑡𝑑𝑖 𝑓 𝑓 ← 𝑡 − 𝑡𝑠𝑡𝑎𝑟𝑡
+24:
+𝑠ℎ𝑖 𝑓 𝑡 ← 32 − 𝜃 𝑡𝑖𝑚𝑒
+⊲ 32 = max bit length of UNIX epoch
+25:
+𝑡𝑑𝑖 𝑓 𝑓 ← Floor(𝑡𝑑𝑖 𝑓 𝑓 /2𝑠ℎ𝑖 𝑓 𝑡 )
+⊲ right shift 𝑡𝑑𝑖 𝑓 𝑓 >> 𝑠ℎ𝑖 𝑓 𝑡
+26:
+𝑏𝑖𝑛𝑎𝑟𝑦 ← AsBinary(𝑡𝑑𝑖 𝑓 𝑓 )
+27:
+𝑏𝑖𝑛𝑎𝑟𝑦 ← ZeroPadding(𝑏𝑖𝑛𝑎𝑟𝑦, 𝑚𝑎𝑥𝐿𝑒𝑛𝑔𝑡ℎ − 𝑠ℎ𝑖 𝑓 𝑡)
+28:
+return 𝑏𝑖𝑛𝑎𝑟𝑦
+29: end procedure
+
+𝑡 1 and 𝑡𝑛 are determined as 𝑡𝑠𝑡𝑎𝑟𝑡 and 𝑡𝑒𝑛𝑑 considering conditions such as the lifespan of the
+virus. (e.g., in the case of COVID-19, we currently believe it is 14 days.) Algorithm 1 shows the
+pseudocode of TrajectoryHash. The input parameters 𝜃𝑔𝑒𝑜 and 𝜃 𝑡𝑖𝑚𝑒 correspond to Θ𝑔𝑒𝑜 and
+Θ𝑡𝑖𝑚𝑒 , respectively. While Θ𝑔𝑒𝑜 and Θ𝑡𝑖𝑚𝑒 directly express the spatial distance as in Figure 2, note
+that 𝜃𝑔𝑒𝑜 and 𝜃 𝑡𝑖𝑚𝑒 express granularity on a different scale, as shown in Table 4, 5. The algorithm of
+the encoding is based on two encodings QuadKeyEncode, PeriodicEncode and a binary-level
+mixing function, BitMix. ST-Hash [28] is similar to our encoding. The part to be mixed at the
+binary level is the same, but the 2 encoding methods and the motivation are different. We use
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:16
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+parameter 𝜃𝑔𝑒𝑜
+26
+25
+24
+23
+
+geo distance Θ𝑔𝑒𝑜
+
+parameter 𝜃 𝑡𝑖𝑚𝑒
+32
+26
+24
+22
+
+0.6 m
+1.2 m
+2.4 m
+4.8 m
+
+Table 4. Approximate scale of the parameter 𝜃𝑔𝑒𝑜 .
+
+time distance Θ𝑡𝑖𝑚𝑒
+1s
+1 min
+4 min
+17 min
+
+Table 5. Approximate scale of the parameter
+𝜃 𝑡𝑖𝑚𝑒 .
+
+Fig. 5. quadkey and QuadKeyEncode.
+
+QuadKeyEncode and PeriodicEncode to preserve the trajectory data similarity and hierarchical
+structure to compress the trajectories.
+QuadKeyEncode is based on the quadkey introduced by Bing Map [54], which is a method of
+encoding into bits in the tile coordinate space, recursively dividing into two parts according to a
+given level, as shown in Figure 5. Note that in our method, QuadKeyEncode outputs separated
+binaries. As we can see in the figure, while we obtain "212"(=100110 in binary) using quadkey
+encoding, QuadKeyEncode outputs 101 and 010. This algorithm is described in detail in Algorithm
+1. The parameter 𝜃𝑔𝑒𝑜 and the approximated distance included in the square in tile coordinates
+are shown in Table 4. Strictly speaking, it is correct for both the latitude and longitude at the
+equator, but the tile length of the latitude is slightly variable according to the height of the latitude, e.g., in New York, 𝜃 𝑡𝑖𝑚𝑒 = 22 corresponds to Θ𝑡𝑖𝑚𝑒 = 1.83. Using this encoding, we obtain
+unique binaries for each distinguishable area by 𝜃𝑔𝑒𝑜 . Moreover, we can keep the hierarchical
+structure and similarity of trajectory locations in the binary representation. For instance, given
+𝜃𝑔𝑒𝑜 = 16, (𝑙𝑙𝑛𝑔 , 𝑙𝑙𝑎𝑡 ) = (135.3214557, 30.4564223), we obtain the output 1110000000111010 and
+0110100100111110 as binaries.
+PeriodicEncode is optimized to discretize the time data over a specific given period and at
+specific given time intervals. This encoding outputs bits with minimum length that can express
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:17
+
+Fig. 7. Sequential merge TrajectoryHash.
+Fig. 6. Mixing TrajectoryHash.
+
+a distinct time interval according to given 𝜃 𝑡𝑖𝑚𝑒 in the period 𝑡𝑠𝑡𝑎𝑟𝑡 to 𝑡𝑒𝑛𝑑 . Given 14 days as the
+period, the relation between parameter 𝜃 𝑡𝑖𝑚𝑒 and the approximate time interval is as shown in
+Table 5. The final output length is determined by both 𝜃 𝑡𝑖𝑚𝑒 and (𝑡𝑠𝑡𝑎𝑟𝑡 , 𝑡𝑒𝑛𝑑 ). For example, given
+(𝑡, 𝑡𝑠𝑡𝑎𝑟𝑡 , 𝑡𝑒𝑛𝑑 , 𝜃 𝑡𝑖𝑚𝑒 ) = (“2020/10/10 10 : 00”, “2020/10/05 00 : 00”, “2020/10/19 00 : 00”, 24) , the
+processing is carried out in detail as follows:
+𝑡𝑒𝑛𝑑 − 𝑡𝑠𝑡𝑎𝑟𝑡 = 1603065600 − 1601856000 = 1209600
+𝑚𝑎𝑥𝐿𝑒𝑛𝑔𝑡ℎ = 21 (1209600 < 221 = 2097152) (line 21)
+𝑡𝑑𝑖 𝑓 𝑓 = 1602324000 − 1601856000 = 468000 (line 23)
+𝑠ℎ𝑖 𝑓 𝑡 = 32 − 24 = 8 (line 24)
+𝑡𝑑𝑖 𝑓 𝑓 = 468000/2 ∗ ∗8 = 1828 (line 25)
+𝑏𝑖𝑛𝑎𝑟𝑦 = AsBinary(1828) = 11100100100 (line 26)
+𝑏𝑖𝑛𝑎𝑟𝑦 = ZeroPadding(11100100100, 21 − 8) = 0011100100100 (line 27)
+
+Finally, we obtain 0011100100100 as a binary. In this way, we obtain the minimum representation to express trajectory time information and preserve the time representation similarity of
+the trajectories in the period while adjusting intervals to the given granularity parameter 𝜃 𝑡𝑖𝑚𝑒 .
+Obviously, this gives an information-theoretic lower bound on the byte size, since it is the smallest
+bit representation that identifies a given period. Furthermore, in terms of location information,
+since the bit array obtained from QuadKeyEncode is also the size of the information-theoretic
+lower bound for identifying individual regions in the map at the given scale, TrajectoryHash is a
+succinct representation of the trajectory data for a given granularity.
+Now, we have three binaries, i.e., this longitude: 1110000000111010, latitude: 0110100100111110
+and periodic: 0011100100100. We mix them into one binary by BitMix (line 3). We consider that
+there can be some variants, mixing or simply merging without mixing. A plausible option is to
+mix one by one from each binary as shown in Figure 6. In this mixing, the 3D trajectory data are
+encoded as in Figure 8, where the 3D similarity of the trajectory data is naturally preserved in the
+binaries in a balanced manner regarding time and location. By changing the mixing, we can further
+generalize the encoding. For example, in the encoding of our previous work [34], the spatial and
+temporal information were merged sequentially (Figure 7) to efficiently share and store the prefixes
+on the nodes of a finite state automaton.
+Last, we encode the bits into bytes by ByteEncode for ease of transport and processing. This
+may involve extra padding in the prefix to match the size of the bytes. However, since the padding
+is common in the prefixes, it is largely ignored in the FST.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:18
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Fig. 8. TrajectoryHash interpretation in the time-series map.
+
+Here, we explain that the FST satisfies our three abovementioned requirements. We can use
+the FST as key-based data to store and compress the byte sequence data, sharing prefix bytes
+from the tree structure’s roots. The FST also provides a fast key-based search as a dictionary in
+proportion to the maximum depth. Moreover, the search cost can be O (1) if the maximum length
+is small, which is asymptotically equivalent to the Hashmap and may be advantageous because it
+does not require computing hash functions. Thus, it basically meets our requirements. In addition,
+the FST can also provide operations using select and rank to speed up the internal movement
+between nodes and can efficiently perform multiple adjacent key searches. Therefore, we increase
+the compression efficiency and search performance for the PSI by introducing the FST, and this
+data structure satisfies our requirements.
+5.1.2 Chunking. We have to consider how to make a chunked FST. At step 2 of Figure 3, we
+transform raw data into chunked dictionary representations. Generally, chunking the FST is not a
+straightforward task because the compression results depend on how we divides the dataset for
+each chunk, which is different from the Hashmap. With the FST, the greater the similarity of the
+data contained in each chunk, the more it can be compressed. With the Hashmap, the performance
+does not depends on these processes because the data size is determined just by the number of
+stored data. However, we can solve this problem by simple operation. Before constructing the FST,
+we sort the encoded values in byte order and iteratively take the 𝑁𝐷 /𝑁𝑅 trajectory data from top to
+bottom and transform the data into a single FST. Then, we obtain 𝑁𝑅 chunk of FST. We can stably
+construct well-compressed FST because a chunk of data has more similarity.
+5.2
+
+Complexity Analysis
+
+Here, we discuss the asymptotic computational costs of the PSI and precautions. We show our
+stPSI algorithm for trajectory-based PCT in Algorithm 2. Some of the functions are described in 4.
+Dictionary 𝑟𝑖 must implement the contains method, which returns a Boolean value indicating
+whether the dictionary includes the target or not. In the case of the FST, it is asymptotically constant.
+The computational costs of trajectory-based PCT are as follows. Assume that the cost of a single
+key search for a dictionary is 𝑐 and that the unique size of 𝑄 is 𝑁𝑄 . The calculation cost is
+𝑐 × 𝑁𝑅 × 𝑁𝑄 = O (𝑁𝑅 𝑁𝑄 )
+Seemingly, 𝑁𝑄 and the number of chunks 𝑁𝑅 is constant, and the PSI is completely scalable for
+an infected trajectory size. However, note that the size of 𝑁𝑅 depends on the memory constraints
+of SGX. When processing thousands of queries together, the exact 𝑞𝑖 (𝑖 = 1, ..., 𝑁𝐶 ) information
+needs to be kept within the enclave to correctly reconstruct the response, which can be several
+tens of MB in size; eventually, the size available for chunk 𝑟𝑖 is not large. This means that there is
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:19
+
+Algorithm 2 Spatiotemporal PSI
+Input: 𝑞𝑖 (𝑖 = 1, ..., 𝑛𝑐 ), Θ = (Θ𝑔𝑒𝑜 , Θ𝑡𝑖𝑚𝑒 ), 𝑅 ← mapToChunkedDictionary(𝐷, Θ)
+⊲ 1, 2
+Output: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠
+1: loadToEnclave(𝑞 1, ..., 𝑞 𝑁𝐶 )
+⊲ 5 6
+2: 𝑞 1, ..., 𝑞𝑛𝑐 ← decrypt(𝑞 1, ..., 𝑞𝑛𝑐 )
+⊲ by AES-GCM etc. using shared key through RA
+3: 𝑄 ← mapToArray(𝑞 1, ..., 𝑞 𝑁𝐶 )
+⊲ 6 , 𝑞𝑖 has list of encoded value and client ID
+4: 𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ← {}
+5: for 𝑟 𝑖 ← 𝑅 do
+⊲ 7 𝑅 has 𝑁𝐷 chunks
+6:
+loadToEnclave(𝑟𝑖 )
+⊲ iteratively load chunked data 𝑟𝑖
+7:
+𝑟𝑖 ← decrypt(𝑟𝑖 )
+8:
+for 𝑞𝑢𝑒𝑟𝑦 in 𝑄 do
+⊲ 7 𝑄 is array with 𝑁𝑄 length
+9:
+if 𝑟𝑖 .contains(𝑞𝑢𝑒𝑟𝑦.𝑣𝑎𝑙𝑢𝑒) then
+10:
+𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ← 𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ∪ 𝑞𝑢𝑒𝑟𝑦.𝑐𝑙𝑖𝑒𝑛𝑡𝐼 𝐷
+11:
+end if
+12:
+end for
+13: end for
+14: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← constructResponses(𝑞 1, ..., 𝑞 𝑁𝐶 , 𝑅𝑒𝑠𝑢𝑙𝑡𝑠)
+⊲ 8
+15: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← encrypt(𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠)
+16: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← loadFromEnclave(𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠)
+⊲ return encrypted data to untrusted area
+
+actually a practical lower bound on 𝑁𝑅 . Last, our routine includes decrypt and encrypt. These
+encryptions are implemented by fast and simple methods, such as 128-bit AES-GCM, and the HW
+module for encryption is used inside SGX so that the execution time is not dominant.
+Algorithm 3 shows the algorithm for considering the duration of exposure. The difference is that
+Θ𝑑𝑜𝑒 is required as input, and the number of cases where the PSI is positive are counted continuously
+for each client (i.e., duration of exposure). As on line 11, if the server data contain client data, then
+we add the interval of the sampling rate of the trajectory data collection to 𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒. If
+the server data contain continuous client data, 𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 will be increased; otherwise,
+it will be reset to zero. Finally, the client is considered positive only when the duration of exposure
+to risky contacts exceeds Θ𝑑𝑜𝑒 . Note that this algorithm requires only one scan of the query data;
+thus, the computational complexity is the same as that of Algorithm 2.
+5.3
+
+Accuracy Analysis
+
+Here, we analyze how accurate a contact decision by the stPSI (i.e., Eq.(3)) is compared to the
+correct contact decision (i.e., Eq.(1)). Since Eq.(3) is an approximation of Eq.(1), false negatives
+and false positives may occur. In Figures 9 and 10, the central blue point represents one trajectory
+data point 𝑥𝑖 included in the query from the client. The blue rectangle represents the area of the
+TrajectoryHash value to which 𝑥𝑖 belongs (i.e., the stPSI results are positive if there is infected
+person data in the same area). The red circle represents the area that is judged positive by the exact
+PCT (i.e., Eq. (1)). In particular, Figure 9 shows the projection of 3D space onto the longitude and
+latitude dimensions, indicating a possible false pattern. The false positive occurs in the blue area on
+the upper left of the blue rectangle in the figure, depending on the position of the trajectory point
+in the blue rectangle. If there is a false positive,
+the distance between the false positive data and
+√
+the trajectory point is between Θ𝑔𝑒𝑜 and 2Θ𝑔𝑒𝑜 . A false negative can occur over a relatively large
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:20
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Algorithm 3 Spatiotemporal PSI (duration of exposure)
+Input: 𝑞𝑖 (𝑖 = 1, ..., 𝑛𝑐 ), Θ = (Θ𝑔𝑒𝑜 , Θ𝑡𝑖𝑚𝑒 ), Θ𝑑𝑜𝑒 , 𝑅 ← mapToChunkedDictionary(𝐷, Θ)
+Output: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠
+1: loadToEnclave(𝑞 1, ..., 𝑞 𝑁𝐶 )
+2: 𝑞 1, ..., 𝑞𝑛𝑐 ← decrypt(𝑞 1, ..., 𝑞𝑛𝑐 )
+3: 𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ← {}
+4: for 𝑟 𝑖 ← 𝑅 do
+5:
+loadToEnclave(𝑟𝑖 )
+6:
+𝑟𝑖 ← decrypt(𝑟𝑖 )
+7:
+for 𝑞𝑖 in (𝑞 1, ..., 𝑞 𝑁𝐶 ) do
+8:
+𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 ← 0
+9:
+for 𝑞𝑢𝑒𝑟𝑦 in 𝑞𝑖 do
+10:
+if 𝑟𝑖 .contains(𝑞𝑢𝑒𝑟𝑦.𝑣𝑎𝑙𝑢𝑒) then
+11:
+𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 + +
+12:
+⊲ add the interval of sampling rate of the trajectory data collection. (e.g., 1 minute)
+13:
+if 𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 ≥ Θ𝑑𝑜𝑒 then
+14:
+𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 ← 0
+15:
+𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ← 𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ∪ 𝑞𝑢𝑒𝑟𝑦.𝑐𝑙𝑖𝑒𝑛𝑡𝐼 𝐷
+16:
+break
+17:
+end if
+18:
+𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ← 𝑅𝑒𝑠𝑢𝑙𝑡𝑠 ∪ 𝑞𝑢𝑒𝑟𝑦.𝑐𝑙𝑖𝑒𝑛𝑡𝐼 𝐷
+19:
+else
+20:
+𝑑𝑢𝑟𝑎𝑡𝑖𝑜𝑛𝑂 𝑓 𝐸𝑥𝑝𝑜𝑠𝑢𝑟𝑒 ← 0
+21:
+end if
+22:
+end for
+23:
+end for
+24: end for
+25: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← constructResponses(𝑞 1, ..., 𝑞 𝑁𝐶 , 𝑅𝑒𝑠𝑢𝑙𝑡𝑠)
+⊲ 8
+26: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← encrypt(𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠)
+27: 𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠 ← loadFromEnclave(𝑅𝑒𝑠𝑝𝑜𝑛𝑠𝑒𝑠)
+
+area, as indicated by the red circle in the figure. The possible distance from the trajectory point
+ranges from 0 to Θ𝑔𝑒𝑜 . Figure 10 shows the occurrence of false results in the time direction, where
+the blue point is the trajectory point, the blue area is the area judged as positive by the stPSI, and
+the red area is the area judged as positive by Eq.(1). In the time-axis direction, since the amount of
+Θ𝑡𝑖𝑚𝑒 that is judged positive by the stPSI is always contained within 2Θ𝑡𝑖𝑚𝑒 , it is judged positive by
+Eq.(1), as shown in the figure. Therefore, a false positive does not occur, but a false negative occurs.
+The bounds of the distance between the possible false negatives and the trajectory point are from
+0 to Θ𝑡𝑖𝑚𝑒 . Note that these analyses are for individual data points. In an actual contact detection
+query, we have a large amount of infected person trajectory data. Therefore, these false outcomes
+may not be very problematic because the query will return 1 if at least one positive sample is found
+in the entire infected person dataset. In Section 6.2, we perform an empirical evaluation of these
+false outcomes by experimenting with the trajectory data and show that the resulting detection is
+highly accurate.
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:21
+
+Fig. 9. Possible false outcome in terms of the lo- Fig. 10. Possible false outcome in terms of time.
+cation.
+
+Fig. 11. nfp-stPSI design (2D version for simplicity).
+
+Fig. 12. Maximum distance between
+trajectory point and false positive.
+
+False negatives can occur in the stPSI, which can be problematic. False negatives in PCT may
+encourage potentially infected individuals to become active, which may contribute to the spread
+of infection. In addition, as shown in the previous analysis, the minimum distance between the
+trajectory point and the false negative data point obtained by the stPSI is 0. On the other hand,
+false positives may be effective in spreading infection. Pandl et al. [43] shows the importance
+of appropriate selection of the PDR, suggesting that a wider PDR, i.e., the allowance of false
+positives, may help prevent the spread of infection. Therefore, we believe that a false positive is
+more acceptable than a false negative in PCT. We devise a variant of the stPSI, nfp-stPSI (non-false
+negative-stPSI), which has only false positives and no false negatives. Moreover, there is a guarantee
+that the distances between the trajectory point and false positive samples are tightly bounded.
+nfp-stPSI is a simple extension of the stPSI that intersects all blocks around a block trajectory
+point belonging to a 3D encoded space (Figure 1). In other words, the search is performed on 26
+surrounding blocks in addition to the original center block to which the trajectory point belongs.
+The hash values of these blocks can be efficiently computed from the binary of the trajectory point’s
+TrajectoryHash by some bit operations. Figure 11 shows the design of the nfp-stPSI in 2D space for
+simplicity. nfp-stPSI judges all the surrounding blocks as positive. Therefore, the exact positive area
+according to Eq. (1), indicated by the red circle in the figure, is always detected as positive. The area
+shown by the red bold line in the figure includes all possible exact positive areas (Eq.(1)) for the
+trajectory points belonging to the center block, and it is always included in the area of the external
+blue blocks. Hence, in nfp-stPSI, false negatives do not occur. As shown in Figure 12, the maximum
+distance between the false positives and the trajectory point is reached when the trajectory point
+belongs to the inner corner of the center block and the infected data are in the outer corner of the
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:22
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+size 𝑁 (bytes)
+103 (16 KB)
+104 (0.16 MB)
+105 (1.6 MB)
+106 (16 MB)
+5.0 × 106 (80 MB)
+
+Intel SGX
+execution (ms) /
+communication (MB)
+38 / 0.016
+52 / 0.16
+153 / 1.6
+1552 / 16
+121526 / 80
+
+OT [50]
+execution (ms) /
+communication (MB)
+35 / 2
+207 / 22
+2389 / 235
+27110 / 2482
+154826 / 12502
+
+Table 6. PSI comparison: cryptographiy-based vs secure-hardware-based; execution time (balanced)
+
+√︃
+2 + Θ2
+external block, with a maximum value of 2 2Θ𝑔𝑒𝑜
+𝑡𝑖𝑚𝑒 . Therefore, the false positive that occurs
+is guaranteed to be close to the correct answer to some extent. Thus, although nfp-stPSI increases
+the overhead of the search, it eliminates false negatives and generates acceptable false positives. In
+the next section, we evaluate this method empirically.
+6
+
+EXPERIMENTS
+
+We conduct experiments using real trajectory data to demonstrate that the proposed architecture
+for PCT can achieve high query throughput and the expected properties.
+Experimental setup. We use an HP Z2 SFF G4 Workstation, with a 4-core 3.80 GHz Intel Xeon
+E-2174G CPU (8 threads, with an 8 MB cache), and 64 GB RAM, which supports the SGX instruction
+set and has 128 MB processor reserved memory (PRM) in which 96 MB EPC is available for user use.
+The host OS is Ubuntu 18.04 LTS, with Linux kernel 5.4.0-72. We use version 1.1.3 of the Rust SGX
+SDK2 [72] which supports Intel SGX SDK v2.9.1, and Rust nightly-2020-04-07. Our experimental
+implementation is available on Github3 .
+6.1
+
+Preliminary Experiments
+
+Before the experiments, as described in Section 2.2, we consider the secure-hardware-based PSI to be
+much better than the cryptography-based PSI in terms of efficiency. To verify this, we compare both
+PSI executions under setting similar to our scenario. For fairness, we compare single end-to-end
+PSI query without multiplexing optimization, as described in Section 4. Our secure-hardware-based
+approach implementation is based on Intel SGX and simply uses Hashmap and performs the PSI
+inside the enclave; the OT-based approach implementation 4 follows [50]. Table 6 describes the
+execution time comparison between the OT-based [50] and secure-hardware (Intel SGX) -based PSI
+under the balanced setting, where we assume that only the RA protocol is performed in advance
+and that the online phase includes the client-side encryption and decryption time. We change
+the set size 103 to 106 , and each data point has 128 bit. As shown in Table 6, Intel SGX can easily
+overcome the state-of-the-art method in the balanced setting. In particular, at 105 106 the difference
+in execution time becomes significant because of the overhead of oblivious transfer while SGX
+has scalability in this range of sizes. Additionally, the secure hardware substantially improves the
+bandwidth. The communication cost of SGX is almost the same as the original size because the
+data we have to send are just data encrypted by a symmetric key such as AES-128. Assuming many
+clients, this condition is essential. Although the efficiency is better in the two aspects, we should
+2 https://github.com/apache/incubator-teaclave-sgx-sdk
+3 https://github.com/ylab-public/PCT
+4 https://github.com/osu-crypto/libPSI
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+size 𝑁 (bytes)
+
+size 𝑛
+
+216 (1 MB)
+216 (1 MB)
+220 (17 MB)
+220 (17 MB)
+224 (268 MB)
+224 (268 MB)
+
+5535
+11041
+5535
+11041
+5535
+11041
+
+Intel SGX
+execution (ms) /
+communication (MB)
+77 / 0.089
+73 / 0.17
+72 / 0.089
+85 / 0.17
+249 / 0.089
+424 / 0.17
+
+111:23
+
+HE [14] 5
+600 / 2.6
+1300 / 4.1
+2200 / 5.6
+4000 / 12.0
+10600 / 11.0
+16200 / 21.1
+
+Table 7. PSI comparison: cryptography-based vs secure-hardware-based; execution time (unbalanced)
+
+also pay attention to the last line in the table. Despite using Intel SGX, the execution time is very
+slow because of the memory constraint of SGX. When 𝑁 = 5.0 × 106 (80 MB), the trusted enclave
+has to handle approximately 160 MB of data, which exceeds the memory limitation (=96 MB). As a
+result, serious overhead occurs.
+Table 7 shows the results obtained when using Intel SGX in the unbalanced setting. We also show
+the results of [14] as a reference 5 i.e., the total execution time (online sending and reciver encryption
+and decryption) of the best parameters and the mixmum multithreading (≤ 64). These numbers
+are the best of their implementation, but the table shows Intel-SGX-based PSI is significantly
+fast and efficient in the unbalanced setting, even though the security model is stricter than [14]
+(semi-honest). The secure-hardware-based PSI is basically not affected by the server-side data size
+𝑁 , as shown in Table 2. However, when it is beyond the SGX memory constraint, the execution
+time becomes slow due to paging overheads, as shown at 𝑁 = 224 (268 MB). In this case, the client
+size is very small, and less paging is required, and the impact is smaller than that of the previous
+result.
+In this way, we can achieve a fast PSI by utilizing secure hardware. We expect cryptography-based
+methods to gradually improve; however, it is unlikely that they will catch up to the secure-hardwarebased method in the near future. For deployment in a practical situation for the PCT system, it is
+better to adopt secure hardware.
+6.2
+
+Experiments
+
+Datasets. We conduct the experiments with a synthetic dataset and real datasets. The synthetic
+dataset is generated by the density EPR model [44] implemented in scikit-mobility 6 . We extend
+this implementation to describe a more continuous human mobility; it is reproducible by our
+open-source code 7 . The data are individual trajectories for every minute of 14 days in New York
+City. The real dataset includes data on people’s trajectories in specific regions of Japan available in
+JoRAS8 of The University of Tokyo. We use the people flow dataset for Kinki and Tokyo in Japan to
+create our experimental dataset. Note that this dataset has individual trajectories for every minute
+of only a single day for privacy. We extract only the time and coordinate information and create
+our dataset by applying the encoding described in Section 5.1. Figure 13 shows this 3D trajectory
+data distribution of New York, Kinki and Tokyo from left to right. The scatter is 100000 trajectory
+5 [14]
+
+does not offer open-source implementation; thus we directly compare with the results they reported.
+
+6 https://github.com/scikit-mobility/scikit-mobility
+7 https://github.com/ylab-public/PCT/tree/master/tools/trajectory
+8 http://www.csis.u-tokyo.ac.jp
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:24
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Fig. 13. Trajectory distributions of New York, Kinki and Tokyo. Note that the latitude and longitude scales
+are different.
+
+NY
+Kinki
+Tokyo
+
+client query data
+20160 × 100
+1440 × 100
+1440 × 100
+
+server infected data
+20160 × 1000
+1440 × 14000
+1440 × 14000
+
+Table 8. Data set size used in accuracy evaluation. For example, NY’s client query data has 100 clients and
+each of them has 20160 trajectory point records (e.g., every minute for 2 weeks), totally 2016000 records for
+client query data.
+
+points randomly sampled. Since the New York data are generated by EPR model [44], they are
+distributed in approximately 70 regions. Compared to Kinki, Tokyo has a much denser distribution.
+6.3
+
+Accuracy Experiments
+
+To empirically evaluate the contact detection accuracy of the stPSI and nfp-stPSI, we prepare the
+server-side infected person data and client-side query data for the New York, Kinki and Tokyo
+datasets. Table 8 shows the dataset scale. We measure the results of queries by the stPSI and
+nfp-stPSI and compare them with the correct answers that exactly satisfy Eq. 1 for each client. The
+result of each query is obtained as a binary.
+Tables 9 and 10 show the results of the stPSI and nfp-stPSI, respectively. The tables show the
+parameters used for the stPSI and the true positive, true negative, false positive, and false negative
+rates of the contact detection. Each value represents a percentage and (the number of queries). The
+stPSI has a detection accuracy (true positive + true negative) of approximately 90% for the New
+York dataset and a higher accuracy, closer to 100%, for the real Kinki and Tokyo datasets. However,
+looking at the New York dataset, the stPSI shows nonnegligible false negatives, as theoretically
+expected, and the recall is higher, especially as the threshold parameters become more granular.
+Compared to the stPSI, nfp-stPSI improves the false negative rate and accuracy for all datasets and
+causes false positives. Especially, in the case of New York and (𝜃𝑔𝑒𝑜 , 𝜃 𝑡𝑖𝑚𝑒 ) = (25, 25), nfp-stPSI
+greatly improves on the true positive and false negative rates, with a relatively small false positive
+rate. Moreover, all of these false positives are “close” errors.
+Overall, the accuracy is high, especially for real data. Even when the true positive and true
+negative rates are extremely high in Kinki and Tokyo, respectively, the detection accuracy is high
+in both cases, which emphasizes that our proposed method is significantly effective. In the case of
+real data, we believe that infected people are moving continuously and are more likely to be in
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+𝜃𝑔𝑒𝑜
+21
+NY
+24
+25
+Kinki 24
+Tokyo 24
+
+𝜃 𝑡𝑖𝑚𝑒
+21
+22
+25
+22
+22
+
+TP
+0.49 (985635)
+0.29 (575880)
+0.09 (178467)
+0.01 (1007)
+0.78 (112459)
+
+TN
+0.37 (745317)
+0.61(1224748)
+0.80 (1611751)
+0.99 (141409)
+0.20 (28145)
+
+FP
+0.00 (326)
+0.00(196)
+0.00 (246)
+0.00 (0)
+0.00 (2)
+
+111:25
+
+FN
+0.14(284722)
+0.11(215176)
+0.11 (225536)
+0.00 (45)
+0.01 (1885)
+
+Table 9. st-PSI can achieve high accuracy for all trajectory dataset, but cause false negatives.
+
+𝜃𝑔𝑒𝑜
+21
+NY
+24
+25
+Kinki 24
+Tokyo 24
+
+𝜃 𝑡𝑖𝑚𝑒
+21
+22
+25
+22
+22
+
+TP
+0.63 (1270303)
+0.39 (791054)
+0.20 (404003)
+0.01 (1052)
+0.80 (114313)
+
+TN
+0.26 (530334)
+0.55 (1104383)
+0.74 (1489927)
+0.99 (141380)
+0.19 (26772)
+
+FP
+0.11 (215309)
+0.06 (120561)
+0.06 (122070)
+0.00 (29)
+0.01 (1375)
+
+FN
+0.00 (54)
+0.00 (2)
+0.00 (0)
+0.00 (0)
+0.00 (1)
+
+Table 10. nfp-stPSI improves accuracy and remove false negatives, but cause false positive.
+
+NY
+
+𝜃𝑔𝑒𝑜
+24
+
+𝜃 𝑡𝑖𝑚𝑒
+22
+
+TP
+0.22 (2206)
+
+TN
+0.70 (6986)
+
+FP
+FN
+0.00 (2) 0.08 (806)
+
+Table 11. [49] causes similar errors for subsampled NewYork dataset.
+
+contact with multiple points than with a single trajectory data point; hence, the contacts can be
+captured even with a fixed block area in the stPSI or nfp-stPSI.
+We implement the method in [49] and experiment with its accuracy. The method performs PCT
+based on trajectory data, similar to our method, but considers only the location information and
+not the temporal proximity. Therefore, we randomly select 100 time points out of 14 days and
+apply their method on the trajectory data of those time points. In their method, each data point
+is rounded to the closest position on the grid, where the distance between the points on the grid
+is set by 𝜃𝑔𝑒𝑜 and 𝜃 𝑡𝑖𝑚𝑒 in our experiment. As shown in Table 11, their method can generate false
+negatives as well as the stPSI can.
+Note that in these accuracy evaluation experiments, the accuracy of collecting trajectory data
+including GPS tracking is beyond the scope. The detection accuracy we are discussing is focused
+only on the error generated by the algorithm, not the error caused by the radio signal troubles, and
+so on.
+6.4
+
+Performance Experiments
+
+We mention two notes about the performance experiment as a whole. First, note that in the following
+experiments, both the client and server send trajectory data “every minute” for two weeks. In
+practical scenarios, the data interval may be larger, and hence the client query size will be smaller.
+Therefore, the number of clients and infected people are not very important in these experiments.
+Second, in measuring the execution time, we report the worst case of the stPSI, i.e., while we can
+avoid checking queries that have already been judged as positive in previous chunks during the
+execution of the stPSI, since the stPSI depends on the distribution of the data, we do not skip this
+step and always calculate the intersection for all query data. This is important in terms of security
+and can be a countermeasure against side-channel attacks, which guess the query result from the
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:26
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Fig. 14. FST can efficiently keep trajectory data encoded by TrajectoryHash for different datasets.
+
+execution time. Hence, the execution time practically be shorter than the experimental result as
+usual.
+First, we show the compression results. In our method, the trajectory data are encoded by
+TrajectoryHash and stored in the FST. The baseline method is to use TrajectoryHash and Hashmap
+(of the state-of-the-art Rust standard library 9 ). Figure 14 shows the sizes of the dictionary data
+representation for TrajectoryHash-encoded trajectory points stored in the FST and Hashmap. The
+dataset used here is the server-side dataset shown in Table 8, and Random is random data instead of
+trajectory data. NY (24-22) corresponds to the New York dataset with TrajectoryHash parameters
+(𝜃𝑔𝑒𝑜 , 𝜃 𝑡𝑖𝑚𝑒 ) = (24, 22). The results show that, overall, the FST is able to efficiently compress and
+keep the data encoded by TrajectoryHash compared to the Hashmap. For many datasets, the
+compression is more than approximately 5 times better. Therefore, we can see that compression
+can be achieved regardless of the granularity of the parameters or density of the trajectory data.
+The fact that the compression efficiency for the actual trajectory data is greater than that for the
+random data confirms that TrajectoryHash preserves the similarity of the trajectory data and that
+the FST is able to compress the data well. The reason why the Hashmap size is different for the
+same data size is that some of the trajectory data can be grouped into the same TrajectoryHash
+value (e.g., continuous observations at the same location within a few minutes). This result supports
+the fact that the combination of TrajectoryHash and the FST can perform PCT on a large amount
+of data, even under the tight memory constraints of SGX.
+To operate our system efficiently under the strict enclave memory constraint, we have to determine the proper chunk size. We experiment to find the proper chunk size, using the New York
+dataset and encoding with (𝜃𝑔𝑒𝑜 , 𝜃 𝑡𝑖𝑚𝑒 ) = (25, 25). The server-side data size is 20160 × 5000, and
+the client-side data is 20160 × 200. If the chunk size is 1, i.e., without chunking, the server-side
+data size is approximately 282 MB, which causes very large overhead in allocating memory in the
+enclave area because the process tries to allocate virtual memory using special paging beyond the
+EPC size. We address chunking the FST by presorting the trajectory data, dividing the data into
+chunks, and converting each chunk into an FST as described Section . Figure 15 shows the data for
+each chunk when the above-introduced server data are divided into 10 chunks. The sum of the
+data size is slightly less than the original data size of 282 MB. We consider each FST to keep data
+with high similarity by sorting before chunking.
+Then, we evaluate the relation between stPSI performance and chunk size. Figure 16 shows the
+PSI execution time for different chunk sizes when using the FST and Hashmap. The results of the
+9 https://github.com/rust-lang/hashbrown
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:27
+
+Fig. 15. Sizes of 10 chunks for 282 MB server
+data, and original data size and sum of these
+Fig. 16. The execution time varies depending on the number
+chunks.
+of chunks.
+
+FST show that the execution time decreases as the chunk size increases, being fastest around 20
+to 30, and becomes slower as the chunk size increases. Compared to the result of the Hashmap,
+the FST can achieve better performance overall. When the chunk size is small, the execution time
+is affected by the memory constraints of SGX, and when the chunk size is large, the execution
+time is affected by the cost of the repeated ECALL, which is function used to upload data into the
+enclave and switch the process to a trusted process. Considering that the client query data size is
+approximately 32 MB (= 8 bytes × 20160 × 200), the results are reasonable since the EPC limitation
+is 96 MB. For example, when the chunk size is less than 5, the execution time increases despite the
+small number of iterations because each chunk is more than 56 MB (=282 MB /5), which incurs
+a paging cost. However, when the chunk size is small (e.g., less than 5), there is not such a large
+overhead even when the EPC memory size is exceeded. This outcome occurs because the internal
+implementation of the FST is such that the data to be accessed belong to a contiguous memory
+area and the number of paging occurrences is small. In the case of the Hashmap, the overhead is
+more outstanding. Although not included in the figure, when the chunk size is 1, the execution
+time is 532 seconds. The size of one chunk when divided into 10 chunks is roughly 100 MB, and if
+divided into 50 chunks, it is approximately 20 MB. Compared to the FST, since the memory layout
+of the data of the Hashmap is scattered, the paging of the EPC is likely to occur frequently.
+Next, we evaluate the overall performance. Figure 17 shows the overall execution time of the
+PCT when the server data are fixed at 5000×20160 and the client data increase from 100×20160
+to 500×20160. The figure on the left shows the execution time of the stPSI, and the figure on the
+right shows the execution time of nfp-stPSI. The execution times of the four phases of the stPSI,
+i.e., computation of intersection, decryption of the server data, decryption of the query data, and
+uploading of the query data to the enclave are shown in different colors. In the stPSI, the number
+of chunks is set to 20, and in nfp-stPSI, the number of chunks is set to 1. These values are selected
+because the number of searches to the FST increases enormously in nfp-stPSI; thus it is more
+effective to reduce the number of chunks to reduce the number of iterations. The execution time
+of the stPSI and nfp-stPSI increases almost linearly with the client data size. As the client size
+increases, the time required for uploading and decoding the query data becomes nonnegligible,
+but the computational cost of the intersection is completely dominant. Compared with the stPSI,
+nfp-stPSI causes a large overhead, approximately 4 to 6 times larger. This result indicates that
+there is room for further improvement in the implementation of nfp-stPSI. Overall, however, our
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:28
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+Fig. 17. The stPSI can achieve high performance on a practical data scale (left). nfp-stPSI causes a larger
+overhead (right).
+
+Fig. 18. Finer granularity of parameters
+Fig. 19. Results of the stPSI (left) and nfp-stPSI (right) on real
+directly degrades the performance.
+data.
+
+proposed algorithms are able to return results with practical execution times for data with a scale
+close to that of real data.
+We compare the results in terms of performance with [49], which also achieves PCT by secret
+computation, similar to our method. Their method performs the secret computation by ORAM
+[20]. We perform PCT by using the same implementation of binary search with Floram10 as in
+their work. We assume that the server data consist of 1000 trajectories and the client data consisted
+of 100 trajectories11 . In their algorithm, the precomputation increased the size of the data by a
+factor of 9, resulting in the need to compute the intersection of 9000 points of server data and 900
+points of client data. Even though this is a setting that is approximately six orders of magnitude
+smaller than the scale of our experiment, the computation takes 123.3 seconds on average. This
+result indicates that the overhead of ORAM is still unacceptable at present and that more emphasis
+should be placed on the speedup of the secret computation that the TEE brings.
+10 https://gitlab.com/neucrypt/floram
+11 Note
+
+that this is different from the experimental scale of our proposed method because the computation of the competitor
+is too time consuming.
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:29
+
+Figure 18 shows a comparison of the execution time for several granularity parameters. The
+used client size is 200×20160, and the server size is 5000×20160. Because the parameters are set
+to finer granularity, the execution time essentially increases. This phenomenon occurs due to the
+increase in the size of the hash value and the decrease in the compression ratio by the FST due to
+the decrease in the similarity and coincidence rate of the trajectory data. The size of the hash value
+for 𝜃𝑔𝑒𝑜 , 𝜃 𝑡𝑖𝑚𝑒 = (21, 21) is 7 bytes, but for (24,22) and (25,25), it is 8 bytes.
+The results of the stPSI and nfp-stPSI execution times for the real Kinki and Tokyo datasets
+are shown in Figure 19. The execution times shown are the same as in Figure 17. The used client
+data size is 1440×200, and the server data size is 1440×14000. In the stPSI, the percentage of the
+execution time for decryption and query data upload is relatively high, while in nfp-stPSI, the
+percentage of intersection computation is high. Overall, the execution time is kept small, which
+shows that our proposed algorithm works fast even for real data.
+6.5
+
+Requirements Analysis
+
+We show how our system meets the requirements we introduced in Section 3.2.
+Efficiency. There are four elements that make the system efficient: Intel SGX, chunking, data
+representation, and query multiplexing. First, SGX bring us an efficient PSI. SGX allows software
+to perform secret computations transparently and eliminates the need for complicated and timeconsuming cryptographic techniques to perform the PSI. This fact can be confirmed our preliminary
+experiments and is the main basis of the efficiency of our system. The computational overhead
+is small, and also bandwidth is dramatically improved compared to existing methods. Second,
+chunking 𝑅 into 𝑟𝑖 (𝑖 = 1, ..., 𝑁𝐷 ) avoids the serious paging overhead caused by the severe memory
+constraints of SGX even when the data of infected patients become too large to fit into the enclave.
+Third, the memory-efficient dictionary representation (Section 5.1) reduces the number of chunks,
+resulting in reduced PSI execution and overheads for upload to the enclave. This is also an important
+element of our system. Fourth, steps 5 and 6 (Section 4) show query multiplexing and improve
+the throughput of the query processing. Reading the chunked data 𝑟𝑖 , as in Step 7, is costly due to
+the 𝑁𝐷 iteration, and doing this for every query yields large overheads. As a result, our system
+achieves high query throughput and scalability.
+Security. Our protocol follows the RA and secure computation provided by Intel SGX. Previous
+studies [6, 59] show the protocol security. Informally, any state cannot be observed from outside
+the TEE, and even if any inputs are known, any tampering with the state that can be performed
+by the malicious server will not divulge any information about the client trajectories. Hence, it is
+guaranteed that all information an attacker can observe is only outside the TEE. However, in our
+system, all information observed outside the TEE must be encrypted. Therefore, cryptographically
+strong security for the client’s privacy from any external attacker is ensured when using proper
+encryption. More formal definitions require elaborate modeling of the attacker and private information, but our setting is common, and we defer to earlier work [6, 59]. Note that some side-channel
+attacks, such as Spectre [12] and other cache attacks, are beyond the scope of their work and our
+work. To protect against these attacks, we have to consider data-obliviousness [2, 39] to make the
+side channels uniform.
+Considering the risk analysis discussed in Section 3.2, some simple extensions are needed. DoS
+attacks: To prevent DoS attacks against SGX, it is necessary to authenticate the client before SGX
+processes it. Since the data on the server side change only once a day, each client should be allowed
+to make only one request per day. This can be done with a simple extension, since the information
+of the user requesting the query does not need to be anonymized. Query-abusing attacks: This
+can also be done by authenticating the client to minimize the damage of attacks. The client can
+obtain only the 0 or 1 information. However, even if the request is limited to once a day, there is a
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:30
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+possibility that some information may be leaked as a result of using multiple compromised clients.
+To prevent this, other protection mechanisms are necessary; for example, assuming the possibility
+of linking the obtained information with other information, preserving differential privacy should
+be considered. Side-channel attacks: Since the data are encrypted by a key shared between SGX
+and the client, it cannot be leaked from the network. On the other hand, attacks through the side
+channels inside the server may be possible due to cache attacks, etc. Defending against these attacks
+is the topic of future work. False answering: False answering is prevented because the enclave’s
+internal blogs are verified by RA. Fake data injection: In this scenario, we assume that the health
+agency is a trusted institution, and when a third party injects data, it is necessary to modify the
+data in the memory encrypted by SGX. Thus, it is cryptographically protected. Replay: A replay
+attack can occur even when a secure channel is in place, but it can be completely prevented by
+authenticating the user, restricting the number of requests per day, and updating the key every day.
+Flexibility. We achieve flexibility by parameterizing the encoding of the data using a granularity
+parameter Θ. The three parameters we introduce are geographic granularity, temporal granularity,
+and duration of exposure to the virus. The parameters are shared between the server and clients in
+advance. We have to update all the data when we want to change the rules of risky contact. In other
+words, our method cannot change the flexibility parameters more frequently than batch updates.
+Essentially, we believe that these parameters are determined based on epidemiological arguments
+and that their change frequency is not more than the frequency of batch updates of the data (i.e.,
+once a day).
+Accuracy. Our proposed method may generate nonnegligible false negatives and false positives.
+However, we have shown that it is possible to extend the method to generate only false positives
+with a reasonable upper bound on the error. Note that we have focused only on the errors caused
+by the algorithm. In the real world, in addition to this, there are errors that occur during data
+collection and errors that occur due to the physical characteristics of buildings and vehicles. To
+perform contact detection based on this information, more metadata and other information may be
+required. There is a trade-off between the cost of information collection, privacy, and accuracy. A
+more detailed discussion of the trade-offs involved from epidemiological perspectives is beyond
+the scope.
+7
+
+RELATED WORKS
+
+There are DP3T [68] and similar schemes [7, 30, 51, 67], which are BLE-based decentralized architectures that use a device’s wireless signals. They are the most popular implementation methods
+to date. The major difference from our proposed system is that while they handle only contact
+information through random ID tracking, we directly handle trajectory data in a private manner to
+detect indirect contacts. Desire [9], known as hybrid architecture, has basically the similar characteristics as decentralized architectures In Desire users send random ID-based contact information
+to the server, but the ID cannot be used to identify an individual. Therefore, there is no way to
+discover an indirect contact based on trajectory data.
+Hamagen [45] and AAROGYA SETU 12 are similar applications developed for COVID-19 but
+use trajectory data. Hamagen uses trajectory data to identify the contact location, but the logic
+of contact determination is different from that of our proposed method because Hamagen is a
+BLE-based method similar to DP3T. In other words, Hamagen does not attempt to use trajectory
+data to detect contacts but rather to publish the locations where contacts with infected people have
+occurred. AAROGYA SETU collects raw trajectory data, unlike our system; thus, there are serious
+privacy concerns [55]. There are other studies [17, 38] that propose the use of richer data such as
+12 https://www.aarogyasetu.gov.in/
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:31
+
+users’ detailed trajectory data. In contrast to these studies, our method differs in that we use these
+rich trajectory data to find instances of indirect contact.
+We summarize the comparison between the BLE-based PCT technique and our method (centralized architecture) as follows. First, from the security and privacy points of view, the characteristics
+are very different, as described in Section 3.2 and [3]. In centralized architectures, it is important to
+discuss the trust model. We have to consider how to protect a client’s privacy when the server is
+untrusted. In the BLE-based approach, there is no such security concern since personal data are not
+exposed to any party. On the other hand, BLE-based methods have security risks that do not arise
+in a centralized architecture, such as continuous tracking of random IDs. In most cases, to ensure
+the security of a centralized architecture, either a very costly method such as secret computation or
+a strong assumption such as trusting the server is required. This is one of the main reasons why a
+decentralized architecture is preferred. Second, in terms of efficiency, as opposed to the BLE-based
+method, where the contact decision is computed on each device, our method is computed on the
+server, which can be computationally intensive. The advantage of the BLE-based method is that the
+computational cost is lower than that of our method, which compares the data of many infected
+people, because the target of the computation is limited to only those who have direct contact.
+On the other hand, it is not possible to detect, e.g., indirect contact, via the BLE-based method.
+In terms of communication cost, the BLE-based method basically requires broadcasting of the
+infected person data. While the size of these data is very small, it is necessary to notify all users.
+In a centralized architecture such as ours, users need to send information about their trajectory
+data only when they query the server, but the data size is much larger. Finally, regarding storage,
+while the BLE-based method stores only the contact’s ID, our method requires the user to store the
+trajectory data on his own device. Third, we compare the ability to detect contacts. We mentioned
+that our method is able to detect a wider class of contacts (i.e., indirect contacts) by using trajectory
+data. However, there are cases where the BLE-based method is more advantageous in the contact
+detection capability. Since the BLE-based method relies on wireless signals, contact decisions are
+performed according to the constraints of the physical environment (e.g., walls, vehicles, etc.).
+Therefore, there is a possibility that direct contact can be detected with an accuracy that cannot be
+captured only by analyzing trajectory data. This is a noteworthy point compared to our method.
+Reichert et al. [49] proposes a setting similar to that of our study. The similarity is that they used
+PCT with secret computation techniques and centralized trajectory data. Our work differs from
+theirs in the contact detection algorithm and the secret computation technique used. The basis
+of their method is a PSI using ORAM, which has some performance problems. To compare, we
+extensively experiment on and evaluate the performance and accuracy of the two methods in this
+work.
+We need to refer to the open-source project SafeTrace (https://github.com/enigmampc/SafeTrace)
+[21]. SafeTrace proposes a TEE-based method similar to our proposed method. SafeTrace focuses
+mainly on collecting and managing the trajectory data secretly. Currently, the development is not
+updated, and the part of contact detection (PCT) and notification service are not yet specified.
+Moreover, their work does not include any efficient PCT algorithm. We develop an algorithm for
+finding indirect contacts; thus, their work is orthogonal to ours. One clear difference between
+our proposed method and theirs is that their system collects the complete trajectory data, while
+our system uses information that is optimally encoded for PCT and can be applied in the stPSI
+efficiently. Hence, our proposed method is able to achieve optimized performance because it is
+focused on PCT.
+A similar type of query to the proximity query is the reachability query [56, 58]. , where the
+query is to determine whether or not it is possible to reach a target vertex from a source vertex in a
+given digraph. This method has the potential to perform contact tracing by using a graph related
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:32
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+to meeting information [58]. However, it is not suitable for answering contact judgment queries
+for unknown users because it can answer queries only for data that can be precomputed and are
+already in the database, and it cannot answer unknown data efficiently. [58] has a different feature
+from our proposed method because it can track contacts on a human basis, not on a location basis.
+Regarding trajectory data compression, a well-studied technique is that of Douglas-Peucker,
+i.e., route-wise compression [11, 57, 78]. The basic idea is reproduction by estimating the route
+from a minimum number of points [57]. The compression is performed by approximating the route
+information rather than the position information. Our compression is based on the similarity of
+trajectory points. Therefore, it is orthogonal to these compression methods. However, this routewise compression may not work well in contact tracing because it is not possible to tell whether or
+not points are really in contact just by intersecting. To detect contact, it is necessary to include
+some time information in the route information.
+8
+
+CONCLUSIONS
+
+In this paper, we proposed a trajectory-based PCT system using trusted hardware to control the
+spread of infectious diseases. We identified the problems of existing PCT systems, clarified the
+requirements for trajectory-based PCT, and presented a TEE-based architecture to achieve secure,
+efficient, flexible, and accurate contact tracing. Our experimental results obtained on real data
+suggested that our proposed system can work on a realistic scale. We hope that this study will
+motivate different communities and help in the development of solutions to combat COVID-19 as
+soon as possible.
+ACKNOWLEDGMENTS
+This work is partially supported by JSPS KAKENHI Grant No. 17H06099, 18H04093, 19K20269,
+JST/NSF Joint Research SICORP 20-201031504, and CCF-Tencent Open Fund WeBank Special Fund.
+Additionally, this is joint research with CSIS, the University of Tokyo (No. 974) and used the
+following data ID: 3000200800, 3038201000.
+REFERENCES
+[1] Roba Abbas and Katina Michael. 2020. COVID-19 contact trace app deployments: Learnings from Australia and
+Singapore. IEEE Consumer Electronics Magazine 9, 5 (2020), 65–70.
+[2] Adil Ahmad, Kyungtae Kim, Muhammad Ihsanulhaq Sarfaraz, and Byoungyoung Lee. 2018. OBLIVIATE: A Data
+Oblivious Filesystem for Intel SGX.. In NDSS.
+[3] Nadeem Ahmed, Regio A Michelin, Wanli Xue, Sushmita Ruj, Robert Malaney, Salil S Kanhere, Aruna Seneviratne,
+Wen Hu, Helge Janicke, and Sanjay K Jha. 2020. A survey of covid-19 contact tracing apps. IEEE Access 8 (2020),
+134577–134601.
+[4] Mohsen Ali, Tamer ElBatt, and Moustafa Youssef. 2018. SenseIO: Realistic ubiquitous indoor outdoor detection system
+using smartphones. IEEE Sensors Journal 18, 9 (2018), 3684–3693.
+[5] Gennaro Avitabile, Vincenzo Botta, Vincenzo Iovino, and Ivan Visconti. 2020. Towards Defeating Mass Surveillance
+and SARS-CoV-2: The Pronto-C2 Fully Decentralized Automatic Contact Tracing System. IACR Cryptol. ePrint Arch.
+2020 (2020), 493.
+[6] Raad Bahmani, Manuel Barbosa, Ferdinand Brasser, Bernardo Portela, Ahmad-Reza Sadeghi, Guillaume Scerri, and Bogdan Warinschi. 2017. Secure multiparty computation from SGX. In International Conference on Financial Cryptography
+and Data Security. Springer, 477–497.
+[7] Johannes K Becker, David Li, and David Starobinski. 2019. Tracking anonymized bluetooth devices. Proceedings on
+Privacy Enhancing Technologies 2019, 3 (2019), 50–65.
+[8] Samuel Brack, Leonie Reichert, and Björn Scheuermann. 2020. Decentralized Contact Tracing Using a DHT and Blind
+Signatures. IACR Cryptol. ePrint Arch. 2020 (2020), 398.
+[9] Claude Castelluccia, Nataliia Bielova, Antoine Boutet, Mathieu Cunche, Cédric Lauradoux, Daniel Le Métayer, and
+Vincent Roca. 2020. DESIRE: A Third Way for a European Exposure Notification System Leveraging the best of
+centralized and decentralized systems. arXiv preprint arXiv:2008.01621 (2020).
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:33
+
+[10] Muge Cevik, Julia Marcus, Caroline Buckee, and Tara Smith. 2020. SARS-CoV-2 transmission dynamics should inform
+policy. Available at SSRN 3692807 (2020).
+[11] Chao Chen, Yan Ding, Xuefeng Xie, Shu Zhang, Zhu Wang, and Liang Feng. 2019. TrajCompressor: An online mapmatching-based trajectory compression framework leveraging vehicle heading direction and change. IEEE Transactions
+on Intelligent Transportation Systems 21, 5 (2019), 2012–2028.
+[12] Guoxing Chen, Sanchuan Chen, Yuan Xiao, Yinqian Zhang, Zhiqiang Lin, and Ten H Lai. 2019. SgxPectre: Stealing
+Intel secrets from SGX enclaves via speculative execution. In 2019 IEEE European Symposium on Security and Privacy
+(EuroS&P). IEEE, 142–157.
+[13] Hao Chen, Zhicong Huang, Kim Laine, and Peter Rindal. 2018. Labeled PSI from fully homomorphic encryption with
+malicious security. In Proceedings of the 2018 ACM SIGSAC Conference on Computer and Communications Security.
+1223–1237.
+[14] Hao Chen, Kim Laine, and Peter Rindal. 2017. Fast private set intersection from homomorphic encryption. In Proceedings
+of the 2017 ACM SIGSAC Conference on Computer and Communications Security. 1243–1255.
+[15] Hyunghoon Cho, Daphne Ippolito, and Yun William Yu. 2020. Contact tracing mobile apps for COVID-19: Privacy
+considerations and related trade-offs. arXiv preprint arXiv:2003.11511 (2020).
+[16] Victor Costan and Srinivas Devadas. 2016. Intel SGX Explained. IACR Cryptol. ePrint Arch. 2016, 86 (2016), 1–118.
+[17] David Culler, Prabal Dutta, Gabe Fierro, Joseph E Gonzalez, Nathan Pemberton, Johann Schleier-Smith, Kalyanaraman
+Shankari, Alvin Wan, and Thomas Zachariah. 2020. CoVista: A Unified View on Privacy Sensitive Mobile Contact
+Tracing Effort. arXiv preprint arXiv:2005.13164 (2020).
+[18] Emiliano De Cristofaro, Jihye Kim, and Gene Tsudik. 2010. Linear-complexity private set intersection protocols secure
+in malicious model. In International Conference on the Theory and Application of Cryptology and Information Security.
+Springer, 213–231.
+[19] Daniel Demmler, Peter Rindal, Mike Rosulek, and Ni Trieu. 2018. PIR-PSI: scaling private contact discovery. Proceedings
+on Privacy Enhancing Technologies 2018, 4 (2018), 159–178.
+[20] Jack Doerner and Abhi Shelat. 2017. Scaling ORAM for secure computation. In Proceedings of the 2017 ACM SIGSAC
+Conference on Computer and Communications Security. 523–535.
+[21] enigma. 2020. https://www.enigma.co/products/.
+How COVID-19 cases are evolving, along with our understanding of the
+[22] Brittany Falkers. 2020.
+virus. https://www.kgw.com/article/news/health/coronavirus/multnomah-co-top-health-official-talks-about-ourevolving-understanding-of-the-novel-coronavirus/283-f2deae47-ff37-4699-9b4b-12e0c522f03c.
+[23] Luca Ferretti, Chris Wymant, Michelle Kendall, Lele Zhao, Anel Nurtay, Lucie Abeler-Dörner, Michael Parker, David
+Bonsall, and Christophe Fraser. 2020. Quantifying SARS-CoV-2 transmission suggests epidemic control with digital
+contact tracing. Science 368, 6491 (2020).
+[24] Centers for Disease Control and Prevention. 2020. CDC updates COVID-19 transmission webpage to clarify information
+about types of spread. https://www.cdc.gov/media/releases/2020/s0522-cdc-updates-covid-transmission.html.
+[25] Centers for Disease Control and Prevention. 2021. Public Health Guidance for Community-Related Exposure. https:
+//www.cdc.gov/coronavirus/2019-ncov/php/public-health-recommendations.html.
+[26] Anders T Gjerdrum, Robert Pettersen, Håvard D Johansen, and Dag Johansen. 2017. Performance of Trusted Computing
+in Cloud Infrastructures with Intel SGX.. In CLOSER. 668–675.
+[27] Oded Goldreich. 2009. Foundations of cryptography: volume 2, basic applications. Cambridge university press.
+[28] Xuefeng Guan, Cheng Bo, Zhenqiang Li, and Yaojin Yu. 2017. ST-hash: An efficient spatiotemporal index for massive
+trajectory data in a NoSQL database. In 2017 25th International Conference on Geoinformatics. IEEE, 1–7.
+[29] Shay Gueron. 2016. Memory encryption for general-purpose processors. IEEE Security & Privacy 14, 6 (2016), 54–62.
+[30] Yaron Gvili. 2020. Security analysis of the covid-19 contact tracing specifications by apple inc. and google inc. IACR
+Cryptol. ePrint Arch. 2020 (2020), 428.
+[31] Xingyu Huang, Yong Li, Yue Wang, Xinlei Chen, Yu Xiao, and Lin Zhang. 2018. CTS: A cellular-based trajectory
+tracking system with GPS-level accuracy. Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous
+Technologies 1, 4 (2018), 1–29.
+[32] Yan Huang, David Evans, and Jonathan Katz. 2012. Private set intersection: Are garbled circuits better than custom
+protocols?. In NDSS.
+[33] Christian S Jensen, Hua Lu, and Man Lung Yiu. 2009. Location privacy techniques in client-server architectures. In
+Privacy in location-based applications. Springer, 31–58.
+[34] Fumiyuki Kato, Yang Cao, and Masatoshi Yoshikawa. 2020. Secure and Efficient Trajectory-Based Contact Tracing
+using Trusted Hardware. In Proceedings of the 7th international workshop on privacy and security of big data.
+[35] Can Kockan, Kaiyuan Zhu, Natnatee Dokmai, Nikolai Karpov, M Oguzhan Kulekci, David P Woodruff, and S Cenk
+Sahinalp. 2020. Sketching algorithms for genomic data analysis and querying in a secure enclave. Nature Methods 17,
+3 (2020), 295–301.
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+111:34
+
+Fumiyuk Kato, Yang Cao, and Yoshikawa Masatoshi
+
+[36] Tarun Kulshrestha, Divya Saxena, Rajdeep Niyogi, Vaskar Raychoudhury, and Manoj Misra. 2017. SmartITS:
+Smartphone-based identification and tracking using seamless indoor-outdoor localization. Journal of Network and
+Computer Applications 98 (2017), 97–113.
+[37] Kevin Lahey. 2020. Monitoring Intel SGX Enclaves. https://fortanix.com/blog/2020/02/monitoring-intel-sgx-enclaves/.
+[38] Y Luo, N Tang, G Li, W Li, T Zhao, and X Yu. 2020. DEEPEYE: a data science system for monitoring and exploring
+COVID-19 data. IEEE Data Eng. Bull 12 (2020).
+[39] Pratyush Mishra, Rishabh Poddar, Jerry Chen, Alessandro Chiesa, and Raluca Ada Popa. 2018. Oblix: An efficient
+oblivious search index. In 2018 IEEE Symposium on Security and Privacy (SP). IEEE, 279–296.
+[40] Payman Mohassel and Matthew Franklin. 2006. Efficiency tradeoffs for malicious two-party computation. In International Workshop on Public Key Cryptography. Springer, 458–473.
+[41] Mirco Nanni, Gennady Andrienko, Chiara Boldrini, Francesco Bonchi, Ciro Cattuto, Francesca Chiaromonte, Giovanni
+Comandé, Marco Conti, Mark Coté, Frank Dignum, et al. 2020. Give more data, awareness and control to individual
+citizens, and they will help COVID-19 containment. arXiv preprint arXiv:2004.05222 (2020).
+[42] Arvind Narayanan, Narendran Thiagarajan, Mugdha Lakhani, Michael Hamburg, Dan Boneh, et al. 2011. Location
+privacy via private proximity testing.. In NDSS, Vol. 11.
+[43] Konstantin D Pandl, Scott Thiebes, Manuel Schmidt-Kraepelin, and Ali Sunyaev. 2021. How detection ranges and
+usage stops impact digital contact tracing effectiveness for COVID-19. Scientific reports 11, 1 (2021), 1–11.
+[44] Luca Pappalardo, Filippo Simini, Salvatore Rinzivillo, Dino Pedreschi, Fosca Giannotti, and Albert-László Barabási.
+2015. Returners and explorers dichotomy in human mobility. Nature communications 6, 1 (2015), 1–8.
+[45] Benny Pinkas and Eyal Ronen. 2020. Hashomer-a proposal for a privacy-preserving bluetooth based contact tracing
+scheme for hamagen.
+[46] Benny Pinkas, Thomas Schneider, and Michael Zohner. 2014. Faster Private Set Intersection Based on OT Extension.
+In 23rd USENIX Security Symposium (USENIX Security 14). USENIX Association, San Diego, CA, 797–812. https:
+//www.usenix.org/conference/usenixsecurity14/technical-sessions/presentation/pinkas
+[47] Benny Pinkas, Thomas Schneider, and Michael Zohner. 2018. Scalable private set intersection based on OT extension.
+ACM Transactions on Privacy and Security (TOPS) 21, 2 (2018), 1–35.
+[48] Chuan Qin, Luoqi Zhou, Ziwei Hu, Shuoqi Zhang, Sheng Yang, Yu Tao, Cuihong Xie, Ke Ma, Ke Shang, Wei
+Wang, and Dai-Shi Tian. 2020. Dysregulation of Immune Response in Patients With Coronavirus 2019 (COVID19) in Wuhan, China. Clinical Infectious Diseases 71, 15 (03 2020), 762–768. https://doi.org/10.1093/cid/ciaa248
+arXiv:https://academic.oup.com/cid/article-pdf/71/15/762/33538038/ciaa248.pdf
+[49] L. Reichert, Samuel Brack, and B. Scheuermann. 2020. Privacy-Preserving Contact Tracing of COVID-19 Patients.
+Presented at the Poster Session at the 41st IEEE Symposium on Security and Privacy. (2020).
+[50] Peter Rindal and Mike Rosulek. 2017. Malicious-secure private set intersection via dual execution. In Proceedings of the
+2017 ACM SIGSAC Conference on Computer and Communications Security. 1229–1242.
+[51] Ronald L Rivest, Jon Callas, Ran Canetti, Kevin Esvelt, Daniel Kahn Gillmor, Yael Tauman Kalai, Anna Lysyanskaya,
+Adam Norige, Ramesh Raskar, Adi Shamir, et al. 2020. The PACT protocol specification. Private Automated Contact
+Tracing Team, MIT, Cambridge, MA, USA, Tech. Rep. 0.1 (2020).
+[52] Mohamed Sabt, Mohammed Achemlal, and Abdelmadjid Bouabdallah. 2015. Trusted execution environment: what it
+is, and what it is not. In 2015 IEEE Trustcom/BigDataSE/ISPA, Vol. 1. IEEE, 57–64.
+[53] Marcel Salathé, Christian L Althaus, Richard Neher, Silvia Stringhini, Emma Hodcroft, Jacques Fellay, Marcel Zwahlen,
+Gabriela Senti, Manuel Battegay, Annelies Wilder-Smith, et al. 2020. COVID-19 epidemic in Switzerland: on the
+importance of testing, contact tracing and isolation. Swiss medical weekly 150, 11-12 (2020), w20225.
+[54] Joe Schwartz(Microsoft). 2018. Bing Maps Tile System. https://docs.microsoft.com/en-us/bingmaps/articles/bingmaps-tile-system.
+[55] Diganth Raj Sehgal. 2020. Unpacking the Privacy Concerns of Aarogya Setu App. https://blog.ipleaders.in/unpackingprivacy-concerns-aarogya-setu-app/.
+[56] Houtan Shirani-Mehr, Farnoush Banaei Kashani, and Cyrus Shahabi. 2012. Efficient reachability query evaluation in
+large spatiotemporal contact datasets. arXiv preprint arXiv:1205.6696 (2012).
+[57] Renchu Song, Weiwei Sun, Baihua Zheng, and Yu Zheng. 2014. PRESS: A novel framework of trajectory compression
+in road networks. arXiv preprint arXiv:1402.1546 (2014).
+[58] Elena V. Strzheletska and Vassilis J. Tsotras. 2017. Efficient Processing of Reachability Queries with Meetings. In
+Proceedings of the 25th ACM SIGSPATIAL International Conference on Advances in Geographic Information Systems
+(Redondo Beach, CA, USA) (SIGSPATIAL ’17). Association for Computing Machinery, New York, NY, USA, Article 22,
+10 pages. https://doi.org/10.1145/3139958.3139982
+[59] Pramod Subramanyan, Rohit Sinha, Ilia Lebedev, Srinivas Devadas, and Sanjit A Seshia. 2017. A formal foundation for secure remote execution of enclaves. In Proceedings of the 2017 ACM SIGSAC Conference on Computer and
+Communications Security. 2435–2450.
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+PCT-TEE: Trajectory-based Private Contact Tracing System with Trusted Execution Environment
+
+111:35
+
+[60] Meysam Taassori, Ali Shafiee, and Rajeev Balasubramonian. 2018. VAULT: Reducing paging overheads in SGX with
+efficient integrity verification structures. In Proceedings of the Twenty-Third International Conference on Architectural
+Support for Programming Languages and Operating Systems. 665–678.
+[61] Sandeep Tamrakar, Jian Liu, Andrew Paverd, Jan-Erik Ekberg, Benny Pinkas, and N Asokan. 2017. The circle game:
+Scalable private membership test using trusted hardware. In Proceedings of the 2017 ACM on Asia Conference on
+Computer and Communications Security. 31–44.
+[62] Qiang Tang. 2020. Privacy-preserving contact tracing: current solutions and open questions. arXiv preprint
+arXiv:2004.06818 (2020).
+[63] TCNCoalition. 2020. TCN. https://github.com/TCNCoalition/TCN.
+[64] Rachael Thorneloe, Tracy Epton, Wendy Fynn, Michael Daly, Natalia Stanulewicz, Angelos Kassianos, Gillian W
+Shorter, Sarah-Jane Moll, Miglena Campbell, Samantha Sodergren, et al. 2020. SCOPING REVIEW OF MOBILE PHONE
+APP UPTAKE AND ENGAGEMENT TO INFORM DIGITAL CONTACT TRACING TOOLS FOR COVID-19. (2020).
+[65] Hongliang Tian, Qiong Zhang, Shoumeng Yan, Alex Rudnitsky, Liron Shacham, Ron Yariv, and Noam Milshten. 2018.
+Switchless calls made practical in intel SGX. In Proceedings of the 3rd Workshop on System Software for Trusted Execution.
+22–27.
+[66] The Japan Times. 2020. New WHO guidance calls for more evidence on airborne coronavirus transmission. https:
+//www.japantimes.co.jp/news/2020/07/10/world/science-health-world/who-covid19-airborne-transmission/.
+[67] Ni Trieu, Kareem Shehata, Prateek Saxena, Reza Shokri, and Dawn Song. 2020. Epione: Lightweight contact tracing
+with strong privacy. arXiv preprint arXiv:2004.13293 (2020).
+[68] Carmela Troncoso, Mathias Payer, Jean-Pierre Hubaux, Marcel Salathé, James Larus, Edouard Bugnion, Wouter Lueks,
+Theresa Stadler, Apostolos Pyrgelis, Daniele Antonioli, et al. 2020. Decentralized privacy-preserving proximity tracing.
+arXiv preprint arXiv:2005.12273 (2020).
+[69] Neeltje Van Doremalen, Trenton Bushmaker, Dylan H Morris, Myndi G Holbrook, Amandine Gamble, Brandi N
+Williamson, Azaibi Tamin, Jennifer L Harcourt, Natalie J Thornburg, Susan I Gerber, et al. 2020. Aerosol and surface
+stability of SARS-CoV-2 as compared with SARS-CoV-1. New England journal of medicine 382, 16 (2020), 1564–1567.
+[70] Serge Vaudenay. 2020. Analysis of DP3T. IACR Cryptol. ePrint Arch. 2020 (2020), 399.
+[71] C Jason Wang, Chun Y Ng, and Robert H Brook. 2020. Response to COVID-19 in Taiwan: big data analytics, new
+technology, and proactive testing. Jama 323, 14 (2020), 1341–1342.
+[72] Huibo Wang, Pei Wang, Yu Ding, Mingshen Sun, Yiming Jing, Ran Duan, Long Li, Yulong Zhang, Tao Wei, and
+Zhiqiang Lin. 2019. Towards memory safe enclave programming with rust-sgx. In Proceedings of the 2019 ACM SIGSAC
+Conference on Computer and Communications Security. 2333–2350.
+[73] HUMAN RIGHTS WATCH. 2020. Mobile Location Data and Covid-19: Q&A. https://www.hrw.org/news/2020/05/13/
+mobile-location-data-and-covid-19-qa.
+[74] Chaojun Xie, Hongjun Zhao, Kuibiao Li, Zhoubin Zhang, Xiaoxiao Lu, Huide Peng, Dahu Wang, Jin Chen, Xiao Zhang,
+Di Wu, et al. 2020. The evidence of indirect transmission of SARS-CoV-2 reported in Guangzhou, China. BMC public
+health 20, 1 (2020), 1–9.
+[75] Li Xiong, Cyrus Shahabi, Yanan Da, Ritesh Ahuja, Vicki Hertzberg, Lance Waller, Xiaoqian Jiang, and Amy Franklin.
+2020. REACT: Real-Time Contact Tracing and Risk Monitoring Using Privacy-Enhanced Mobile Tracking. SIGSPATIAL
+Special 12, 2 (Oct. 2020), 3–14. https://doi.org/10.1145/3431843.3431845
+[76] Mark Zastrow. 2020. South Korea is reporting intimate details of COVID-19 cases: has it helped? https://www.nature.
+com/articles/d41586-020-00740-y.
+[77] Huanchen Zhang, Hyeontaek Lim, Viktor Leis, David G Andersen, Michael Kaminsky, Kimberly Keeton, and Andrew
+Pavlo. 2018. Surf: Practical range query filtering with fast succinct tries. In Proceedings of the 2018 International
+Conference on Management of Data. 323–336.
+[78] Yan Zhao, Shuo Shang, Yu Wang, Bolong Zheng, Quoc Viet Hung Nguyen, and Kai Zheng. 2018. REST: A referencebased framework for spatio-temporal trajectory compression. In Proceedings of the 24th ACM SIGKDD International
+Conference on Knowledge Discovery & Data Mining. 2797–2806.
+
+J. ACM, Vol. 37, No. 4, Article 111. Publication date: August 2020.
+
+

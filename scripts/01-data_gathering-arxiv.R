@@ -25,18 +25,18 @@ citation('aRxiv')
 #### Get metadata ####
 # Get count of number of papers using the same terms as before
 arxiv_count('all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2"')
-# Result on 22 May is: 4,352
+# Result on 15 July is: 4,352
 
-# All records up to 1 May, 2021
+# All records up to 30 June, 2021
 arxiv_count('submittedDate:[20200101* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# Result on 22 May is: 4281
+# Result on 15 July is: 4280
 
 arxiv_results <- arxiv_search(query = 'submittedDate:[20200101* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2)"',
                     limit = 5000,
                     batchsize = 500)
 
 arxiv_count('submittedDate:[20200101* TO 20200331*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# There are 235 to get
+# There are 232 to get
 arxiv_result_to_march <- 
   arxiv_search(query = 'submittedDate:[20200101* TO 20200331*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
@@ -64,7 +64,7 @@ arxiv_result_april_to_aug_iii <-
   arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
                limit = 3500,
-               start = 700)
+               start = 1000)
 arxiv_result_april_to_aug_iiii <- 
   arxiv_search(query = 'submittedDate:[20200401* TO 20200831*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
@@ -72,8 +72,8 @@ arxiv_result_april_to_aug_iiii <-
                start = 1700)
 
 # Spetember 2020 to May 2021 (present)
-arxiv_count('submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
-# There are 1829 to get
+arxiv_count('submittedDate:[20200901* TO 20210701*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")')
+# There are 2181 to get
 arxiv_result_sep_to_today <- 
   arxiv_search(query = 'submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
@@ -81,7 +81,12 @@ arxiv_result_sep_to_today <-
 arxiv_result_sep_to_today_ii <- 
   arxiv_search(query = 'submittedDate:[20200901* TO 20210630*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
                sort_by="submitted",
-               start = 400,
+               start = 1300,
+               limit = 3500)
+arxiv_result_sep_to_today_iii <- 
+  arxiv_search(query = 'submittedDate:[20200901* TO 20210701*] AND (all:"COVID-19" all:"COVID 19" all:"covid-19" all:"covid 19" all:"SARS-CoV-2" all:"SARSCoV-2" all:"corona virus" all:"Corona Virus" all:"coronavirus" all:"2019-nCoV" all:"coronavirus-2")',
+               sort_by="submitted",
+               start = 1500,
                limit = 3500)
 
 
@@ -89,7 +94,7 @@ arxiv_result_sep_to_today_ii <-
 all_arxiv_results <- 
   rbind(arxiv_result_to_march, arxiv_result_to_march_ii, arxiv_result_april_to_aug, 
         arxiv_result_april_to_aug_ii, arxiv_result_april_to_aug_iii, 
-        arxiv_result_april_to_aug_iiii, arxiv_result_sep_to_today, arxiv_result_sep_to_today_ii)
+        arxiv_result_april_to_aug_iiii, arxiv_result_sep_to_today, arxiv_result_sep_to_today_ii, arxiv_result_sep_to_today_iii)
 
 # Filter for unique papers by ID; n = 3,896   
 all_arxiv_results <- all_arxiv_results%>% distinct(id, .keep_all = TRUE)
@@ -183,8 +188,8 @@ purrr::walk2(get_sample_arxiv_results$link_pdf,
 
 # Problem: some papers in sample don't actually have valid pdf links. They will show as having been downloaded but will not convert to text. 
 # Use code below to identify non-downloaded pdfs if necessary.
-downloaded_pdf <- list.files("outputs/data/pdf-arxiv")
-downloaded_txt <- list.files("outputs/data/text-arxiv")
+downloaded_pdf <- list.files("outputs/data/pdf-arxiv/")
+downloaded_txt <- list.files("outputs/data/text-arxiv/")
 
 # for each pdf, cycle through all txt files, and if there is no doi from sample that corresponds to the pdf, remove it
 not_working <- arxiv_sample %>% filter(!id %in% str_sub(downloaded_txt, end = -5))
@@ -195,12 +200,13 @@ file.remove(pdf_files)
 arxiv_sample <- arxiv_sample %>% filter(!id %in% not_working$id)
 
 # Sample new papers (may need to change seed if this step is repeated)
-set.seed(4200)
+set.seed(14)
 arxiv_sample_new <- all_arxiv_results[sample(nrow(all_arxiv_results), nrow(not_working)),]
 # Check that new papers are not currently in the sample
-# If line 202 returns any true values, repeat sample with different seed and check again
+# If line 207 returns any true values, repeat sample with different seed and check again
 paste0(arxiv_sample_new$id, ".pdf") %in% downloaded_pdf
-# If above is FALSE, bind to end of sample data and re-save sample frame
+# If all above is FALSE, delete "not_working" files, bind new sample to end of sample data and re-save sample frame
+paste0(getwd(), "/outputs/data/pdf-arxiv/", not_working$id, ".pdf") %>% file.remove()
 arxiv_sample <- rbind(arxiv_sample, arxiv_sample_new)
 write_csv(arxiv_sample, "outputs/data/arxiv_sample.csv")
 
