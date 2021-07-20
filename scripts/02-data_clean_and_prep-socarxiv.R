@@ -32,7 +32,7 @@ socarxiv_open_data_results <-
   oddpub::open_data_search(socarxiv_open_data_results)
 
 covid_socarxiv_metadata <- covid_socarxiv_metadata %>% filter(id %in% socarxiv_open_data_results$id)
-# DONE up to here, rest TODO
+covid_socarxiv_metadata <- covid_socarxiv_metadata %>% distinct(id, .keep_all = TRUE)
 
 # Join covid_socarxiv_metadata to socarxiv_open_data_results and save as socarxiv_open_data_results
 socarxiv_open_data_results <- socarxiv_open_data_results %>% mutate(id = str_sub(socarxiv_open_data_results$article, 1, 5)) %>% select(!article)

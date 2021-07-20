@@ -170,22 +170,6 @@ purrr::walk2(get_covid_socarxiv_results$link_pdf,
              get_covid_socarxiv_results$save_name,
              safely_download_pdfs)
 
-#### Have a quick look ####
-all_arxiv_results <- 
-  read_csv("outputs/data/arxiv_results.csv")
-
-all_arxiv_results <- 
-  all_arxiv_results %>% 
-  mutate(submitted = lubridate::as_date(submitted))
-
-# Summarise and graph by date
-all_arxiv_results %>% 
-  filter(lubridate::year(submitted) >= 2020) %>% 
-  count(submitted) %>% 
-  ggplot() + 
-  geom_col(aes(x=submitted, y=n))
-
-
 
 
 #### Convert to text ####

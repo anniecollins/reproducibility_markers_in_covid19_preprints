@@ -69,6 +69,64 @@ med_code_ContTable <- as.table(cbind(med_code_status$`0`, med_code_status$`1`))
 dimnames(med_code_ContTable) <- list(status = c("Pre-COVID-19", "During COVID-19"), code = c("NoOpenCode", "OpenCode"))
 
 
+# ArXiv before/during pandemic
+arxiv_code_status <- arxiv_open_data_results %>% 
+  count(is_open_code) %>% 
+  mutate(status="During COVID-19", .before=is_open_code) %>% 
+  pivot_wider(names_from = is_open_code, values_from=n)
+arxiv_code_status <- arxiv_2019_open_data_results %>% 
+  count(is_open_code) %>% 
+  mutate(status="Pre-COVID-19", .before=is_open_code) %>% 
+  pivot_wider(names_from = is_open_code, values_from=n) %>%
+  rbind(arxiv_code_status)
+
+arxiv_code_ContTable <- as.table(cbind(arxiv_code_status$`0`, arxiv_code_status$`1`))
+dimnames(arxiv_code_ContTable) <- list(status = c("Pre-COVID-19", "During COVID-19"), data = c("NoOpenData", "OpenData"))
+
+# ArXiv before/during pandemic
+arxiv_data_status <- arxiv_open_data_results %>% 
+  count(is_open_data) %>% 
+  mutate(status="During COVID-19", .before=is_open_data) %>% 
+  pivot_wider(names_from = is_open_data, values_from=n)
+arxiv_data_status <- arxiv_2019_open_data_results %>% 
+  count(is_open_data) %>% 
+  mutate(status="Pre-COVID-19", .before=is_open_data) %>% 
+  pivot_wider(names_from = is_open_data, values_from=n) %>%
+  rbind(arxiv_data_status)
+
+arxiv_ContTable <- as.table(cbind(arxiv_data_status$`0`, arxiv_data_status$`1`))
+dimnames(arxiv_ContTable) <- list(status = c("Pre-COVID-19", "During COVID-19"), data = c("NoOpenData", "OpenData"))
+
+# SocArXiv before/during pandemic
+socarxiv_data_status <- socarxiv_open_data_results %>% 
+  count(is_open_data) %>% 
+  mutate(status="During COVID-19", .before=is_open_data) %>% 
+  pivot_wider(names_from = is_open_data, values_from=n)
+socarxiv_data_status <- socarxiv_2019_open_data_results %>% 
+  count(is_open_data) %>% 
+  mutate(status="Pre-COVID-19", .before=is_open_data) %>% 
+  pivot_wider(names_from = is_open_data, values_from=n) %>%
+  rbind(socarxiv_data_status)
+
+socarxiv_ContTable <- as.table(cbind(socarxiv_data_status$`0`, socarxiv_data_status$`1`))
+dimnames(socarxiv_ContTable) <- list(status = c("Pre-COVID-19", "During COVID-19"), data = c("NoOpenData", "OpenData"))
+
+# SocArXiv before/during pandemic
+socarxiv_code_status <- socarxiv_open_data_results %>% 
+  count(is_open_code) %>% 
+  mutate(status="During COVID-19", .before=is_open_code) %>% 
+  pivot_wider(names_from = is_open_code, values_from=n)
+socarxiv_code_status <- socarxiv_2019_open_data_results %>% 
+  count(is_open_code) %>% 
+  mutate(status="Pre-COVID-19", .before=is_open_code) %>% 
+  pivot_wider(names_from = is_open_code, values_from=n) %>%
+  rbind(socarxiv_code_status)
+
+socarxiv_code_ContTable <- as.table(cbind(socarxiv_code_status$`0`, socarxiv_code_status$`1`))
+dimnames(socarxiv_code_ContTable) <- list(status = c("Pre-COVID-19", "During COVID-19"), data = c("NoOpenData", "OpenData"))
+
+
+
 # medRxiv by month during pandemic
 med_month_data_status <- med_open_data_results %>% 
   mutate(month = str_sub(date, end=7)) %>%
@@ -158,20 +216,37 @@ dimnames(med_pub_code_ContTable) <- list(published = c("No", "Yes"), data = c("N
 
 #### Pearson Chi-squared test OR Fisher Exact tests (?)
 # BioRxiv data
-# p = 0.6146
+# X = 0.20397, p = 0.6515
 bio_chitest <- chisq.test(bio_ContTable)
 
 ## BioRxiv code
-# p = 0.0001059; looks like pandemic decreased amount of open code
+# X = 14.491; p = 0.0001409; looks like pandemic decreased amount of open code
 bio_code_chitest <- chisq.test(bio_code_ContTable)
 
 # MedRxiv data
-# p = 0.004132; looks like pandemic lowered data availability
+# X = 4.8508, p = 0.03233; looks like pandemic lowered data availability
 med_chitest <- chisq.test(med_ContTable)
 
 # MedRxiv code
-# p = 0.8573
+# X = 1.5434, p = 0.2141
 med_code_chitest <- chisq.test(med_code_ContTable)
+
+# ArXiv data
+# X = 93.124, p < 2.2e-16; looks like pandemic increased data availability
+arxiv_chitest <- chisq.test(arxiv_ContTable)
+
+# ArXiv code
+# X = 106.88; p < 2.2e-16; looks like pandemic increased code availability
+arxiv_code_chitest <- chisq.test(arxiv_code_ContTable)
+
+# SocArXiv data
+# X = 12.303, p < 0.0004522; looks like pandemic increased data availability
+socarxiv_chitest <- chisq.test(socarxiv_ContTable)
+
+# SocArXiv code
+# X = 8.1598; p < 0.004283; looks like pandemic increased code availability
+socarxiv_code_chitest <- chisq.test(socarxiv_code_ContTable)
+
 
 ## MedRxiv Monthly
 # p = 0.1829 (may be inaccurate)
