@@ -2,3 +2,5 @@
 
 To examine the reproducibility of COVID-19 research, we create a dataset of pre-prints posted to arXiv, bioRxiv, medRxiv, and SocArXiv between 28 January 2020 and 30 June 2021 that are related to COVID-19. We extract the text from these pre-prints and parse them looking for keyword markers signalling the availability of the data and code underpinning the pre-print. For the pre-prints that are in our sample, we are unable to find markers of either open data or open code for 75 per cent of those on arXiv, 67 per cent of those on bioRxiv, 79 per cent of those on medRxiv, and 85 per cent of those on SocArXiv. We conclude that there may be value in having authors categorize the degree of openness of their pre-print as part of the pre-print submissions process, and more broadly, there is a need to better integrate open science training into a wide range of fields.
 
+
+Please note that you need to download one dataset - https://datadryad.org/stash/share/r6J9ZcxAVJUpKbeQ56oStFq0G4tpMtKT5jALc0tjDCU - which was too large to put on GitHub for complete reproducibility.
